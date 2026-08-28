@@ -37,7 +37,8 @@ final class AgentRuntime {
         if Task.isCancelled { throw ACPClient.ACPError.cancelled }
 
         if let client = try await ensureACP(session: session, provider: provider) {
-            let cwd = BinaryProbe.expandHome(session.cwd)
+            onDelta("Connected to \(provider.name). Working in \(session.cwd)…\n")
+            let cwd = absoluteCwd(session.cwd)
             let acpId: String
             if let existing = session.acpSessionId ?? client.sessionId {
                 acpId = existing
@@ -89,7 +90,8 @@ final class AgentRuntime {
         if let existing = clients[session.id] { return existing }
         let client = ACPClient()
         do {
-            try client.start(binary: provider.binary, arguments: provider.acpArgs)
+            onDelta("Starting \(provider.name) (`\(provider.binary)`)…")
+            try client.start(binary: provider.binary, arguments: provider.acpArgs, cwd: session.cwd)
             _ = try await client.initialize()
             clients[session.id] = client
             return client
@@ -101,5 +103,11 @@ final class AgentRuntime {
 
     private func resolvedEndpoint(_ provider: Provider) -> String? {
         provider.endpoint
+    }
+
+    private func absoluteCwd(_ cwd: String) -> String {
+        let expanded = BinaryProbe.expandHome(cwd)
+        if (expanded as NSString).isAbsolutePath { return expanded }
+        return FileManager.default.currentDirectoryPath
     }
 }
