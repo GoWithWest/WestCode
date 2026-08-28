@@ -2,10 +2,19 @@ import Foundation
 import Security
 
 enum StoreKeys {
-    static let onboard = "helix-onboarding-v1"
-    static let library = "helix-library-v1"
-    static let providers = "helix-providers-v1"
-    static let folders = "helix-folders-v1"
+    static let onboard = "westcode-onboarding-v1"
+    static let library = "westcode-library-v1"
+    static let providers = "westcode-providers-v1"
+    static let folders = "westcode-folders-v1"
+    static let sessions = "westcode-sessions-v1"
+    static let connections = "westcode-connections-v1"
+}
+
+struct ConnectionRecord: Codable, Hashable, Identifiable {
+    var id: String
+    var enabled: Bool
+    var binaryPath: String
+    var endpoint: String
 }
 
 enum Disk {
@@ -26,6 +35,44 @@ enum Disk {
 
     static func setString(_ key: String, _ value: String) {
         UserDefaults.standard.set(value, forKey: key)
+    }
+}
+
+enum BinaryProbe {
+    static func expandHome(_ path: String) -> String {
+        if path.hasPrefix("~/") {
+            return (FileManager.default.homeDirectoryForCurrentUser.path as NSString)
+                .appendingPathComponent(String(path.dropFirst(2)))
+        }
+        return path
+    }
+
+    static func extras() -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "\(home)/.local/bin",
+            "\(home)/.npm-global/bin",
+            "\(home)/.nvm/current/bin",
+            "/opt/homebrew/opt/node/bin",
+        ]
+    }
+
+    static func locate(_ binary: String) -> URL? {
+        let trimmed = binary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.contains("/") {
+            let u = URL(fileURLWithPath: expandHome(trimmed))
+            return FileManager.default.isExecutableFile(atPath: u.path) ? u : nil
+        }
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        var seen = Set<String>()
+        for dir in extras() + path.split(separator: ":").map(String.init) where seen.insert(dir).inserted {
+            let candidate = URL(fileURLWithPath: dir).appendingPathComponent(trimmed)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+        }
+        return nil
     }
 }
 
@@ -79,5 +126,10 @@ enum KeychainStore {
         } else {
             set(key, account: "provider.\(providerId)")
         }
+    }
+
+    static func hasAPIKey(for providerId: String) -> Bool {
+        guard let k = apiKey(for: providerId) else { return false }
+        return !k.isEmpty
     }
 }

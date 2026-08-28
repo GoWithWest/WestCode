@@ -4,15 +4,37 @@ struct MosaicView: View {
     @Environment(AppState.self) private var app
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(app.sessions) { s in
-                    card(s)
+        if app.sessions.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Spacer()
+                Text("No sessions")
+                    .font(.system(size: 22, weight: .semibold))
+                Text("Connect a provider, pick a project folder, then start a session. The desk stays empty until you do.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(WC.mutedFg)
+                    .frame(maxWidth: 420, alignment: .leading)
+                HStack(spacing: 8) {
+                    Button("Connections") { app.setView(.providers) }
+                        .buttonStyle(WCButtonStyle())
+                    Button("New session") { app.newOpen = true }
+                        .buttonStyle(WCButtonStyle(prominent: true))
                 }
+                Spacer()
             }
-            .padding(16)
+            .padding(28)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .background(WC.window)
+        } else {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    ForEach(app.sessions) { s in
+                        card(s)
+                    }
+                }
+                .padding(16)
+            }
+            .background(WC.window)
         }
-        .background(WC.window)
     }
 
     private func card(_ s: Session) -> some View {
@@ -59,6 +81,11 @@ struct MosaicView: View {
             )
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Delete Session", role: .destructive) {
+                app.deleteSession(s.id)
+            }
+        }
     }
 }
 

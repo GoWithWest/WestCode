@@ -49,7 +49,7 @@ struct WestCodeCommands: Commands {
                 .keyboardShortcut("4", modifiers: [.command])
         }
         CommandMenu("Session") {
-            Button("Reset Demo Sessions") { app.resetDemo() }
+            Button("Delete All Sessions") { app.deleteAllSessions() }
         }
     }
 }

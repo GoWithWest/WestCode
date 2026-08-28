@@ -16,8 +16,8 @@ struct BusLog {
 @MainActor
 @Observable
 final class AppState {
-    var sessions: [Session] = Seed.sessions
-    var activeId: String? = Seed.sessions.first?.id
+    var sessions: [Session] = []
+    var activeId: String? = nil
     var splitIds: [String] = []
     var view: LayoutView = .mosaic
     var onboarding = true
@@ -28,6 +28,7 @@ final class AppState {
     var customProviders: [CustomProvider] = []
     var recentFolders: [RecentFolder] = []
     var settingsOpen = false
+    var connections: [String: ConnectionRecord] = [:]
 
     private var inbox: [String: [InboxItem]] = [:]
     private var hopBySession: [String: Int] = [:]
@@ -47,52 +48,122 @@ final class AppState {
         customAddons = lib.custom ?? []
         customProviders = Disk.readJSON(StoreKeys.providers, as: [CustomProvider].self, fallback: [])
         recentFolders = Disk.readJSON(StoreKeys.folders, as: [RecentFolder].self, fallback: [])
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 4_200_000_000)
-            finishCodexDemo()
+        let saved = Disk.readJSON(StoreKeys.connections, as: [ConnectionRecord].self, fallback: [])
+        connections = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0) })
+        sessions = Disk.readJSON(StoreKeys.sessions, as: [Session].self, fallback: []).map { s in
+            var copy = s
+            if copy.status == .running { copy.status = .waiting }
+            copy.messages = copy.messages.map { m in
+                var c = m
+                c.streaming = false
+                return c
+            }
+            return copy
         }
+        if let id = activeId, sessions.contains(where: { $0.id == id }) {
+            // keep
+        } else {
+            activeId = sessions.first?.id
+        }
+        if sessions.isEmpty { view = .mosaic }
     }
 
     func dismissOnboarding() {
         Disk.setString(StoreKeys.onboard, "1")
         onboarding = false
+        view = .providers
     }
 
-    func resetDemo() {
-        sessions = Seed.sessions
-        activeId = sessions.first?.id
+    func deleteAllSessions() {
+        for s in sessions { stop(s.id) }
+        sessions = []
+        activeId = nil
         splitIds = []
         view = .mosaic
+        persistSessions()
     }
 
-    func finishCodexDemo() {
-        patch("ses-codex-flake") { s in
-            guard s.status == .running else { return }
-            s.messages = s.messages.map { m in
-                guard m.id == "m-x-a1" else { return m }
-                var copy = m
-                copy.blocks = m.blocks.map { b in
-                    if case .tool(var t) = b, t.status == .running {
-                        t.status = .done
-                        t.content += """
-
-                        [5/8] passed
-                        [6/8] passed
-                        [7/8] passed
-                        [8/8] passed
-
-                          8 passed (8)
-                        """
-                        return .tool(t)
-                    }
-                    return b
-                }
-                copy.blocks.append(.text("8/8 green after waiting on `data-ready`. Race was the webhook vs navigate, not Playwright itself."))
-                return copy
-            }
-            s.status = .idle
-            s.updatedAt = Date()
+    func deleteSession(_ id: String) {
+        stop(id)
+        sessions.removeAll { $0.id == id }
+        splitIds.removeAll { $0 == id }
+        if activeId == id {
+            activeId = sessions.first?.id
+            view = sessions.isEmpty ? .mosaic : .focus
         }
+        persistSessions()
+    }
+
+    func persistSessions() {
+        Disk.writeJSON(StoreKeys.sessions, sessions)
+    }
+
+    func persistConnections() {
+        Disk.writeJSON(StoreKeys.connections, Array(connections.values))
+    }
+
+    var providers: [Provider] {
+        CatalogProviders.all(customProviders).map(hydrate)
+    }
+
+    func provider(_ id: String) -> Provider {
+        hydrate(CatalogProviders.resolve(id, custom: customProviders))
+    }
+
+    func hydrate(_ p: Provider) -> Provider {
+        var out = p
+        if let rec = connections[p.id] {
+            out.connected = rec.enabled
+            if !rec.binaryPath.isEmpty { out.binary = rec.binaryPath }
+            if !rec.endpoint.isEmpty { out.endpoint = rec.endpoint }
+        } else {
+            out.connected = p.builtin ? false : p.connected
+        }
+        return out
+    }
+
+    func isReady(_ id: String) -> Bool {
+        let p = provider(id)
+        guard p.connected else { return false }
+        if BinaryProbe.locate(p.binary) != nil { return true }
+        if p.auth == .api && KeychainStore.hasAPIKey(for: id) { return true }
+        return false
+    }
+
+    func detectedBinary(for id: String) -> URL? {
+        let p = provider(id)
+        return BinaryProbe.locate(p.binary)
+    }
+
+    func saveConnection(_ rec: ConnectionRecord, apiKey: String?) {
+        var next = rec
+        if next.binaryPath.isEmpty, let url = BinaryProbe.locate(CatalogProviders.resolve(next.id, custom: customProviders).binary) {
+            next.binaryPath = url.path
+        }
+        connections[next.id] = next
+        persistConnections()
+        if let apiKey { KeychainStore.setAPIKey(apiKey, for: next.id) }
+    }
+
+    func connectProvider(_ id: String) {
+        let p = CatalogProviders.resolve(id, custom: customProviders)
+        var rec = connections[id] ?? ConnectionRecord(id: id, enabled: true, binaryPath: "", endpoint: p.endpoint ?? "")
+        rec.enabled = true
+        if rec.binaryPath.isEmpty, let url = BinaryProbe.locate(p.binary) {
+            rec.binaryPath = url.path
+        }
+        connections[id] = rec
+        persistConnections()
+    }
+
+    func disconnectProvider(_ id: String) {
+        if var rec = connections[id] {
+            rec.enabled = false
+            connections[id] = rec
+        } else {
+            connections[id] = ConnectionRecord(id: id, enabled: false, binaryPath: "", endpoint: "")
+        }
+        persistConnections()
     }
 
     func setView(_ v: LayoutView) { view = v }
@@ -154,16 +225,23 @@ final class AppState {
         customProviders.append(next)
         Disk.writeJSON(StoreKeys.providers, customProviders)
         if !apiKey.isEmpty { KeychainStore.setAPIKey(apiKey, for: next.id) }
+        saveConnection(
+            ConnectionRecord(id: next.id, enabled: true, binaryPath: "", endpoint: next.endpoint),
+            apiKey: apiKey.isEmpty ? nil : apiKey
+        )
     }
 
     func removeCustomProvider(_ id: String) {
         customProviders.removeAll { $0.id == id }
+        connections.removeValue(forKey: id)
         Disk.writeJSON(StoreKeys.providers, customProviders)
+        persistConnections()
         KeychainStore.setAPIKey("", for: id)
     }
 
     func createSession(providerId: String, projectId: String, prompt: String, model: String?, effort: String?, cwd: String?, attachments: [Attachment]) {
-        let p = CatalogProviders.resolve(providerId, custom: customProviders)
+        guard isReady(providerId) else { return }
+        let p = self.provider(providerId)
         let project = Projects.byId(projectId)
         let session = Session(
             id: UID.make("ses"),
@@ -183,6 +261,7 @@ final class AppState {
         activeId = session.id
         view = .focus
         newOpen = false
+        persistSessions()
         Task { await send(session.id, prompt, attachments: attachments) }
     }
 
@@ -281,7 +360,7 @@ final class AppState {
         }
 
         session = sessions.first { $0.id == sessionId } ?? session
-        let provider = CatalogProviders.resolve(session.providerId, custom: customProviders)
+        let resolved = self.provider(session.providerId)
         let history = transcript(session, asstId: asstId, outgoing: outgoing, attachments: attachments, incoming: incoming)
         let roster = rosterFor(selfId: sessionId)
         let system = Prompts.systemPrompt(
@@ -289,14 +368,14 @@ final class AppState {
             model: session.model, effort: session.effort,
             skills: addonNames(.skill, session.providerId),
             connectors: addonNames(.connector, session.providerId),
-            providerName: provider.name, vendor: provider.vendor,
+            providerName: resolved.name, vendor: resolved.vendor,
             roster: roster, selfId: session.id
         )
 
         let task = Task { @MainActor in
             do {
                 try await AgentRuntime.shared.prompt(
-                    session: session, provider: provider, system: system,
+                    session: session, provider: resolved, system: system,
                     history: history, userText: incoming == nil ? outgoing : trimmed,
                     custom: customProviders, roster: roster
                 ) { raw in
@@ -331,14 +410,17 @@ final class AppState {
                 for msg in ParseAgent.extractSendMessages(finalBlocks) {
                     _ = messageSession(fromId: sessionId, toQuery: msg.to, text: msg.text)
                 }
+                persistSessions()
             } catch is CancellationError {
+                persistSessions()
                 return
             } catch {
-                if (error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled { return }
-                if let acp = error as? ACPClient.ACPError, case .cancelled = acp { return }
-                let rosterNow = rosterFor(selfId: sessionId)
-                if let acp = error as? ACPClient.ACPError, case .binaryMissing = acp {
-                    await replayFallback(sessionId: sessionId, asstId: asstId, prompt: outgoing.isEmpty ? trimmed : outgoing, roster: rosterNow)
+                if (error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled {
+                    persistSessions()
+                    return
+                }
+                if let acp = error as? ACPClient.ACPError, case .cancelled = acp {
+                    persistSessions()
                     return
                 }
                 patch(sessionId) { s in
@@ -348,10 +430,11 @@ final class AppState {
                         guard m.id == asstId else { return m }
                         var c = m
                         c.streaming = false
-                        c.blocks = [.text("The agent did not respond. \(error.localizedDescription)")]
+                        c.blocks = [.text(error.localizedDescription)]
                         return c
                     }
                 }
+                persistSessions()
             }
             runningTasks[sessionId] = nil
             if var q = inbox[sessionId], !q.isEmpty {
@@ -362,54 +445,6 @@ final class AppState {
         }
         runningTasks[sessionId] = task
         await task.value
-    }
-
-    private func replayFallback(sessionId: String, asstId: String, prompt: String, roster: [AgentRosterItem]) async {
-        guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
-        do {
-            try await AgentRuntime.shared.promptFallback(session: session, prompt: prompt, roster: roster) { raw in
-                Task { @MainActor in
-                    self.patch(sessionId) { s in
-                        s.updatedAt = Date()
-                        s.messages = s.messages.map { m in
-                            guard m.id == asstId else { return m }
-                            var c = m
-                            c.raw = raw
-                            c.blocks = ParseAgent.parse(raw)
-                            c.streaming = true
-                            return c
-                        }
-                    }
-                }
-            }
-            let raw = sessions.first { $0.id == sessionId }?.messages.first { $0.id == asstId }?.raw ?? ""
-            let finalBlocks = ParseAgent.fillListAgents(ParseAgent.parse(raw), roster: Prompts.formatRoster(roster))
-            patch(sessionId) { s in
-                s.status = .waiting
-                s.updatedAt = Date()
-                s.messages = s.messages.map { m in
-                    guard m.id == asstId else { return m }
-                    var c = m
-                    c.streaming = false
-                    c.blocks = finalBlocks
-                    return c
-                }
-            }
-            for msg in ParseAgent.extractSendMessages(finalBlocks) {
-                _ = messageSession(fromId: sessionId, toQuery: msg.to, text: msg.text)
-            }
-        } catch {
-            patch(sessionId) { s in
-                s.status = .error
-                s.messages = s.messages.map { m in
-                    guard m.id == asstId else { return m }
-                    var c = m
-                    c.streaming = false
-                    c.blocks = [.text("The agent did not respond. \(error.localizedDescription)")]
-                    return c
-                }
-            }
-        }
     }
 
     // MARK: - slash

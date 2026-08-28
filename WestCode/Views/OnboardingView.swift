@@ -16,10 +16,10 @@ struct OnboardingView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(WC.mutedFg)
                 VStack(alignment: .leading, spacing: 10) {
-                    bullet("Subscription CLIs", "Claude Code, Codex, and Cursor keep their own login. WestCode speaks ACP over stdio — no API keys.")
-                    bullet("Pick a provider", "New session → choose Claude, Codex, Cursor, or Grok, then a folder.")
-                    bullet("Desk bus", "Sessions message each other with /msg, @mentions, or SendMessage. Claude’s ListAgents pattern, across every provider.")
-                    bullet("Library", "Skills, plugins, and MCP connectors from GitHub. Enable what this Mac should load.")
+                    bullet("Empty desk", "First launch has no sessions and no connections. Demo chats are gone.")
+                    bullet("Connect for real", "Claude, Codex, and Cursor keep their own login. Point WestCode at the CLI, or add an API key for Grok / custom endpoints.")
+                    bullet("Then start a session", "Pick a connected provider and a folder on disk. Chats talk to that CLI — they are not simulated.")
+                    bullet("Desk bus", "Once two sessions are live, they can message each other with /msg, @mentions, or SendMessage.")
                 }
                 HStack {
                     Spacer()
@@ -53,6 +53,7 @@ struct SettingsView: View {
                 SecureField("API key", text: $grokKey)
                 Button("Save key") {
                     KeychainStore.setAPIKey(grokKey, for: "grok")
+                    if !grokKey.isEmpty { app.connectProvider("grok") }
                 }
                 Text("Optional. If the Grok CLI is installed, WestCode uses ACP instead.")
                     .foregroundStyle(WC.mutedFg)
