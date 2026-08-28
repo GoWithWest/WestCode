@@ -8,13 +8,21 @@ struct ContentView: View {
             WC.window.ignoresSafeArea()
             VStack(spacing: 0) {
                 titleBar
+                    .frame(maxWidth: .infinity)
                 HStack(spacing: 0) {
                     SidebarView()
                         .frame(width: 240)
-                    Rectangle().fill(WC.border).frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                    Rectangle()
+                        .fill(WC.border)
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
                     desk
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             if app.newOpen {
                 NewSessionSheet()
             }
@@ -22,6 +30,7 @@ struct ContentView: View {
                 OnboardingView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(.dark)
         .onAppear {
             Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in

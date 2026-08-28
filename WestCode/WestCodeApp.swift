@@ -9,6 +9,7 @@ struct WestCodeApp: App {
             ContentView()
                 .environment(app)
                 .frame(minWidth: 980, minHeight: 640)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(WC.desktop)
                 .onAppear { app.restore() }
         }
