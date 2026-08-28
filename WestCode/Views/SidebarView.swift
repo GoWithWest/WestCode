@@ -17,6 +17,13 @@ struct SidebarView: View {
                 .padding(.bottom, 6)
             ScrollView {
                 VStack(spacing: 2) {
+                    if app.sessions.isEmpty {
+                        Text("No sessions yet")
+                            .font(.system(size: 11))
+                            .foregroundStyle(WC.subtle)
+                            .padding(.horizontal, 8)
+                            .padding(.top, 8)
+                    }
                     ForEach(app.sessions) { s in
                         sessionRow(s)
                     }
@@ -85,5 +92,10 @@ struct SidebarView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Delete Session", role: .destructive) {
+                app.deleteSession(s.id)
+            }
+        }
     }
 }

@@ -30,6 +30,18 @@ enum FilePicking {
         return panel.url
     }
 
+    @MainActor
+    static func pickExecutable() -> URL? {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose the provider CLI binary"
+        panel.prompt = "Select"
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
     static func readURL(_ url: URL) -> Attachment? {
         let name = url.lastPathComponent
         let ext = url.pathExtension.lowercased()

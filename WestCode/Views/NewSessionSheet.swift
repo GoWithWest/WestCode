@@ -3,15 +3,21 @@ import SwiftUI
 struct NewSessionSheet: View {
     @Environment(AppState.self) private var app
     @State private var providerId = "claude"
-    @State private var projectId = "harbor"
+    @State private var projectId = "scratch"
     @State private var prompt = ""
     @State private var cwd = ""
     @State private var model: String = BuiltinProviders.claude.defaultModel
     @State private var effort: String = Catalog.defaultEffortFor("claude")
     @State private var files: [Attachment] = []
 
-    private var providers: [Provider] { CatalogProviders.all(app.customProviders) }
-    private var selected: Provider { CatalogProviders.resolve(providerId, custom: app.customProviders) }
+    private var providers: [Provider] { app.providers }
+    private var selected: Provider { app.provider(providerId) }
+    private var ready: Bool { app.isReady(providerId) }
+    private var canStart: Bool {
+        ready
+            && !cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !files.isEmpty)
+    }
 
     var body: some View {
         ZStack {
@@ -39,10 +45,16 @@ struct NewSessionSheet: View {
                             HStack(spacing: 6) {
                                 Circle().fill(WC.providerColor(p.id)).frame(width: 7, height: 7)
                                 Text(p.short)
+                                if !app.isReady(p.id) {
+                                    Text("off")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(WC.subtle)
+                                }
                             }
                             .font(.system(size: 12, weight: .medium))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
+                            .opacity(app.isReady(p.id) ? 1 : 0.55)
                             .background(providerId == p.id ? WC.muted : WC.surface2)
                             .clipShape(Capsule())
                             .overlay(Capsule().stroke(WC.border, lineWidth: 1))
@@ -51,10 +63,20 @@ struct NewSessionSheet: View {
                         .foregroundStyle(WC.foreground)
                     }
                 }
+                if !ready {
+                    Text(CatalogProviders.connectHint(selected))
+                        .font(.system(size: 11))
+                        .foregroundStyle(WC.warn)
+                    Button("Open Connections") {
+                        app.newOpen = false
+                        app.setView(.providers)
+                    }
+                    .buttonStyle(WCButtonStyle())
+                }
 
                 Text("FOLDER").sectionLabel()
                 HStack(spacing: 8) {
-                    TextField("~/src/harbor", text: $cwd)
+                    TextField("Choose a project folder", text: $cwd)
                         .textFieldStyle(.plain)
                         .padding(8)
                         .background(WC.surface2)
@@ -130,7 +152,7 @@ struct NewSessionSheet: View {
                         )
                     }
                     .buttonStyle(WCButtonStyle(prominent: true))
-                    .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && files.isEmpty)
+                    .disabled(!canStart)
                 }
             }
             .padding(20)
@@ -139,6 +161,13 @@ struct NewSessionSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(WC.border, lineWidth: 1))
             .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
+            .onAppear {
+                if let first = providers.first(where: { app.isReady($0.id) }) {
+                    providerId = first.id
+                    model = first.defaultModel
+                    effort = Catalog.defaultEffortFor(first.id)
+                }
+            }
         }
     }
 

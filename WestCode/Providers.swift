@@ -40,7 +40,7 @@ enum BuiltinProviders {
         models: ["Opus 4.8", "Opus 4.7", "Sonnet 5", "Sonnet 4.6", "Haiku 4.5"],
         defaultModel: "Opus 4.7", sessionStore: "~/.claude/projects",
         how: "Spawns the local Claude Code CLI. Claude owns token lifecycle — WestCode never stores a key.",
-        live: false, connected: true, builtin: true, endpoint: nil,
+        live: false, connected: false, builtin: true, endpoint: nil,
         acpArgs: ["--acp"]
     )
     static let codex = Provider(
@@ -50,7 +50,7 @@ enum BuiltinProviders {
         models: ["GPT-5.4 Codex", "GPT-5.4", "GPT-5.4 Mini"],
         defaultModel: "GPT-5.4 Codex", sessionStore: "~/.codex",
         how: "Signs in with ChatGPT OAuth through the Codex CLI. Usage draws from the subscription, not API credits.",
-        live: false, connected: true, builtin: true, endpoint: nil,
+        live: false, connected: false, builtin: true, endpoint: nil,
         acpArgs: ["acp"]
     )
     static let cursor = Provider(
@@ -60,7 +60,7 @@ enum BuiltinProviders {
         models: ["Composer 2", "Sonnet 4.6", "GPT-5.4"],
         defaultModel: "Composer 2", sessionStore: "~/.cursor",
         how: "Connects to Cursor CLI in ACP mode (`agent acp`). Editor login is reused; no Cursor API key.",
-        live: false, connected: true, builtin: true, endpoint: nil,
+        live: false, connected: false, builtin: true, endpoint: nil,
         acpArgs: ["acp"]
     )
     static let grok = Provider(
@@ -70,7 +70,7 @@ enum BuiltinProviders {
         models: ["Grok 4.5", "Grok 4"],
         defaultModel: "Grok 4.5", sessionStore: "~/.grok",
         how: "Spawns the Grok Build CLI over ACP when installed, otherwise the xAI HTTP API.",
-        live: true, connected: true, builtin: true, endpoint: "https://api.x.ai/v1",
+        live: true, connected: false, builtin: true, endpoint: "https://api.x.ai/v1",
         acpArgs: ["acp"]
     )
 
@@ -128,12 +128,29 @@ enum CatalogProviders {
             id: id, name: id, short: id, vendor: "Custom", binary: "openai-compat",
             protocolLabel: "HTTP · OpenAI-compatible", auth: .api, authLabel: "API",
             models: [], defaultModel: "default", sessionStore: "~/.westcode/providers",
-            how: "Custom provider.", live: false, connected: true, builtin: false,
+            how: "Custom provider.", live: false, connected: false, builtin: false,
             endpoint: nil, acpArgs: []
         )
     }
 
     static func all(_ custom: [CustomProvider] = []) -> [Provider] {
         BuiltinProviders.order.compactMap { BuiltinProviders.map[$0] } + custom.map(customToProvider)
+    }
+
+    static func loginHint(_ id: String) -> String {
+        switch id {
+        case "claude": return "In Terminal run `claude login` (Claude Pro / Max)."
+        case "codex": return "In Terminal run `codex login` (ChatGPT Plus / Pro)."
+        case "cursor": return "Sign in to the Cursor app, then make sure `agent` is on your PATH."
+        case "grok": return "Install the Grok CLI, or paste an xAI API key."
+        default: return "Sign in through the CLI, or paste an API key for HTTP providers."
+        }
+    }
+
+    static func connectHint(_ p: Provider) -> String {
+        if p.auth == .api {
+            return "\(p.name) needs the `\(p.binary)` CLI on PATH, or an API key in Connections."
+        }
+        return "\(p.name) is not connected. Install `\(p.binary)`, \(loginHint(p.id)) Then tap Connect."
     }
 }

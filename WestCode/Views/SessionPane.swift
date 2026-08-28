@@ -82,6 +82,13 @@ struct SessionPane: View {
             .labelsHidden()
             .frame(maxWidth: 110)
             .help(efforts.first { $0.id == live.effort }?.hint ?? "")
+            Button {
+                app.deleteSession(live.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(WCIconButtonStyle())
+            .help("Delete session")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
