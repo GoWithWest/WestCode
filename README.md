@@ -1,3 +1,9 @@
+# WestCode (macOS)
+
+This **MacOS** branch is the native Xcode / SwiftUI app.
+
+`main` remains the web desk. Open this folder in Xcode.
+
 # WestCode for Mac
 
 All your coding agents. One desk.
