@@ -80,7 +80,7 @@ enum BuiltinProviders {
     ]
 }
 
-struct AvailableToAdd: Identifiable {
+struct AvailableToAdd: Identifiable, Hashable {
     var id: String
     var name: String
     var vendor: String
