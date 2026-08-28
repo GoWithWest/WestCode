@@ -1,0 +1,38 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "WestCode",
+      "hasCanvas": false,
+      "bodyTextLen": 1442,
+      "bodyTextHash": "2282fc1d809d1336c147827f56015d509be492897e05bd4cc83a1c39e8bfb9d0",
+      "bodyTextPrefix": "WestCode View Session 1 running 8:10 PM WestCode New SESSIONS Re",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "WestCode",
+      "hasCanvas": false,
+      "bodyTextLen": 1171,
+      "bodyTextHash": "2ede6eb1903439d7f5c1d195611f06cb7b9bd979e1990c287258c97dea2cb56f",
+      "bodyTextPrefix": "WestCode All agents Every live session across connected provider",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": false,
+  "baselineReasons": []
+}
