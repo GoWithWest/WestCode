@@ -153,5 +153,3 @@ struct AddProviderSheet: View {
         return base.isEmpty ? UID.make("prov") : base
     }
 }
-
-extension AvailableToAdd: Hashable {}
