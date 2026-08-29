@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -376,8 +376,54 @@ ipcMain.handle("git:status", async (_e, cwd) => {
   return { repo: true, branch, adds, dels, files, ahead, behind, remote: remote || "" };
 });
 
+// Provider API keys live encrypted (Electron safeStorage → OS keychain key)
+// in ~/.westcode/secrets.json, never in renderer localStorage.
+const SECRETS_PATH = join(homedir(), ".westcode", "secrets.json");
+
+async function readSecrets() {
+  try {
+    return JSON.parse(await readFile(SECRETS_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+async function writeSecrets(secrets) {
+  const { writeFile: write, mkdir } = await import("node:fs/promises");
+  await mkdir(dirname(SECRETS_PATH), { recursive: true });
+  await write(SECRETS_PATH, JSON.stringify(secrets), { mode: 0o600 });
+}
+
+ipcMain.handle("secret:set", async (_e, { id, value }) => {
+  if (!id) return { ok: false, error: "id is required" };
+  if (!safeStorage.isEncryptionAvailable()) {
+    return { ok: false, error: "OS encryption is unavailable." };
+  }
+  const secrets = await readSecrets();
+  if (value) {
+    secrets[id] = safeStorage.encryptString(String(value)).toString("base64");
+  } else {
+    delete secrets[id];
+  }
+  await writeSecrets(secrets);
+  return { ok: true };
+});
+
+async function secretFor(id) {
+  if (!id || !safeStorage.isEncryptionAvailable()) return "";
+  const secrets = await readSecrets();
+  const raw = secrets[id];
+  if (!raw) return "";
+  try {
+    return safeStorage.decryptString(Buffer.from(raw, "base64"));
+  } catch {
+    return "";
+  }
+}
+
 ipcMain.handle("api:prompt", async (_e, payload) => {
-  const { endpoint, apiKey, model, messages } = payload || {};
+  const { endpoint, model, messages, providerId } = payload || {};
+  const apiKey = payload?.apiKey || (await secretFor(providerId));
   if (!endpoint || !model || !Array.isArray(messages)) {
     return { ok: false, error: "endpoint, model, and messages are required." };
   }
