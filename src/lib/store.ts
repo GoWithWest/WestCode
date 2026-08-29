@@ -75,7 +75,7 @@ function mergeAgents(p: AgentsPersist): AgentProfile[] {
   return [...presets, ...p.custom.filter((a) => !removed.has(a.id))];
 }
 
-function migrateProviderKey(
+async function migrateProviderKey(
   get: () => HelixState,
   set: (fn: (s: HelixState) => Partial<HelixState>) => void,
   id: string,
@@ -83,18 +83,20 @@ function migrateProviderKey(
 ) {
   const secretStore = westcode()?.setSecret;
   if (!secretStore || !apiKey) return;
-  void secretStore(id, apiKey)
-    .then((r) => {
-      if (!r?.ok) return;
-      const list = get().customProviders.map((c) =>
-        c.id === id ? { ...c, apiKey: "" } : c,
-      );
-      persistProviders(list);
-      set(() => ({ customProviders: list }));
-    })
-    .catch(() => {
-      /* keep the local key; retried on next launch */
-    });
+  try {
+    const r = await secretStore(id, apiKey);
+    if (!r?.ok) return;
+    // Compare-and-strip: only blank the local copy if it is still the exact
+    // value that just landed in the vault — the user may have re-entered a
+    // new key while this write was in flight.
+    const list = get().customProviders.map((c) =>
+      c.id === id && c.apiKey === apiKey ? { ...c, apiKey: "" } : c,
+    );
+    persistProviders(list);
+    set(() => ({ customProviders: list }));
+  } catch {
+    /* keep the local key; retried on next launch */
+  }
 }
 
 function persistAgents(p: AgentsPersist) {
@@ -684,11 +686,13 @@ export const useHelix = create<HelixState>((set, get) => ({
     void get().refreshCli();
     void get().refreshLibrary();
     void get().refreshUpdates();
-    for (const c of get().customProviders) {
-      if (c.apiKey) {
-        migrateProviderKey(get, (fn) => set(fn), c.id, c.apiKey);
+    void (async () => {
+      for (const c of get().customProviders) {
+        if (c.apiKey) {
+          await migrateProviderKey(get, (fn) => set(fn), c.id, c.apiKey);
+        }
       }
-    }
+    })();
   },
 
   refreshCli: async () => {
@@ -942,7 +946,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     // Move the key into the OS-encrypted secret store; strip the local copy
     // only after the store CONFIRMS the write, so a failed secret:set never
     // leaves a provider with no key anywhere.
-    migrateProviderKey(get, set, id, p.apiKey);
+    void migrateProviderKey(get, set, id, p.apiKey);
   },
 
   removeCustomProvider: (id) => {
@@ -1084,13 +1088,20 @@ export const useHelix = create<HelixState>((set, get) => ({
   stop: (sessionId) => {
     abortBySession.get(sessionId)?.abort();
     abortBySession.delete(sessionId);
+    // Fence the cancelled turn completely: drop the pending assistant id so
+    // stale stream events are ignored, and kill the agent process so its
+    // late done/error cannot land on the NEXT turn (the next prompt
+    // respawns and resumes via agentSessionId + history replay).
+    promptAsst.delete(sessionId);
     void westcode()?.cancel(sessionId);
+    void westcode()?.stopSession(sessionId);
     const hadQueued = (get().sessions.find((s) => s.id === sessionId)?.queued ?? [])
       .length;
     set((state) => ({
       sessions: patchSession(state.sessions, sessionId, (s) => ({
         ...s,
         status: "waiting",
+        permission: null,
         updatedAt: Date.now(),
         // Stop discards pending work: queued rows are already visible in the
         // transcript and must not auto-replay after some later send.
@@ -1380,6 +1391,18 @@ export const useHelix = create<HelixState>((set, get) => ({
         const apiRows = historyRaw.filter(
           (m) => m.id !== userMsg?.id && m.id !== opts?.replayOf,
         );
+        // Persisted queues from before msgId existed replay without an id —
+        // fall back to popping the trailing queued copy by text.
+        if (replay && !opts?.replayOf) {
+          const lastRow = apiRows[apiRows.length - 1];
+          if (
+            lastRow &&
+            lastRow.role !== "assistant" &&
+            blocksToPlain(lastRow.blocks).trim() === trimmed
+          ) {
+            apiRows.pop();
+          }
+        }
         const res = await api.apiPrompt({
           endpoint: customApi.endpoint,
           apiKey: customApi.apiKey || undefined,
