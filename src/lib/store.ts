@@ -669,7 +669,6 @@ export const useHelix = create<HelixState>((set, get) => ({
       customAddons: Array.isArray(lib.custom) ? lib.custom : [],
       customProviders: Array.isArray(prov) ? prov : [],
       agentsPersist,
-      // (keys left over from before the encrypted store migrate below)
       agents: mergeAgents(agentsPersist),
       providerColors,
       recentFolders: Array.isArray(folders) ? folders : [],
@@ -972,6 +971,11 @@ export const useHelix = create<HelixState>((set, get) => ({
   setSessionCwd: (id, cwd) => {
     const path = cwd.trim();
     if (!path) return;
+    // Stop any running turn cleanly BEFORE dropping the process — killing
+    // the agent under an in-flight send() would paint the turn as an error.
+    if (get().sessions.find((s) => s.id === id)?.status === "running") {
+      get().stop(id);
+    }
     // The agent process is keyed on cwd; drop it so the next prompt spawns
     // in the new directory (history is replayed by acp-host).
     void westcode()?.stopSession(id);

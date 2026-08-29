@@ -170,9 +170,12 @@ export function extractMentions(text: string, agents: AgentProfile[]) {
   return out;
 }
 
-/** "You are @X" (or "act as @X") assigns the persona to this session. */
+/**
+ * "You are @X" (or "act as @X" / "you're @X") assigns the persona to this
+ * session. A bare "be" is too loose — "don't be @Ivy-Ben" must not assign.
+ */
 export function personaAssignment(text: string, agents: AgentProfile[]) {
-  const m = /\b(?:you\s+are|act\s+as|be)\s+@([A-Za-z][\w-]*)/i.exec(text);
+  const m = /\b(?:you\s+are|you're|act\s+as)\s+@([A-Za-z][\w-]*)/i.exec(text);
   return m ? matchAgent(m[1]!, agents) : undefined;
 }
 
