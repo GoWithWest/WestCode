@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Folder, GitBranch, Pencil } from "lucide-react";
+import { Download, Folder, GitBranch, Pencil } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { Button } from "@/components/ui/button";
-import { lastSnippet } from "@/lib/parse-agent";
+import { exportTranscript, lastSnippet } from "@/lib/parse-agent";
 import { relativeTime } from "@/lib/utils";
 import type { Session } from "@/lib/types";
 import { MessageList } from "./blocks";
@@ -41,6 +41,7 @@ export function SessionPane({
             <AgentBadge session={session} />
             <CwdPicker session={session} />
             <GitChip session={session} />
+            <ExportButton session={session} />
           </div>
         </div>
       </header>
@@ -178,6 +179,25 @@ function AgentBadge({ session }: { session: Session }) {
       />
       {agent.name}
     </span>
+  );
+}
+
+function ExportButton({ session }: { session: Session }) {
+  const api = westcode();
+  if (!api?.saveText || !session.messages.length) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const name = `${session.title.replace(/[^\w.-]+/g, "-").slice(0, 60) || "session"}.md`;
+        void api.saveText(name, exportTranscript(session));
+      }}
+      className="inline-flex items-center gap-1 hover:text-foreground"
+      title="Export transcript as Markdown"
+    >
+      <Download className="size-3" />
+      Export
+    </button>
   );
 }
 

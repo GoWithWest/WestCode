@@ -83,6 +83,10 @@ type WestcodeBridge = {
     language: string;
     hint: string;
   } | null>;
+  saveText: (
+    defaultName: string,
+    content: string,
+  ) => Promise<{ ok: boolean; path?: string }>;
   pickFile: () => Promise<{
     name: string;
     path: string;

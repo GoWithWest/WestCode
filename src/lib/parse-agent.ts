@@ -152,3 +152,44 @@ export function extractSendMessages(blocks: Block[]) {
   }
   return out.filter((s) => s.to && s.text);
 }
+
+/** Render a session transcript as Markdown for export. */
+export function exportTranscript(session: {
+  title: string;
+  providerId: string;
+  model: string;
+  cwd: string;
+  createdAt: number;
+  messages: { role: string; createdAt: number; blocks: Block[]; fromTitle?: string }[];
+}): string {
+  const lines = [
+    `# ${session.title}`,
+    "",
+    `Provider: ${session.providerId} · Model: ${session.model} · Folder: ${session.cwd}`,
+    `Created: ${new Date(session.createdAt).toISOString()}`,
+    "",
+  ];
+  for (const m of session.messages) {
+    const who =
+      m.role === "user"
+        ? "User"
+        : m.role === "assistant"
+          ? "Assistant"
+          : m.role === "agent"
+            ? `Agent (${m.fromTitle ?? "peer"})`
+            : "System";
+    lines.push(`## ${who} — ${new Date(m.createdAt).toLocaleString()}`, "");
+    for (const b of m.blocks) {
+      if (b.type === "text") lines.push(b.text, "");
+      else if (b.type === "think") lines.push(`> _${b.text.replaceAll("\n", " ")}_`, "");
+      else if (b.type === "tool") {
+        lines.push(
+          `**${b.name}**${b.path ? ` · ${b.path}` : ""}${b.command ? ` · \`${b.command}\`` : ""}`,
+          "",
+        );
+        if (b.content) lines.push("```", b.content, "```", "");
+      }
+    }
+  }
+  return lines.join("\n");
+}

@@ -549,6 +549,17 @@ ipcMain.handle("api:prompt", async (_e, payload) => {
   }
 });
 
+ipcMain.handle("fs:saveText", async (_e, { defaultName, content }) => {
+  const res = await dialog.showSaveDialog(win, {
+    defaultPath: defaultName || "session.md",
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+  });
+  if (res.canceled || !res.filePath) return { ok: false };
+  const { writeFile: write } = await import("node:fs/promises");
+  await write(res.filePath, String(content ?? ""), "utf8");
+  return { ok: true, path: res.filePath };
+});
+
 ipcMain.handle("fs:pickFolder", async () => {
   const res = await dialog.showOpenDialog(win, {
     properties: ["openDirectory", "createDirectory"],
