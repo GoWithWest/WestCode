@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- Electron preload scripts are CommonJS */
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 webFrame.insertCSS(`
@@ -15,6 +16,9 @@ contextBridge.exposeInMainWorld("westcode", {
   desktop: true,
   probe: () => ipcRenderer.invoke("cli:probe"),
   library: (providerId) => ipcRenderer.invoke("cli:library", providerId),
+  updates: () => ipcRenderer.invoke("cli:updates"),
+  updateCli: (providerId) => ipcRenderer.invoke("cli:update", providerId),
+  installCli: (providerId) => ipcRenderer.invoke("cli:install", providerId),
   login: (providerId) => ipcRenderer.invoke("cli:login", providerId),
   logout: (providerId) => ipcRenderer.invoke("cli:logout", providerId),
   pickFolder: () => ipcRenderer.invoke("fs:pickFolder"),

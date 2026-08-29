@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const EXTRA_DIRS = [
+  // Managed CLI installs (WestCode installs/updates these itself).
+  join(homedir(), ".westcode", "cli", "node_modules", ".bin"),
   "/opt/homebrew/bin",
   "/usr/local/bin",
   join(homedir(), ".grok", "bin"),

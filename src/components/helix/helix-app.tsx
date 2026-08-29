@@ -13,6 +13,7 @@ import { Onboarding } from "./onboarding";
 import { ProvidersView } from "./providers-view";
 import { SessionPane } from "./session-pane";
 import { Sidebar } from "./sidebar";
+import { UpdateBanner } from "./update-banner";
 
 export function HelixApp() {
   const view = useHelix((s) => s.view);
@@ -71,6 +72,7 @@ export function HelixApp() {
           setMobileNav(mobileNav === "sessions" ? "desk" : "sessions")
         }
       />
+      <UpdateBanner />
 
       <div className="flex min-h-0 flex-1">
         <div
