@@ -285,20 +285,23 @@ app.on("window-all-closed", () => {
   }
 });
 
-let quitFlushed = false;
-app.on("before-quit", (event) => {
+app.on("before-quit", () => {
   stopAll();
   killAppServer();
-  if (!quitFlushed) {
-    // Let queued state/vault writes land before the process dies. The
-    // renderer's beforeunload flush posts its state:save over IPC; the short
-    // grace period lets that message arrive and join the queue first.
-    event.preventDefault();
-    quitFlushed = true;
-    setTimeout(() => {
-      Promise.allSettled([stateQueue, vaultQueue]).then(() => app.quit());
-    }, 200);
-  }
+});
+
+// Drain queued state/vault writes AFTER the windows have unloaded —
+// will-quit fires once every renderer's beforeunload flush has posted its
+// state:save over IPC, so the queue tail contains the final desk write
+// (before-quit would drain too early on macOS Cmd+Q).
+let quitFlushed = false;
+app.on("will-quit", (event) => {
+  if (quitFlushed) return;
+  quitFlushed = true;
+  event.preventDefault();
+  setTimeout(() => {
+    Promise.allSettled([stateQueue, vaultQueue]).then(() => app.exit(0));
+  }, 100);
 });
 
 ipcMain.handle("cli:probe", () => probeAll());
