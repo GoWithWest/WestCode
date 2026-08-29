@@ -36,7 +36,7 @@ final class AgentRuntime {
     ) async throws {
         if Task.isCancelled { throw ACPClient.ACPError.cancelled }
 
-        if let client = try await ensureACP(session: session, provider: provider) {
+        if let client = try await ensureACP(session: session, provider: provider, onDelta: onDelta) {
             onDelta("Connected to \(provider.name). Working in \(session.cwd)…\n")
             let cwd = absoluteCwd(session.cwd)
             let acpId: String
@@ -81,7 +81,11 @@ final class AgentRuntime {
         clients[westId]?.sessionId = acpId
     }
 
-    private func ensureACP(session: Session, provider: Provider) async throws -> ACPClient? {
+    private func ensureACP(
+        session: Session,
+        provider: Provider,
+        onDelta: @escaping (String) -> Void
+    ) async throws -> ACPClient? {
         if provider.binary == "openai-compat" { return nil }
         guard BinaryProbe.locate(provider.binary) != nil else {
             if provider.auth == .api { return nil }

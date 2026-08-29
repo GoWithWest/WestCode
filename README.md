@@ -1,47 +1,28 @@
-# WestCode (macOS)
-
-This **MacOS** branch is the native Xcode / SwiftUI app.
-
-`main` remains the web desk. Open this folder in Xcode.
-
-# WestCode for Mac
+# WestCode
 
 All your coding agents. One desk.
 
-WestCode is a native macOS SwiftUI app that hosts **Claude Code**, **Codex**, **Cursor Agent**, and **Grok** in one mosaic. It is an ACP client: it spawns the CLIs you already pay for and never stores their tokens.
+WestCode is the helix desk from the web app, packaged as a Mac desktop shell. It **embeds the CLIs you already use** — it is not an agent of its own.
 
-## Open in Xcode
-
-1. Open `WestCode.xcodeproj` in Xcode 15 or later (macOS 14 Sonoma+).
-2. Select the **WestCode** scheme, destination **My Mac**.
-3. Press Run.
-
-The first build signs ad-hoc (`-`). No team is required for local use.
-
-## How it talks to agents
-
-| Provider | Binary | Auth |
+| Provider | Install | Auth |
 | --- | --- | --- |
-| Claude Code | `claude --acp` | Claude Pro / Max (CLI login) |
-| Codex | `codex acp` | ChatGPT Plus / Pro |
-| Cursor | `agent acp` | Cursor Pro / Ultra |
-| Grok | `grok acp`, or xAI HTTP | CLI or an optional API key in Settings |
+| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude auth login` |
+| Grok Build | `curl -fsSL https://x.ai/cli/install.sh \| bash` | `grok login` |
+| Codex | `npm i -g @openai/codex` or `brew install --cask codex` | `codex login` |
 
-Install those CLIs on your PATH (`/opt/homebrew/bin` is searched). App Sandbox is **off** so WestCode can spawn them and read the folders you pick.
+A Claude session only has Claude Code features. Grok and Codex are the same: WestCode spawns that CLI over ACP (`grok agent stdio`, Claude/Codex ACP adapters) and renders the helix UI around it.
 
-If a CLI is missing, the session still runs a local stand-in so the desk is usable — then wire the real binary when you have it.
+## Run the Mac app
 
-## What you get
+```bash
+npm install
+npm run app
+```
 
-- Mosaic, focus, and split of live sessions
-- Per-session model + effort (Claude extra/supercode, Codex xhigh, Cursor xhigh)
-- Library of skills, plugins, and MCP connectors (plus custom import)
-- Provider slash commands, `/agents`, `/msg`
-- Attach files and browse a project folder (`NSOpenPanel`)
-- Desk bus: sessions message each other across providers (ListAgents / SendMessage)
+That starts the Vite desk on port 8080 and opens Electron. Connections probes PATH for the three binaries (including `~/.grok/bin` and Homebrew). Login opens Terminal so the CLI can complete its own browser OAuth.
 
-## Settings
+The Swift Xcode tree on this branch is archived, not the product UI.
 
-WestCode → Settings for an optional xAI API key (Keychain). Claude, Codex, and Cursor do not need one.
+## Web preview
 
-Bundle id: `app.westcode.desktop`
+`npm run dev` still serves the helix UI in a browser. Sessions will not talk to CLIs there — spawning needs the desktop shell.

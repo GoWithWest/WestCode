@@ -34,7 +34,7 @@ enum HTTPAgent {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        var payload: [String: Any] = [
+        let payload: [String: Any] = [
             "model": model,
             "stream": true,
             "temperature": params.temperature,
