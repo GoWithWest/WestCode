@@ -1,4 +1,4 @@
-import { Blocks, Plus, Settings2 } from "lucide-react";
+import { Blocks, Plus, Settings2, Users } from "lucide-react";
 import { useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -105,6 +105,19 @@ export function Sidebar() {
           <span className="ml-auto text-2xs tabular-nums text-subtle">
             {enabledAddons.length}
           </span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={
+            view === "agents"
+              ? "w-full justify-start bg-muted/60"
+              : "w-full justify-start text-muted-foreground"
+          }
+          onClick={() => setView("agents")}
+        >
+          <Users className="size-3.5" />
+          Agents
         </Button>
         <Button
           variant="ghost"

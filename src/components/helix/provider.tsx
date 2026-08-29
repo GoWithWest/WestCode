@@ -45,9 +45,15 @@ export function ProviderDot({
   id: ProviderId;
   className?: string;
 }) {
+  const color = useHelix((s) => s.providerColors[id]);
   return (
     <span
-      className={cn("inline-block size-2 shrink-0 rounded-full", toneBg(id), className)}
+      className={cn(
+        "inline-block size-2 shrink-0 rounded-full",
+        !color && toneBg(id),
+        className,
+      )}
+      style={color ? { backgroundColor: color } : undefined}
       aria-hidden
     />
   );
