@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {
+
   MAX_CARD_BYTES,
   OG_PENDING_MAX_AGE_MS,
   OG_PENDING_REL_PATH,
@@ -16,6 +17,8 @@ import {
 } from "./brand-check.mjs";
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// .grok/ is gitignored: these docs exist only in the app-builder sandbox.
+const SANDBOX_DOCS = existsSync(join(TEMPLATE_ROOT, ".grok"));
 const SCRIPT = join(TEMPLATE_ROOT, "scripts/brand-check.mjs");
 
 const GAME_SITE = JSON.stringify({ title: "Wild Race", type: "x:game", card: "custom" });
@@ -305,7 +308,7 @@ test("cli: a non-game with a compliant card passes", () => {
 
 const readDoc = (rel) => readFileSync(join(TEMPLATE_ROOT, rel), "utf8");
 
-test("SKILL.md and AGENTS.md name the marker path and bound this script uses", () => {
+test("SKILL.md and AGENTS.md name the marker path and bound this script uses", { skip: !SANDBOX_DOCS && "requires the app-builder sandbox (.grok/ is untracked)" }, () => {
   // Prose wraps, so the minute count may straddle a line break.
   const bound = new RegExp(`${OG_PENDING_MAX_AGE_MS / 60_000}\\s+minutes`);
   for (const rel of [".grok/skills/og/SKILL.md", "AGENTS.md"]) {
@@ -343,7 +346,7 @@ function prohibitionSection({ rel, label, from, until }) {
   return (from + (end === -1 ? rest : rest.slice(0, end))).replace(/[`*]/g, "").replace(/\s+/g, " ");
 }
 
-test("the sections that own the brand-task prohibition never affirm a wait", () => {
+test("the sections that own the brand-task prohibition never affirm a wait", { skip: !SANDBOX_DOCS && "requires the app-builder sandbox (.grok/ is untracked)" }, () => {
   // Pinned on the shape of the prohibition, not on a negation being somewhere
   // nearby: "So: wait_tasks before the final verify, but never get_task_output"
   // keeps a negation in the sentence while instructing exactly the wait.
@@ -362,7 +365,7 @@ test("the sections that own the brand-task prohibition never affirm a wait", () 
   }
 });
 
-test("SKILL.md tells the pass to self-check with the flag this CLI accepts", () => {
+test("SKILL.md tells the pass to self-check with the flag this CLI accepts", { skip: !SANDBOX_DOCS && "requires the app-builder sandbox (.grok/ is untracked)" }, () => {
   const skill = readDoc(".grok/skills/og/SKILL.md");
   const invocations = skill.match(/node scripts\/brand-check\.mjs[^\n`]*/g) ?? [];
   assert.ok(invocations.length > 0);
