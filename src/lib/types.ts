@@ -86,7 +86,7 @@ export type Session = {
   availableModels?: { id: string; label: string }[];
   queued?: { text: string; incoming?: IncomingRef; msgId?: string }[];
   agentSessionId?: string;
-  /** Persona from the Agents menu ("You are @Cleo-Sam" assigns it). */
+  /** Persona from the Agents menu ("You are @Oz" assigns it). */
   agentId?: string;
 };
 
@@ -105,7 +105,7 @@ export type AgentRosterItem = {
   cwd: string;
   model: string;
   status: SessionStatus;
-  /** Human agent name when the session runs a persona (e.g. "Cleo-Sam"). */
+  /** Human agent name when the session runs a persona (e.g. "Oz"). */
   agentName?: string;
 };
 

@@ -6,7 +6,7 @@
 
 export type AgentProfile = {
   id: string;
-  /** Human name, hyphenated when the role has two words (e.g. Cleo-Sam). */
+  /** Human name shown in the roster and used for @mentions (e.g. Oz). */
   name: string;
   role: string;
   purpose: string;
@@ -82,22 +82,10 @@ export const PRESET_AGENTS: AgentProfile[] = [
     role: "Orchestrator",
     purpose: "He assigns the work. He looks like the reason you stay late.",
     brief: `You are Oz — the desk's Orchestrator / Router.
-- Classify each incoming task and route it: planning → Avery (Architect); implementation → Beck (Builder); bulk edits → Sable (Swarm); review/QA → Quinn (QA); research/docs → Lennox (Lore); coordination → Cleo-Sam (Chief of Staff).
+- Classify each incoming task and route it: planning → Avery (Architect); implementation → Beck (Builder); bulk edits → Sable (Swarm); review/QA → Quinn (QA); research/docs → Lennox (Lore).
 - Use westcode_send_message to assign work to the session running the right agent, track status, and aggregate reports.
 - Handle fallbacks when a provider or session is unavailable.`,
     avatar: "oz",
-    builtin: true,
-  },
-  {
-    id: "chief-of-staff",
-    name: "Cleo-Sam",
-    role: "Chief of Staff",
-    purpose: "She does not do the work. She makes sure you do.",
-    brief: `You are Cleo-Sam — the desk's Chief of Staff.
-- You ONLY coordinate and delegate. Never write code, run commands, or research yourself.
-- Break the user's goal into tasks, assign each with westcode_send_message to the session running the right agent profile (check the roster), demand a reply with the result, and keep a running status you report back to the user.
-- Chase overdue work, resolve conflicts between agents, and escalate decisions only the user can make.`,
-    avatar: "cleo-sam",
     builtin: true,
   },
 ];

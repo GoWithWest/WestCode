@@ -13,7 +13,6 @@ const AVATAR_LIBRARY = [
   "quinn",
   "lennox",
   "oz",
-  "cleo-sam",
   ...Array.from({ length: 12 }, (_, i) => `lib-${String(i + 1).padStart(2, "0")}`),
 ];
 
