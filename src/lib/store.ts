@@ -25,7 +25,13 @@ import {
   resolveProvider,
   type CustomProvider,
 } from "./providers";
-import { westcode, type CliProbe, type LiveAddon, type SessionEvent } from "./desktop";
+import {
+  westcode,
+  type CliProbe,
+  type CliUpdate,
+  type LiveAddon,
+  type SessionEvent,
+} from "./desktop";
 import type {
   AgentRosterItem,
   Attachment,
@@ -41,7 +47,8 @@ import { uid } from "./utils";
 const ONBOARD_KEY = "helix-onboarding-v1";
 const FOLDERS_KEY = "helix-folders-v1";
 const DESK_KEY = "helix-desk-v1";
-const MAX_HOP = 3;
+const UPDATES_KEY = "helix-cli-updates-dismissed-v1";
+const MAX_HOP = 6;
 const abortBySession = new Map<string, AbortController>();
 const hopBySession = new Map<string, number>();
 const busLog: { from: string; to: string; at: number; hash: string }[] = [];
@@ -87,6 +94,8 @@ export type HelixState = {
   customProviders: CustomProvider[];
   recentFolders: RecentFolder[];
   cliStatus: CliProbe[];
+  cliUpdates: CliUpdate[];
+  updateBusy: string | null;
   liveAddons: LiveAddon[];
   libraryStatus: "idle" | "loading" | "ready";
 
@@ -102,6 +111,9 @@ export type HelixState = {
   finishCodexDemo: () => void;
   refreshCli: () => Promise<void>;
   refreshLibrary: () => Promise<void>;
+  refreshUpdates: () => Promise<void>;
+  applyCliUpdate: (id: string) => Promise<void>;
+  dismissCliUpdate: (id: string) => void;
   answerPermission: (sessionId: string, optionId: string) => void;
   rememberFolder: (folder: RecentFolder) => void;
   createSession: (opts: CreateOpts) => void;
@@ -259,17 +271,19 @@ function addonNames(
   custom: Addon[],
   kind: AddonKind,
   providerId: string,
+  live: LiveAddon[] = [],
 ) {
-  return [...LIBRARY, ...custom]
+  const names = [...LIBRARY, ...custom, ...live]
     .filter(
       (a) =>
         a.kind === kind &&
         enabled.includes(a.id) &&
-        (a.providers.includes(providerId) ||
-          a.providers.includes("*") ||
-          a.custom),
+        ((a.providers ?? []).includes(providerId) ||
+          (a.providers ?? []).includes("*") ||
+          ("custom" in a && a.custom)),
     )
     .map((a) => a.name);
+  return [...new Set(names)];
 }
 
 function rosterFor(
@@ -328,7 +342,7 @@ function busAllowed(from: string, to: string, text: string, hop: number) {
   const recent = busLog.filter((e) => now - e.at < 90_000);
   busLog.length = 0;
   busLog.push(...recent);
-  if (recent.filter((e) => e.from === from && e.to === to).length >= 4) {
+  if (recent.filter((e) => e.from === from && e.to === to).length >= 8) {
     return "Desk bus rate-limited this pair.";
   }
   if (recent.some((e) => e.from === from && e.to === to && e.hash === h)) {
@@ -524,6 +538,8 @@ export const useHelix = create<HelixState>((set, get) => ({
   customProviders: [],
   recentFolders: [],
   cliStatus: [],
+  cliUpdates: [],
+  updateBusy: null,
   liveAddons: [],
   libraryStatus: "idle",
 
@@ -574,6 +590,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     bindDeskPersist();
     void get().refreshCli();
     void get().refreshLibrary();
+    void get().refreshUpdates();
   },
 
   refreshCli: async () => {
@@ -585,6 +602,55 @@ export const useHelix = create<HelixState>((set, get) => ({
     } catch {
       /* probe failed; Connections will show install hints */
     }
+  },
+
+  refreshUpdates: async () => {
+    const api = westcode();
+    if (!api?.updates) return;
+    try {
+      const all = await api.updates();
+      const dismissed = readJson<string[]>(UPDATES_KEY, []);
+      set({
+        cliUpdates: all.filter(
+          (u) => !dismissed.includes(`${u.id}@${u.latest}`),
+        ),
+      });
+    } catch {
+      /* update check failed; try again next launch */
+    }
+  },
+
+  applyCliUpdate: async (id) => {
+    const api = westcode();
+    if (!api?.updateCli || get().updateBusy) return;
+    set({ updateBusy: id });
+    try {
+      const res = await api.updateCli(id);
+      if (res.ok) {
+        set((s) => ({ cliUpdates: s.cliUpdates.filter((u) => u.id !== id) }));
+        void get().refreshCli();
+      }
+    } finally {
+      set({ updateBusy: null });
+    }
+  },
+
+  dismissCliUpdate: (id) => {
+    const u = get().cliUpdates.find((x) => x.id === id);
+    if (u) {
+      const dismissed = readJson<string[]>(UPDATES_KEY, []);
+      try {
+        localStorage.setItem(
+          UPDATES_KEY,
+          JSON.stringify(
+            [...dismissed, `${u.id}@${u.latest}`].slice(-12),
+          ),
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    set((s) => ({ cliUpdates: s.cliUpdates.filter((x) => x.id !== id) }));
   },
 
   refreshLibrary: async () => {
@@ -958,9 +1024,24 @@ export const useHelix = create<HelixState>((set, get) => ({
       sessionId,
       get().customProviders,
     );
-    const bus = deskPreamble(sessionId, latest.providerId, roster);
+    const bus = deskPreamble(sessionId, latest.providerId, roster, {
+      skills: addonNames(
+        get().enabledAddons,
+        get().customAddons,
+        "skill",
+        latest.providerId,
+        get().liveAddons,
+      ),
+      connectors: addonNames(
+        get().enabledAddons,
+        get().customAddons,
+        "connector",
+        latest.providerId,
+        get().liveAddons,
+      ),
+    });
     const promptText = opts?.incoming
-      ? `${bus}\n[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle}]\nIncoming message from another WestCode session. Act on it. Reply with westcode_send_message if they asked a question.\n\n${outgoing}`
+      ? `${bus}\n[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\nIncoming message from another WestCode session. Act on it now. When you finish (or if you are blocked), you MUST call westcode_send_message with to="${opts.incoming.fromSessionId}" and a short result — the sender is waiting for your reply.\n\n${outgoing}`
       : `${bus}\n${outgoing}`;
 
     const api = westcode();

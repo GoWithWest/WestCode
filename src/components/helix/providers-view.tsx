@@ -36,6 +36,17 @@ export function ProvidersView() {
     }
   }
 
+  async function install(id: string) {
+    if (!api?.installCli) return;
+    setBusy(id);
+    try {
+      await api.installCli(id);
+      await refreshCli();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5 md:p-8">
       <div className="mx-auto max-w-2xl">
@@ -150,9 +161,19 @@ export function ProvidersView() {
                       </Button>
                     </>
                   ) : (
-                    <p className="text-2xs text-muted-foreground">
-                      Install the CLI in Terminal, then Recheck.
-                    </p>
+                    <>
+                      <Button
+                        size="sm"
+                        disabled={busy === p.id}
+                        onClick={() => void install(p.id)}
+                      >
+                        {busy === p.id ? "Installing…" : "Install"}
+                      </Button>
+                      <p className="text-2xs text-muted-foreground">
+                        WestCode installs and manages this CLI for you — or
+                        install it yourself in Terminal, then Recheck.
+                      </p>
+                    </>
                   )}
                 </div>
               </li>
