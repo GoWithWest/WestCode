@@ -57,6 +57,34 @@ const FOLDERS_KEY = "helix-folders-v1";
 const DESK_KEY = "helix-desk-v1";
 const UPDATES_KEY = "helix-cli-updates-dismissed-v1";
 const COLORS_KEY = "helix-provider-colors-v1";
+const SETTINGS_KEY = "helix-settings-v1";
+
+export type AppSettings = {
+  /** Preselected provider in the New Session dialog. */
+  defaultProviderId: string | null;
+  /** Default model label per provider ("" = provider default). */
+  defaultModel: string;
+  defaultEffort: string;
+  /** Permission mode every new session starts in. */
+  defaultPermissionMode: string;
+  /** Folder prefilled in the New Session dialog. */
+  defaultCwd: string;
+  /**
+   * Delegated (desk-bus spawned) sessions run in "auto" so an orchestrator's
+   * hand-offs execute without a human approval per tool call. When off they
+   * inherit the sender's permission mode instead.
+   */
+  delegatedAuto: boolean;
+};
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  defaultProviderId: null,
+  defaultModel: "",
+  defaultEffort: "",
+  defaultPermissionMode: DEFAULT_PERMISSION,
+  defaultCwd: "",
+  delegatedAuto: true,
+};
 
 type AgentsPersist = {
   custom: AgentProfile[];
@@ -160,6 +188,7 @@ export type HelixState = {
   agents: AgentProfile[];
   agentsPersist: AgentsPersist;
   providerColors: Record<string, string>;
+  settings: AppSettings;
   cliStatus: CliProbe[];
   cliUpdates: CliUpdate[];
   updateBusy: string | null;
@@ -209,6 +238,7 @@ export type HelixState = {
   removeAgent: (id: string) => void;
   restorePresetAgents: () => void;
   setProviderColor: (providerId: string, color: string) => void;
+  updateSettings: (patch: Partial<AppSettings>) => void;
 };
 
 // Desktop state lives in ~/.westcode/state.json (loaded once at startup) so
@@ -655,6 +685,11 @@ function bindDesktopEvents() {
           title: `${agent.name} — ${agent.role}`,
           agentId: agent.id,
           background: true,
+          // Delegated work must not stall on approval prompts: run in auto
+          // (setting, default on) or inherit whatever the sender runs in.
+          permissionMode: state.settings.delegatedAuto
+            ? "auto"
+            : sender.permissionMode,
         });
         started = ` (started a new ${agent.name} session)`;
         // Deliver by the returned id — never back through the fuzzy
@@ -700,6 +735,7 @@ export const useHelix = create<HelixState>((set, get) => ({
   agents: PRESET_AGENTS,
   agentsPersist: { custom: [], overrides: {}, removed: [] },
   providerColors: {},
+  settings: DEFAULT_SETTINGS,
   cliStatus: [],
   cliUpdates: [],
   updateBusy: null,
@@ -737,6 +773,10 @@ export const useHelix = create<HelixState>((set, get) => ({
       removed: [],
     });
     const providerColors = readJson<Record<string, string>>(COLORS_KEY, {});
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      ...readJson<Partial<AppSettings>>(SETTINGS_KEY, {}),
+    };
     const folders = readJson<RecentFolder[]>(FOLDERS_KEY, []);
     const desk = readJson<{
       sessions?: Session[];
@@ -762,6 +802,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       agentsPersist,
       agents: mergeAgents(agentsPersist),
       providerColors,
+      settings,
       recentFolders: Array.isArray(folders) ? folders : [],
       sessions,
       activeId: live.length
@@ -901,8 +942,9 @@ export const useHelix = create<HelixState>((set, get) => ({
     background,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
+    const settings = get().settings;
     const project = projectById(projectId);
-    const path = cwd?.trim() || project.path;
+    const path = cwd?.trim() || settings.defaultCwd || project.path;
     const folderName = path.split("/").filter(Boolean).pop() || "session";
     const session: Session = {
       id: uid("ses"),
@@ -910,9 +952,10 @@ export const useHelix = create<HelixState>((set, get) => ({
       providerId,
       projectId,
       cwd: path,
-      model: model ?? p.defaultModel,
-      effort: effort ?? defaultEffortFor(providerId),
-      permissionMode: permissionMode || DEFAULT_PERMISSION,
+      model: model ?? (settings.defaultModel || p.defaultModel),
+      effort: effort ?? (settings.defaultEffort || defaultEffortFor(providerId)),
+      permissionMode:
+        permissionMode || settings.defaultPermissionMode || DEFAULT_PERMISSION,
       status: "idle",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -1112,6 +1155,12 @@ export const useHelix = create<HelixState>((set, get) => ({
     };
     persistAgents(next);
     set({ agentsPersist: next, agents: mergeAgents(next) });
+  },
+
+  updateSettings: (patch) => {
+    const settings = { ...get().settings, ...patch };
+    saveState(SETTINGS_KEY, settings);
+    set({ settings });
   },
 
   updateAgent: (id, patch) => {

@@ -1,4 +1,4 @@
-import { Blocks, Plus, Settings2, Users, X } from "lucide-react";
+import { Blocks, Plus, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
 import { useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -130,6 +130,19 @@ export function Sidebar() {
         >
           <Users className="size-3.5" />
           Agents
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={
+            view === "settings"
+              ? "w-full justify-start bg-muted/60"
+              : "w-full justify-start text-muted-foreground"
+          }
+          onClick={() => setView("settings")}
+        >
+          <SlidersHorizontal className="size-3.5" />
+          Settings
         </Button>
         <Button
           variant="ghost"

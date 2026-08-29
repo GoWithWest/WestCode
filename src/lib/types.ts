@@ -5,7 +5,8 @@ export type LayoutView =
   | "split"
   | "providers"
   | "library"
-  | "agents";
+  | "agents"
+  | "settings";
 
 export type Attachment = {
   id: string;
