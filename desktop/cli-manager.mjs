@@ -98,8 +98,11 @@ function cmpVersions(a, b) {
 }
 
 function currentVersionFromProbe(probe) {
-  const m = /\d+\.\d+(\.\d+)?/.exec(probe?.version ?? "");
-  return m ? m[0] : null;
+  // Take the LAST x.y(.z) on the line: "codex-cli 0.150.1" and
+  // "2.1.251 (Claude Code)" both parse, and a leading tool banner like
+  // "node v22.1.0 / cli 1.2.3" does not win with the wrong number.
+  const all = String(probe?.version ?? "").match(/\d+\.\d+(\.\d+)?/g);
+  return all?.length ? all[all.length - 1] : null;
 }
 
 /**
@@ -144,7 +147,9 @@ export async function updateCli(id) {
     );
   }
   // The CLI was installed by the user (globally or via the vendor script).
-  // Update it in place the same way it was installed.
+  // Update it in place the same way it was installed — never drop a managed
+  // copy in front of it on PATH, which would permanently shadow a binary
+  // WestCode does not own.
   const bin = which(id === "claude" ? "claude" : "codex");
   if (bin && !bin.startsWith(MANAGED_PREFIX) && /npm|node_modules/.test(bin)) {
     return runShell(`${quote(npmBin())} install -g ${pkg}@latest --no-fund --no-audit`);
@@ -152,7 +157,12 @@ export async function updateCli(id) {
   if (id === "claude" && bin && !bin.startsWith(MANAGED_PREFIX)) {
     return runShell("curl -fsSL https://claude.ai/install.sh | bash");
   }
-  // Fall back to a managed install; it shadows the outdated copy.
+  if (bin && !bin.startsWith(MANAGED_PREFIX)) {
+    return {
+      ok: false,
+      output: `${id} at ${bin} was installed outside WestCode (Homebrew or a vendor package). Update it with the same tool that installed it.`,
+    };
+  }
   return runShell(
     `${quote(npmBin())} install --prefix ${quote(MANAGED_PREFIX)} ${pkg}@latest --no-fund --no-audit`,
   );

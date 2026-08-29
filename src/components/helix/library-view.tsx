@@ -49,13 +49,24 @@ export function LibraryView() {
           PROVIDER_ORDER.includes(p as (typeof PROVIDER_ORDER)[number]),
       ),
     );
-    const seen = new Set<string>();
-    const merged = [...fromCli, ...custom, ...canned].filter((a) => {
+    // Merge sources by kind+name: the first occurrence keeps identity (canned
+    // first, so curated ids stay the Enable key DEFAULT_ENABLED points at),
+    // later occurrences union their providers in instead of being dropped —
+    // a "github" connector Codex also has must not show as Claude-only.
+    const byKey = new Map<string, Addon>();
+    for (const a of [...canned, ...custom, ...fromCli]) {
       const key = `${a.kind}:${a.name.toLowerCase()}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+      const cur = byKey.get(key);
+      if (!cur) {
+        byKey.set(key, { ...a, providers: [...(a.providers ?? [])] });
+        continue;
+      }
+      cur.providers = [
+        ...new Set([...(cur.providers ?? []), ...(a.providers ?? [])]),
+      ];
+      if (!cur.summary && a.summary) cur.summary = a.summary;
+    }
+    const merged = [...byKey.values()];
     const all = merged.filter((a) => a.kind === tab);
     const scoped =
       filter === "all"

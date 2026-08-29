@@ -38,10 +38,12 @@ jobs:
       - run: npm ci
       - name: Build standalone app
         run: npm run dist
+      # NOTE: artifacts are unsigned/un-notarized dev builds — Gatekeeper will
+      # warn on other Macs until Developer ID signing secrets are added.
       - name: Upload app bundle
         uses: actions/upload-artifact@v4
         with:
-          name: WestCode-mac
+          name: WestCode-mac-unsigned
           path: |
             release/*.dmg
             release/*.zip

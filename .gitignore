@@ -22,3 +22,4 @@ screenshots/*.json
 desktop/icon.iconset/
 **/xcuserdata/
 **/*.xcuserstate
+.output/

@@ -45,18 +45,23 @@ async function handleOutboxFile(id) {
   }
   const file = outboxPath(id);
   let request = null;
-  // A watch event can fire while the writer is mid-write; re-read briefly
-  // instead of dropping the message on a partial-JSON parse.
+  // A watch event can fire while the writer is mid-write (partial JSON) or
+  // before the file is visible (ENOENT); re-read briefly instead of dropping
+  // the message.
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       request = JSON.parse(await readFile(file, "utf8"));
       break;
-    } catch (err) {
-      if (err?.code === "ENOENT") return;
+    } catch {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
-  if (!request) return;
+  if (!request) {
+    // Unclaim so a later watch event or poll can retry once the writer
+    // finishes; a claimed-but-unparsed id would drop the message forever.
+    handled.delete(id);
+    return;
+  }
   const result = await onSend({
     from: String(request.from || ""),
     to: String(request.to || ""),

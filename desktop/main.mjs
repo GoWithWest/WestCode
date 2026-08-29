@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, stopAll, setDeskUrl } from "./acp-host.mjs";
+import { ensureSession, dropSession, getSession, hasLiveSession, stopAll, setDeskUrl } from "./acp-host.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,26 +62,37 @@ async function startAppServer() {
   if (appServer && appServerUrl) return appServerUrl;
   const entry = join(here, "..", ".output", "server", "index.mjs");
   if (!existsSync(entry)) return null;
-  const port = await freePort();
-  appServer = spawn(process.execPath, [entry], {
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      HOST: "127.0.0.1",
-      PORT: String(port),
-      NITRO_HOST: "127.0.0.1",
-      NITRO_PORT: String(port),
-    },
-    stdio: "ignore",
-  });
-  appServer.on("exit", () => {
-    appServer = null;
-    appServerUrl = null;
-  });
-  const url = `http://127.0.0.1:${port}`;
-  await waitForHttp(url);
-  appServerUrl = url;
-  return url;
+  // freePort → spawn is a TOCTOU window; retry with a fresh port if another
+  // process grabbed it between the probe and the bind.
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const port = await freePort();
+    appServer = spawn(process.execPath, [entry], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        HOST: "127.0.0.1",
+        PORT: String(port),
+        NITRO_HOST: "127.0.0.1",
+        NITRO_PORT: String(port),
+      },
+      stdio: "ignore",
+    });
+    appServer.on("exit", () => {
+      appServer = null;
+      appServerUrl = null;
+    });
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitForHttp(url);
+      appServerUrl = url;
+      return url;
+    } catch (err) {
+      lastErr = err;
+      killAppServer();
+    }
+  }
+  throw lastErr ?? new Error("The WestCode app server did not start.");
 }
 
 function send(sessionId, event) {
@@ -173,9 +184,26 @@ async function createWindow() {
   } else {
     try {
       const url = await startAppServer();
-      void win.loadURL(url ?? DEV_URL);
+      if (url) {
+        void win.loadURL(url);
+      } else if (app.isPackaged) {
+        // A packaged app without its bundled server is broken — do not fall
+        // back to :8080, which belongs to some other process (or nothing).
+        dialog.showErrorBox(
+          "WestCode",
+          "The bundled app server is missing from this build. Reinstall WestCode.",
+        );
+        app.quit();
+        return;
+      } else {
+        void win.loadURL(DEV_URL);
+      }
     } catch (err) {
-      void dialog.showErrorBox("WestCode", err.message);
+      dialog.showErrorBox("WestCode", err.message);
+      if (app.isPackaged) {
+        app.quit();
+        return;
+      }
       void win.loadURL(DEV_URL);
     }
   }
@@ -208,13 +236,16 @@ app.whenReady().then(async () => {
     }
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const delivered = await new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(null), 15_000);
       const onResult = (_e, result) => {
         if (result?.requestId && result.requestId !== requestId) return;
         ipcMain.removeListener("desk:delivered", onResult);
         clearTimeout(timer);
         resolve(result);
       };
+      const timer = setTimeout(() => {
+        ipcMain.removeListener("desk:delivered", onResult);
+        resolve(null);
+      }, 15_000);
       ipcMain.on("desk:delivered", onResult);
       win?.webContents.send("desk:deliver", { requestId, from, to, text });
     });
@@ -260,7 +291,15 @@ app.on("before-quit", () => {
 ipcMain.handle("cli:probe", () => probeAll());
 ipcMain.handle("cli:library", (_e, providerId) => listAddons(providerId));
 ipcMain.handle("cli:updates", async () => checkUpdates(await probeAll()));
-ipcMain.handle("cli:update", (_e, providerId) => updateCli(providerId));
+ipcMain.handle("cli:update", (_e, providerId) => {
+  if (hasLiveSession(providerId)) {
+    return {
+      ok: false,
+      output: `A ${providerId} session is running. Stop it before updating — replacing the CLI under a live agent can corrupt the turn.`,
+    };
+  }
+  return updateCli(providerId);
+});
 ipcMain.handle("cli:install", (_e, providerId) => installCli(providerId));
 
 ipcMain.handle("cli:login", async (_e, providerId) => {
