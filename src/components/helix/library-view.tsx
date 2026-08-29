@@ -42,20 +42,29 @@ export function LibraryView() {
       providers: a.providers,
       install: "",
     }));
-    const canned = live.length
-      ? []
-      : LIBRARY.filter((a) =>
-          a.providers.some(
-            (p) =>
-              p === "*" ||
-              PROVIDER_ORDER.includes(p as (typeof PROVIDER_ORDER)[number]),
-          ),
-        );
-    const all = [...fromCli, ...custom, ...canned].filter((a) => a.kind === tab);
+    const canned = LIBRARY.filter((a) =>
+      (a.providers ?? []).some(
+        (p) =>
+          p === "*" ||
+          PROVIDER_ORDER.includes(p as (typeof PROVIDER_ORDER)[number]),
+      ),
+    );
+    const seen = new Set<string>();
+    const merged = [...fromCli, ...custom, ...canned].filter((a) => {
+      const key = `${a.kind}:${a.name.toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const all = merged.filter((a) => a.kind === tab);
     const scoped =
       filter === "all"
         ? all
-        : all.filter((a) => a.providers.includes(filter) || a.providers.includes("*"));
+        : all.filter(
+            (a) =>
+              (a.providers ?? []).includes(filter) ||
+              (a.providers ?? []).includes("*"),
+          );
     const q = query.trim().toLowerCase();
     if (!q) return scoped;
     return scoped.filter(
@@ -170,7 +179,7 @@ function AddonCard({
   return (
     <li
       className={cn(
-        "rounded-lg border bg-surface p-4 [content-visibility:auto]",
+        "rounded-lg border bg-surface p-4",
         on ? "border-border-strong" : "border-border",
       )}
     >

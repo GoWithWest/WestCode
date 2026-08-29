@@ -1,11 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
+import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
 import { ensureSession, dropSession, getSession, stopAll, setDeskUrl } from "./acp-host.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 
@@ -15,6 +17,72 @@ const ICON_PNG = join(here, "icon.png");
 
 /** @type {BrowserWindow | null} */
 let win = null;
+/** @type {import("node:child_process").ChildProcess | null} */
+let appServer = null;
+/** @type {string | null} */
+let appServerUrl = null;
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+function waitForHttp(url, timeoutMs = 30_000) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = async () => {
+      try {
+        await fetch(url, { method: "HEAD" });
+        resolve();
+        return;
+      } catch {
+        if (Date.now() - start > timeoutMs) {
+          reject(new Error(`The WestCode app server did not start (${url}).`));
+          return;
+        }
+        setTimeout(tick, 250);
+      }
+    };
+    void tick();
+  });
+}
+
+/**
+ * Packaged (standalone) mode: run the bundled nitro server inside the app so
+ * no Vite dev server — and no `npm run app` — is needed.
+ */
+async function startAppServer() {
+  if (appServer && appServerUrl) return appServerUrl;
+  const entry = join(here, "..", ".output", "server", "index.mjs");
+  if (!existsSync(entry)) return null;
+  const port = await freePort();
+  appServer = spawn(process.execPath, [entry], {
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      NITRO_HOST: "127.0.0.1",
+      NITRO_PORT: String(port),
+    },
+    stdio: "ignore",
+  });
+  appServer.on("exit", () => {
+    appServer = null;
+    appServerUrl = null;
+  });
+  const url = `http://127.0.0.1:${port}`;
+  await waitForHttp(url);
+  appServerUrl = url;
+  return url;
+}
 
 function send(sessionId, event) {
   win?.webContents.send("session:event", { sessionId, ...event });
@@ -80,7 +148,7 @@ function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function createWindow() {
+async function createWindow() {
   win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -100,11 +168,16 @@ function createWindow() {
     },
   });
 
-  const dist = join(here, "..", "dist", "client", "index.html");
-  if (process.env.WESTCODE_DEV === "1" || !existsSync(dist)) {
+  if (process.env.WESTCODE_DEV === "1") {
     void win.loadURL(DEV_URL);
   } else {
-    void win.loadFile(dist);
+    try {
+      const url = await startAppServer();
+      void win.loadURL(url ?? DEV_URL);
+    } catch (err) {
+      void dialog.showErrorBox("WestCode", err.message);
+      void win.loadURL(DEV_URL);
+    }
   }
 
   win.once("ready-to-show", () => {
@@ -135,7 +208,7 @@ app.whenReady().then(async () => {
     }
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const delivered = await new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(null), 12_000);
+      const timer = setTimeout(() => resolve(null), 15_000);
       const onResult = (_e, result) => {
         if (result?.requestId && result.requestId !== requestId) return;
         ipcMain.removeListener("desk:delivered", onResult);
@@ -154,23 +227,41 @@ app.whenReady().then(async () => {
     return { ok: true, deliveredTo: delivered.deliveredTo };
   });
   installMenu();
-  createWindow();
+  void createWindow();
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
 });
 
 ipcMain.on("desk:sync", (_e, rows) => setRoster(rows));
 
+function killAppServer() {
+  try {
+    appServer?.kill("SIGTERM");
+  } catch {
+    /* ignore */
+  }
+  appServer = null;
+}
+
 app.on("window-all-closed", () => {
   stopAll();
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    killAppServer();
+    app.quit();
+  }
 });
 
-app.on("before-quit", () => stopAll());
+app.on("before-quit", () => {
+  stopAll();
+  killAppServer();
+});
 
 ipcMain.handle("cli:probe", () => probeAll());
 ipcMain.handle("cli:library", (_e, providerId) => listAddons(providerId));
+ipcMain.handle("cli:updates", async () => checkUpdates(await probeAll()));
+ipcMain.handle("cli:update", (_e, providerId) => updateCli(providerId));
+ipcMain.handle("cli:install", (_e, providerId) => installCli(providerId));
 
 ipcMain.handle("cli:login", async (_e, providerId) => {
   const spec = PROVIDERS[providerId];

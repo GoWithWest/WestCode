@@ -1,6 +1,9 @@
 {
   "name": "westcode",
   "productName": "WestCode",
+  "version": "0.1.0",
+  "description": "All your coding agents. One desk.",
+  "author": "WestCode",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -22,7 +25,31 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "app": "node desktop/dev.mjs",
-    "electron": "WESTCODE_DEV=1 electron ."
+    "electron": "WESTCODE_DEV=1 electron .",
+    "build:desktop": "WESTCODE_DESKTOP_BUILD=1 node scripts/with-app-env.mjs vite build",
+    "dist": "npm run build:desktop && electron-builder --mac --publish never"
+  },
+  "build": {
+    "appId": "dev.westcode.app",
+    "productName": "WestCode",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      ".output/**/*",
+      "package.json",
+      "!desktop/icon.iconset"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "desktop/icon.icns",
+      "category": "public.app-category.developer-tools"
+    }
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
@@ -85,6 +112,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^37.3.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.20.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",

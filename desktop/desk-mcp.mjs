@@ -137,7 +137,10 @@ async function deliver(to, text) {
     }
     throw new Error("Could not write the WestCode outbox.");
   }
-  const deadline = Date.now() + 12_000;
+  // The outbox write above is the single delivery path. Never re-send the
+  // same message over HTTP after a timeout — a late outbox pickup plus an
+  // HTTP retry would deliver the task twice.
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     try {
       const data = await readJson(resPath);
@@ -147,18 +150,9 @@ async function deliver(to, text) {
     }
     await sleep(50);
   }
-  if (DESK_HTTP) {
-    try {
-      return await fetch(`${DESK_HTTP}/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: FROM, to, text }),
-      }).then((r) => r.json());
-    } catch {
-      /* ignore */
-    }
-  }
-  throw new Error("WestCode desk did not confirm delivery in time.");
+  throw new Error(
+    "WestCode desk did not confirm delivery in time. The message may still arrive — do not resend it; check with westcode_list_sessions instead.",
+  );
 }
 
 async function handle(msg) {

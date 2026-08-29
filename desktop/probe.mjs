@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { childEnv, which } from "./path.mjs";
 
@@ -158,23 +161,55 @@ export async function probeAll() {
   return list;
 }
 
+const PER_KIND_CAP = 80;
+
+function collectSkillDirs(dir, id, spec, push) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    push({
+      id: `${id}-skill-${e.name}`,
+      kind: "skill",
+      name: e.name,
+      source: spec.name,
+      summary: `Installed skill in ${dir}`,
+      providers: [id],
+    });
+  }
+}
+
 export async function listAddons(id) {
   const spec = PROVIDERS[id];
   if (!spec) return [];
   const path = which(spec.binary);
   if (!path) return [];
   const addons = [];
+  const seen = new Set();
+
+  function push(addon) {
+    const key = `${addon.kind}:${addon.name.toLowerCase()}`;
+    if (seen.has(key)) return;
+    if (addons.filter((a) => a.kind === addon.kind).length >= PER_KIND_CAP) return;
+    seen.add(key);
+    addons.push(addon);
+  }
 
   async function collect(args, kind) {
     const r = await run(path, args, 8000);
     const text = r.stdout || r.stderr;
-    if (!r.ok && /unknown|unrecognized/.test(text.toLowerCase())) return;
+    if (!r.ok) return;
+    if (/^usage:|unknown|unrecognized|invalid/i.test(text.trim())) return;
     for (const line of text.split("\n")) {
       const t = line.trim();
       if (!t || t.startsWith("#") || /^usage:/i.test(t) || /^no /i.test(t)) continue;
-      const name = t.replace(/^[\-*\d.\s]+/, "").split(/\s{2,}|\t/)[0];
-      if (name && name.length < 80 && !/^(list|add|remove|mcp|plugin)/i.test(name)) {
-        addons.push({
+      const name = t.replace(/^[-*\d.\s]+/, "").split(/\s{2,}|\t|:/)[0]?.trim();
+      if (name && name.length < 80 && !/^(list|add|remove|mcp|plugin|options?|commands?|flags?)$/i.test(name)) {
+        push({
           id: `${id}-${kind}-${name}`,
           kind,
           name,
@@ -191,7 +226,7 @@ export async function listAddons(id) {
     try {
       const j = JSON.parse(inspect.stdout);
       for (const s of j.skills || []) {
-        addons.push({
+        push({
           id: `grok-skill-${s.name}`,
           kind: "skill",
           name: s.name,
@@ -201,7 +236,7 @@ export async function listAddons(id) {
         });
       }
       for (const p of j.plugins || []) {
-        addons.push({
+        push({
           id: `grok-plugin-${p.name || p.id}`,
           kind: "plugin",
           name: p.name || p.id,
@@ -211,7 +246,7 @@ export async function listAddons(id) {
         });
       }
       for (const m of j.mcpServers || j.mcp || []) {
-        addons.push({
+        push({
           id: `grok-mcp-${m.name || m.id}`,
           kind: "connector",
           name: m.name || m.id,
@@ -227,9 +262,10 @@ export async function listAddons(id) {
   } else if (id === "claude") {
     await collect(["mcp", "list"], "connector");
     await collect(["plugin", "list"], "plugin");
+    collectSkillDirs(join(homedir(), ".claude", "skills"), id, spec, push);
   } else if (id === "codex") {
     await collect(["mcp", "list"], "connector");
     await collect(["features", "list"], "plugin");
   }
-  return addons.slice(0, 80);
+  return addons;
 }

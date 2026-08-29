@@ -1,6 +1,6 @@
 import http from "node:http";
 import { watch } from "node:fs";
-import { readFile, writeFile, unlink } from "node:fs/promises";
+import { readdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { outboxDir, outboxPath, resultPath, rosterPath, tmpRosterPath } from "./desk-paths.mjs";
 
 /** @type {{ id: string, title: string, providerId: string, provider: string, cwd: string, model: string, status: string }[]} */
@@ -34,14 +34,29 @@ export function setRoster(rows) {
   void writeRosterFiles(roster);
 }
 
+const handled = new Set();
+
 async function handleOutboxFile(id) {
-  const file = outboxPath(id);
-  let request;
-  try {
-    request = JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    return;
+  // Both fs.watch and the polling backup can see the same file — claim once.
+  if (handled.has(id)) return;
+  handled.add(id);
+  if (handled.size > 500) {
+    for (const old of [...handled].slice(0, 250)) handled.delete(old);
   }
+  const file = outboxPath(id);
+  let request = null;
+  // A watch event can fire while the writer is mid-write; re-read briefly
+  // instead of dropping the message on a partial-JSON parse.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      request = JSON.parse(await readFile(file, "utf8"));
+      break;
+    } catch (err) {
+      if (err?.code === "ENOENT") return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  if (!request) return;
   const result = await onSend({
     from: String(request.from || ""),
     to: String(request.to || ""),
@@ -54,6 +69,17 @@ async function handleOutboxFile(id) {
   }
   try {
     await unlink(file);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function scanOutbox() {
+  try {
+    const names = await readdir(outboxDir());
+    for (const n of names) {
+      if (n.endsWith(".json")) void handleOutboxFile(n.replace(/\.json$/, ""));
+    }
   } catch {
     /* ignore */
   }
@@ -72,6 +98,9 @@ function watchOutbox() {
   } catch {
     /* ignore */
   }
+  // fs.watch on macOS can miss creates; a slow poll is the safety net.
+  setInterval(() => void scanOutbox(), 1000).unref?.();
+  void scanOutbox();
 }
 
 function readBody(req) {

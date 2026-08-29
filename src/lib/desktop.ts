@@ -50,10 +50,20 @@ export type SessionEvent = {
   agentSessionId?: string;
 };
 
+export type CliUpdate = {
+  id: string;
+  name: string;
+  current: string;
+  latest: string;
+};
+
 type WestcodeBridge = {
   desktop: true;
   probe: () => Promise<CliProbe[]>;
   library: (providerId: string) => Promise<LiveAddon[]>;
+  updates: () => Promise<CliUpdate[]>;
+  updateCli: (providerId: string) => Promise<{ ok: boolean; output: string }>;
+  installCli: (providerId: string) => Promise<{ ok: boolean; output: string }>;
   login: (providerId: string) => Promise<{ ok: boolean }>;
   logout: (providerId: string) => Promise<{ ok: boolean }>;
   pickFolder: () => Promise<{
