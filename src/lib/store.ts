@@ -300,9 +300,20 @@ function persistDeskDebounced() {
   }, 800);
 }
 
+function flushDeskPersist() {
+  if (persistTimer != null) {
+    window.clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistDesk();
+}
+
 function bindDeskPersist() {
   if (deskBound || typeof window === "undefined") return;
   deskBound = true;
+  // The debounce window must not survive quit: the IPC write is posted here
+  // and lands on the main-process queue before the renderer dies.
+  window.addEventListener("beforeunload", flushDeskPersist);
   const push = (s: HelixState) => {
     persistDeskDebounced();
     westcode()?.syncDesk?.(deskRows(s.sessions, s.customProviders));
@@ -616,7 +627,10 @@ function bindDesktopEvents() {
     // personas by name, and resolveTarget's title-substring scoring would
     // otherwise steal that mail for any session whose title contains the
     // name ("Ask Quinn later" must not swallow to="Quinn").
-    const agent = matchAgent(p.to, state.agents);
+    // A confident match only — an exact name/id/first-name/initials hit,
+    // not a 3-letter prefix typo. Weak queries fall through to the fuzzy
+    // session resolver instead of entering the agent branch at all.
+    const agent = matchAgent(p.to, state.agents, { minScore: 80 });
     const sender = state.sessions.find((s) => s.id === p.from);
     let deliveredTo: string | false = false;
     let started = "";
@@ -630,9 +644,6 @@ function bindDesktopEvents() {
         });
       } else if (
         sender &&
-        // Spawning a real agent process needs a confident match — an exact
-        // name/id/first-name/initials hit, not a 3-letter prefix typo.
-        matchAgent(p.to, state.agents, { minScore: 80 }) &&
         // Do not spawn a session the hop limit will immediately orphan.
         (hopBySession.get(p.from) ?? 0) < MAX_HOP
       ) {
@@ -653,7 +664,10 @@ function bindDesktopEvents() {
           .messageSession(p.from, newId, p.text, { echo: false });
       }
     }
-    if (!deliveredTo) {
+    // Fuzzy title/provider resolution ONLY when the query named no agent —
+    // an agent-path failure (rate limit, duplicate, hop) must fail, not be
+    // re-resolved onto whichever session title happens to contain the name.
+    if (!agent && !deliveredTo) {
       deliveredTo = state.messageSession(p.from, p.to, p.text, {
         echo: false,
       });
@@ -750,10 +764,9 @@ export const useHelix = create<HelixState>((set, get) => ({
       providerColors,
       recentFolders: Array.isArray(folders) ? folders : [],
       sessions,
-      activeId:
-        (live.length ? get().activeId : desk.activeId) ??
-        sessions[0]?.id ??
-        null,
+      activeId: live.length
+        ? get().activeId
+        : (desk.activeId ?? sessions[0]?.id ?? null),
       splitIds: live.length ? get().splitIds : (desk.splitIds ?? null),
       view: live.length
         ? get().view
@@ -1016,6 +1029,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     abortBySession.get(id)?.abort();
     abortBySession.delete(id);
     promptAsst.delete(id);
+    hopBySession.delete(id);
     set((s) => ({
       sessions: s.sessions.filter((ses) => ses.id !== id),
       activeId: s.activeId === id ? null : s.activeId,
