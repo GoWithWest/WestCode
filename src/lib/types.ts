@@ -60,6 +60,12 @@ export type Project = {
   custom?: boolean;
 };
 
+export type PermissionPrompt = {
+  rpcId: number;
+  tool: string;
+  options: { optionId?: string; kind?: string; name?: string }[];
+};
+
 export type Session = {
   id: string;
   title: string;
@@ -68,11 +74,24 @@ export type Session = {
   cwd: string;
   model: string;
   effort: string;
+  permissionMode?: string;
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
   messages: ChatMessage[];
   turns: number;
+  slashCommands?: { cmd: string; args?: string; hint: string; kind: "builtin" | "skill" }[];
+  permission?: PermissionPrompt | null;
+  availableModels?: { id: string; label: string }[];
+  queued?: { text: string; incoming?: IncomingRef }[];
+  agentSessionId?: string;
+};
+
+export type IncomingRef = {
+  fromSessionId: string;
+  fromProviderId: string;
+  fromTitle: string;
+  hop: number;
 };
 
 export type AgentRosterItem = {

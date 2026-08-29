@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Plus, Trash2 } from "lucide-react";
 import { LIBRARY, type Addon, type AddonKind } from "@/lib/library";
@@ -19,22 +19,73 @@ export function LibraryView() {
   const custom = useHelix((s) => s.customAddons);
   const toggle = useHelix((s) => s.toggleAddon);
   const remove = useHelix((s) => s.removeAddon);
+  const live = useHelix((s) => s.liveAddons);
+  const libraryStatus = useHelix((s) => s.libraryStatus);
+  const refreshLibrary = useHelix((s) => s.refreshLibrary);
   const [tab, setTab] = useState<AddonKind>("skill");
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [filter, setFilter] = useState<string>("all");
+
+  useEffect(() => {
+    if (libraryStatus === "idle") void refreshLibrary();
+  }, [libraryStatus, refreshLibrary]);
 
   const items = useMemo(() => {
-    const all = [...LIBRARY, ...custom].filter((a) => a.kind === tab);
+    const fromCli: Addon[] = live.map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      name: a.name,
+      source: a.source,
+      repo: a.source,
+      summary: a.summary,
+      providers: a.providers,
+      install: "",
+    }));
+    const canned = LIBRARY.filter((a) =>
+      (a.providers ?? []).some(
+        (p) =>
+          p === "*" ||
+          PROVIDER_ORDER.includes(p as (typeof PROVIDER_ORDER)[number]),
+      ),
+    );
+    // Merge sources by kind+name: the first occurrence keeps identity (canned
+    // first, so curated ids stay the Enable key DEFAULT_ENABLED points at),
+    // later occurrences union their providers in instead of being dropped —
+    // a "github" connector Codex also has must not show as Claude-only.
+    const byKey = new Map<string, Addon>();
+    for (const a of [...canned, ...custom, ...fromCli]) {
+      const key = `${a.kind}:${a.name.toLowerCase()}`;
+      const cur = byKey.get(key);
+      if (!cur) {
+        byKey.set(key, { ...a, providers: [...(a.providers ?? [])] });
+        continue;
+      }
+      cur.providers = [
+        ...new Set([...(cur.providers ?? []), ...(a.providers ?? [])]),
+      ];
+      if (!cur.summary && a.summary) cur.summary = a.summary;
+    }
+    const merged = [...byKey.values()];
+    const all = merged.filter((a) => a.kind === tab);
+    const scoped =
+      filter === "all"
+        ? all
+        : all.filter(
+            (a) =>
+              (a.providers ?? []).includes(filter) ||
+              (a.providers ?? []).includes("*"),
+          );
     const q = query.trim().toLowerCase();
-    if (!q) return all;
-    return all.filter(
+    if (!q) return scoped;
+    return scoped.filter(
       (a) =>
         a.name.toLowerCase().includes(q) ||
         a.summary.toLowerCase().includes(q) ||
         a.repo.toLowerCase().includes(q) ||
         a.source.toLowerCase().includes(q),
     );
-  }, [tab, query, custom]);
+  }, [tab, query, custom, live, filter]);
 
   const enabledCount = items.filter((a) => enabled.includes(a.id)).length;
 
@@ -45,9 +96,9 @@ export function LibraryView() {
           <div>
             <h2 className="text-lg font-medium tracking-tight">Library</h2>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Skills, plugins, and MCP connectors from GitHub — anthropics/skills,
-              knowledge-work-plugins, community packs, and official MCP servers.
-              Enable them for sessions, or import your own.
+              Skills, plugins, and MCP connectors belong to each CLI
+              (~/.claude, ~/.grok, ~/.codex). Enable what that provider already
+              installed; WestCode does not keep a separate catalog.
             </p>
           </div>
           <Button size="sm" onClick={() => setImportOpen(true)}>
@@ -57,6 +108,23 @@ export function LibraryView() {
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-1.5">
+          {(["all", ...PROVIDER_ORDER] as const).map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setFilter(id)}
+              className={cn(
+                "h-8 rounded-md px-3 text-xs font-medium",
+                filter === id
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {id === "all" ? "All" : id[0]!.toUpperCase() + id.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -86,7 +154,9 @@ export function LibraryView() {
         <ul className="mt-4 space-y-2">
           {items.length === 0 ? (
             <li className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-              Nothing matches. Import your own, or clear the filter.
+              {libraryStatus === "loading"
+                ? "Reading skills from the CLIs…"
+                : "Nothing matches. Import your own, or clear the filter."}
             </li>
           ) : (
             items.map((a) => (

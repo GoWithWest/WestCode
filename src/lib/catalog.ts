@@ -2,6 +2,12 @@ import type { BuiltinProviderId } from "./providers";
 
 export type ModelOpt = { id: string; label: string };
 export type EffortOpt = { id: string; label: string; hint: string };
+export type PermissionMode = "ask" | "auto" | "plan" | "bypass";
+export type PermissionOpt = {
+  id: PermissionMode;
+  label: string;
+  hint: string;
+};
 export type SlashCmd = {
   cmd: string;
   args?: string;
@@ -11,18 +17,14 @@ export type SlashCmd = {
 
 export const MODELS: Record<BuiltinProviderId, ModelOpt[]> = {
   claude: [
-    { id: "Opus 4.8", label: "Opus 4.8" },
-    { id: "Opus 4.7", label: "Opus 4.7" },
-    { id: "Sonnet 5", label: "Sonnet 5" },
-    { id: "Sonnet 4.6", label: "Sonnet 4.6" },
-    { id: "Haiku 4.5", label: "Haiku 4.5" },
-    { id: "Fable 5", label: "Fable 5" },
+    { id: "opus", label: "Opus" },
+    { id: "sonnet", label: "Sonnet" },
+    { id: "haiku", label: "Haiku" },
   ],
   codex: [
-    { id: "GPT-5.4 Codex", label: "GPT-5.4 Codex" },
-    { id: "GPT-5.4", label: "GPT-5.4" },
-    { id: "GPT-5.4 Mini", label: "GPT-5.4 Mini" },
-    { id: "GPT-5.3 Codex", label: "GPT-5.3 Codex" },
+    { id: "gpt-5.4-codex", label: "GPT-5.4 Codex" },
+    { id: "gpt-5.4", label: "GPT-5.4" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   ],
   cursor: [
     { id: "Composer 2", label: "Composer 2" },
@@ -33,8 +35,8 @@ export const MODELS: Record<BuiltinProviderId, ModelOpt[]> = {
     { id: "Grok 4", label: "Grok 4" },
   ],
   grok: [
-    { id: "Grok 4.5", label: "Grok 4.5" },
-    { id: "Grok 4", label: "Grok 4" },
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "grok-4.5", label: "Grok 4.5" },
   ],
 };
 
@@ -62,9 +64,10 @@ export const EFFORTS: Record<BuiltinProviderId, EffortOpt[]> = {
     { id: "xhigh", label: "Extra high", hint: "Hardest Composer turns" },
   ],
   grok: [
-    { id: "low", label: "Low", hint: "Snappy" },
-    { id: "medium", label: "Medium", hint: "Default" },
-    { id: "high", label: "High", hint: "More thinking" },
+    { id: "low", label: "Low", hint: "Quick implementations" },
+    { id: "medium", label: "Medium", hint: "Balanced" },
+    { id: "high", label: "High", hint: "Default for Grok 4.6" },
+    { id: "xhigh", label: "Extra high", hint: "Highest reasoning" },
   ],
 };
 
@@ -72,8 +75,30 @@ export const DEFAULT_EFFORT: Record<BuiltinProviderId, string> = {
   claude: "high",
   codex: "medium",
   cursor: "medium",
-  grok: "medium",
+  grok: "high",
 };
+
+export const PERMISSION_MODES: PermissionOpt[] = [
+  { id: "ask", label: "Ask", hint: "Approve tools as they run" },
+  { id: "auto", label: "Auto", hint: "Accept edits without asking" },
+  { id: "plan", label: "Plan", hint: "Read-only until a plan is approved" },
+  { id: "bypass", label: "Bypass", hint: "Run tools without asking" },
+];
+
+export const DEFAULT_PERMISSION: PermissionMode = "ask";
+
+export function permissionLabel(mode: string): string {
+  return PERMISSION_MODES.find((m) => m.id === mode)?.label ?? mode;
+}
+
+export function permissionFlag(providerId: string, mode: string): string {
+  if (mode === "plan") return "plan";
+  if (mode === "bypass") return "bypassPermissions";
+  if (mode === "auto") {
+    return providerId === "claude" ? "acceptEdits" : "auto";
+  }
+  return "default";
+}
 
 export const SLASH: Record<BuiltinProviderId, SlashCmd[]> = {
   claude: [
@@ -130,12 +155,16 @@ export const SLASH: Record<BuiltinProviderId, SlashCmd[]> = {
   ],
   grok: [
     { cmd: "clear", hint: "New conversation", kind: "builtin" },
-    { cmd: "compact", hint: "Summarize history", kind: "builtin" },
-    { cmd: "model", args: "[name]", hint: "Switch Grok model", kind: "builtin" },
-    { cmd: "effort", args: "[level]", hint: "low / medium / high", kind: "builtin" },
-    { cmd: "plan", args: "[task]", hint: "Plan first", kind: "builtin" },
-    { cmd: "mcp", hint: "Connectors", kind: "builtin" },
-    { cmd: "skills", hint: "Enabled skills", kind: "builtin" },
+    { cmd: "compact", hint: "Compress conversation history", kind: "builtin" },
+    { cmd: "always-approve", hint: "Skip permission prompts", kind: "builtin" },
+    { cmd: "context", hint: "Context window usage", kind: "builtin" },
+    { cmd: "plugins", hint: "Manage plugins", kind: "builtin" },
+    { cmd: "session-info", hint: "Session details", kind: "builtin" },
+    { cmd: "feedback", hint: "Send session feedback", kind: "builtin" },
+    { cmd: "deep-research", args: "[topic]", hint: "Bounded parallel research", kind: "builtin" },
+    { cmd: "workflow", args: "[name]", hint: "Launch or manage a workflow", kind: "builtin" },
+    { cmd: "goal", args: "[text]", hint: "Set or check an autonomous goal", kind: "builtin" },
+    { cmd: "loop", args: "[prompt]", hint: "Run a prompt on an interval", kind: "builtin" },
     { cmd: "help", hint: "List Grok commands", kind: "builtin" },
   ],
 };
@@ -185,16 +214,26 @@ export function defaultEffortFor(id: string): string {
   return "medium";
 }
 
-export function slashFor(id: string): SlashCmd[] {
-  const base = isBuiltin(id) ? SLASH[id] : GENERIC_SLASH;
+export function slashFor(id: string, live?: SlashCmd[]): SlashCmd[] {
+  const catalog = isBuiltin(id) ? SLASH[id] : GENERIC_SLASH;
+  const base = live && live.length ? live : catalog;
+  const seen = new Set(base.map((c) => c.cmd));
+  const extra = BUS_SLASH.filter((c) => !seen.has(c.cmd));
   const help = base.filter((c) => c.cmd === "help");
   const rest = base.filter((c) => c.cmd !== "help");
-  return [...rest, ...BUS_SLASH, ...help];
+  if (!help.length) {
+    return [...rest, ...extra, { cmd: "help", hint: "List commands", kind: "builtin" }];
+  }
+  return [...rest, ...extra, ...help];
 }
 
-export function filterSlash(id: string, query: string): SlashCmd[] {
+export function filterSlash(
+  id: string,
+  query: string,
+  live?: SlashCmd[],
+): SlashCmd[] {
   const q = query.replace(/^\//, "").toLowerCase();
-  return slashFor(id).filter(
+  return slashFor(id, live).filter(
     (c) => c.cmd.startsWith(q) || c.hint.toLowerCase().includes(q),
   );
 }
@@ -236,4 +275,12 @@ export function matchEffort(
 
 export function effortLabel(id: string, effort: string): string {
   return effortsFor(id).find((e) => e.id === effort)?.label ?? effort;
+}
+
+export function modelLabel(
+  id: string,
+  model: string,
+  extras: string[] = [],
+): string {
+  return modelsFor(id, extras).find((m) => m.id === model)?.label ?? model;
 }
