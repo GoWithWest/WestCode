@@ -110,10 +110,21 @@ export function lastSnippet(blocks: Block[], max = 140): string {
 }
 
 export function extractSendMessages(blocks: Block[]) {
+  // Any tool block whose name mentions westcode_send_message — the raw tool
+  // id, an MCP-prefixed id, or a display title built from it — means the
+  // message already went out over the MCP desk bus. Re-dispatching from the
+  // XML tool blocks or the surrounding narration ("I sent it with
+  // westcode_send_message to=grok …") would deliver the same task twice, so
+  // this check runs before every extraction path.
+  const deliveredViaMcp = blocks.some(
+    (b) => b.type === "tool" && /westcode_send_message/i.test(b.name),
+  );
+  if (deliveredViaMcp) return [];
+
   const fromTools = blocks
     .filter(
       (b): b is Extract<Block, { type: "tool" }> =>
-        b.type === "tool" && /^sendmessage$/i.test(b.name) && !/^westcode_/i.test(b.name),
+        b.type === "tool" && /^sendmessage$/i.test(b.name),
     )
     .map((b) => ({
       to: (b.to ?? b.path ?? "").trim(),
@@ -122,22 +133,16 @@ export function extractSendMessages(blocks: Block[]) {
     .filter((s) => s.to && s.text);
   if (fromTools.length) return fromTools;
 
-  // A westcode_* tool block means the message already went out over the MCP
-  // desk bus. Parsing the surrounding narration ("I sent it with
-  // westcode_send_message to=grok …") would deliver the same task twice.
-  const deliveredViaMcp = blocks.some(
-    (b) => b.type === "tool" && /^westcode_send_message$/i.test(b.name),
-  );
-  if (deliveredViaMcp) return [];
-
   const plain = blocksToPlain(blocks);
   const out: { to: string; text: string }[] = [];
   const xml =
     /<tool\s+name="SendMessage"\s+to="([^"]+)">([\s\S]*?)<\/tool>/gi;
+  // No /m flag: with it, \s*$ matches at every line end and truncates a
+  // multi-line body to its first line. Anchor to line starts by hand instead.
   const fence =
-    /^\s*westcode_send_message\s+(?:to[=:\s]+)([^\s\n]+)[\s\n]+([\s\S]+?)(?=\nwestcode_send_message|\s*$)/gim;
+    /(?:^|\n)\s*westcode_send_message\s+(?:to[=:\s]+)([^\s\n]+)[\s\n]+([\s\S]+?)(?=\nwestcode_send_message|\s*$)/gi;
   const legacy =
-    /^\s*SendMessage\s+(?:to[=:\s"]+)([a-z0-9._-]+)["']?\s*\n+([\s\S]+?)(?=\nSendMessage\s+to|\s*$)/gim;
+    /(?:^|\n)\s*SendMessage\s+(?:to[=:\s"]+)([a-z0-9._-]+)["']?\s*\n+([\s\S]+?)(?=\nSendMessage\s+to|\s*$)/gi;
   let m: RegExpExecArray | null;
   for (const re of [xml, fence, legacy]) {
     re.lastIndex = 0;
