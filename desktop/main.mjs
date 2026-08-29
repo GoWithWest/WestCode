@@ -290,10 +290,14 @@ app.on("before-quit", (event) => {
   stopAll();
   killAppServer();
   if (!quitFlushed) {
-    // Let queued state/vault writes land before the process dies.
+    // Let queued state/vault writes land before the process dies. The
+    // renderer's beforeunload flush posts its state:save over IPC; the short
+    // grace period lets that message arrive and join the queue first.
     event.preventDefault();
     quitFlushed = true;
-    Promise.allSettled([stateQueue, vaultQueue]).then(() => app.quit());
+    setTimeout(() => {
+      Promise.allSettled([stateQueue, vaultQueue]).then(() => app.quit());
+    }, 200);
   }
 });
 
