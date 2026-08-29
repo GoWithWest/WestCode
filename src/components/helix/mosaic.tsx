@@ -13,8 +13,8 @@ export function Mosaic() {
         <div>
           <h2 className="text-lg font-medium tracking-tight">All agents</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Every live session across connected providers. Attach files, pick a
-            folder, and let them SendMessage each other.
+            Every live session across Claude, Grok, and Codex. Each pane is
+            that CLI — pick a folder and let them message each other.
           </p>
         </div>
         <span className="text-2xs tabular-nums text-subtle">

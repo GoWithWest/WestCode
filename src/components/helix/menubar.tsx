@@ -52,8 +52,8 @@ export function MenuBar() {
   const running = sessions.filter((s) => s.status === "running").length;
 
   return (
-    <header className="relative z-30 flex h-8 items-center justify-between border-b border-white/5 bg-menubar px-3 text-2xs text-foreground backdrop-blur-md">
-      <div className="flex items-center gap-1">
+    <header className="relative z-30 flex h-8 items-center justify-between border-b border-white/5 bg-menubar px-3 text-2xs text-foreground backdrop-blur-md [-webkit-app-region:drag]">
+      <div className="flex items-center gap-1 [-webkit-app-region:no-drag]">
         <HelixMark className="mr-1 size-3.5" />
         {MENUS.map((m) => (
           <div key={m.label} className="relative">
@@ -83,7 +83,7 @@ export function MenuBar() {
           </div>
         ))}
       </div>
-      <div className="flex items-center gap-3 text-muted-foreground">
+      <div className="flex items-center gap-3 text-muted-foreground [-webkit-app-region:no-drag]">
         <span className="hidden tabular-nums sm:inline">
           {running} running
         </span>

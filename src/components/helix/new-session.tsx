@@ -4,7 +4,6 @@ import { FolderOpen } from "lucide-react";
 import { defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
 import { pickDirectory } from "@/lib/fs";
 import { useHelix } from "@/lib/store";
-import { PROJECTS } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useAllProviders } from "./provider";
@@ -15,15 +14,17 @@ export function NewSessionDialog() {
   const createSession = useHelix((s) => s.createSession);
   const rememberFolder = useHelix((s) => s.rememberFolder);
   const recents = useHelix((s) => s.recentFolders);
-  const providers = useAllProviders().filter((p) => p.connected);
-  const [providerId, setProviderId] = useState("claude");
-  const [projectId, setProjectId] = useState("harbor");
-  const [cwd, setCwd] = useState("~/src/harbor");
-  const [prompt, setPrompt] = useState("");
-  const [model, setModel] = useState("Opus 4.7");
-  const [effort, setEffort] = useState("high");
+  const allProviders = useAllProviders();
+  const providers = allProviders.filter((p) => p.connected);
+  const list = providers.length ? providers : allProviders;
+  const [providerId, setProviderId] = useState(list[0]?.id ?? "grok");
+  const [projectId, setProjectId] = useState("scratch");
+  const [cwd, setCwd] = useState("");
+  const [title, setTitle] = useState("");
+  const [model, setModel] = useState(list[0]?.defaultModel ?? "grok-4.6");
+  const [effort, setEffort] = useState(defaultEffortFor(list[0]?.id ?? "grok"));
 
-  const provider = providers.find((p) => p.id === providerId) ?? providers[0];
+  const provider = list.find((p) => p.id === providerId) ?? list[0];
   const modelOpts = useMemo(
     () => modelsFor(provider?.id ?? "claude", provider?.models ?? []),
     [provider],
@@ -35,15 +36,10 @@ export function NewSessionDialog() {
 
   function pickProvider(id: string) {
     setProviderId(id);
-    const p = providers.find((x) => x.id === id);
+    const p = list.find((x) => x.id === id);
     const models = modelsFor(id, p?.models ?? []);
     setModel(p?.defaultModel ?? models[0]?.id ?? "");
     setEffort(defaultEffortFor(id));
-  }
-
-  function pickProject(id: string, path: string) {
-    setProjectId(id);
-    setCwd(path);
   }
 
   async function browse() {
@@ -56,15 +52,16 @@ export function NewSessionDialog() {
 
   function start() {
     if (!provider) return;
+    if (!cwd.trim()) return;
     createSession({
       providerId: provider.id,
       projectId,
-      cwd: cwd.trim() || PROJECTS[0]!.path,
-      prompt: prompt.trim() || "Inspect the repo and wait for a task.",
+      cwd: cwd.trim(),
+      title: title.trim(),
       model,
       effort,
     });
-    setPrompt("");
+    setTitle("");
   }
 
   return (
@@ -81,7 +78,7 @@ export function NewSessionDialog() {
           </Dialog.Description>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
-            {providers.map((p) => {
+            {list.map((p) => {
               const selected = p.id === providerId;
               return (
                 <button
@@ -101,11 +98,7 @@ export function NewSessionDialog() {
                   </span>
                   <span className="mt-1 block text-2xs text-muted-foreground">
                     {p.authLabel}
-                    {p.live
-                      ? " · live in preview"
-                      : p.builtin
-                        ? " · ACP"
-                        : " · added"}
+                    {p.connected ? " · ready" : " · install CLI"}
                   </span>
                 </button>
               );
@@ -173,21 +166,6 @@ export function NewSessionDialog() {
             </div>
           </label>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {PROJECTS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => pickProject(p.id, p.path)}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-2xs",
-                  cwd === p.path
-                    ? "border-accent bg-muted text-foreground"
-                    : "border-border text-muted-foreground hover:border-border-strong",
-                )}
-              >
-                {p.name}
-              </button>
-            ))}
             {recents.map((f) => (
               <button
                 key={f.path}
@@ -210,14 +188,19 @@ export function NewSessionDialog() {
 
           <label className="mt-3 block">
             <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
-              First prompt
+              Session name
             </span>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={3}
-              placeholder="What should this agent do?"
-              className="mt-1.5 w-full resize-none rounded-md border border-border bg-window px-3 py-2 text-sm outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  start();
+                }
+              }}
+              placeholder="Optional — defaults to the folder name"
+              className="mt-1.5 h-9 w-full rounded-md border border-border bg-window px-3 text-sm outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
             />
           </label>
 
@@ -225,7 +208,9 @@ export function NewSessionDialog() {
             <Button variant="ghost" onClick={() => setNewOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={start}>Start session</Button>
+            <Button onClick={start} disabled={!cwd.trim() || !provider}>
+              Start session
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

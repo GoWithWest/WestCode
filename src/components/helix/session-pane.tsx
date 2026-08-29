@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Folder } from "lucide-react";
-import { effortLabel, effortsFor, modelsFor } from "@/lib/catalog";
+import { effortLabel } from "@/lib/catalog";
 import { useHelix } from "@/lib/store";
+import { Button } from "@/components/ui/button";
 import { lastSnippet } from "@/lib/parse-agent";
 import { relativeTime } from "@/lib/utils";
 import type { Session } from "@/lib/types";
@@ -17,12 +18,8 @@ export function SessionPane({
   compact?: boolean;
 }) {
   const setActive = useHelix((s) => s.setActive);
-  const setSessionModel = useHelix((s) => s.setSessionModel);
-  const setSessionEffort = useHelix((s) => s.setSessionEffort);
   const provider = useResolvedProvider(session.providerId);
   const scroller = useRef<HTMLDivElement>(null);
-  const models = modelsFor(session.providerId, provider.models);
-  const efforts = effortsFor(session.providerId);
 
   useEffect(() => {
     const el = scroller.current;
@@ -54,42 +51,6 @@ export function SessionPane({
             </div>
           </div>
         </button>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <label className="sr-only" htmlFor={`model-${session.id}`}>
-            Model
-          </label>
-          <select
-            id={`model-${session.id}`}
-            value={session.model}
-            onChange={(e) => setSessionModel(session.id, e.target.value)}
-            className="h-8 max-w-36 truncate rounded-md border border-border bg-surface px-2 text-2xs text-foreground outline-none focus:ring-1 focus:ring-ring"
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-            {models.some((m) => m.id === session.model) ? null : (
-              <option value={session.model}>{session.model}</option>
-            )}
-          </select>
-          <label className="sr-only" htmlFor={`effort-${session.id}`}>
-            Effort
-          </label>
-          <select
-            id={`effort-${session.id}`}
-            value={session.effort}
-            onChange={(e) => setSessionEffort(session.id, e.target.value)}
-            title={efforts.find((e) => e.id === session.effort)?.hint}
-            className="h-8 max-w-28 truncate rounded-md border border-border bg-surface px-2 text-2xs text-foreground outline-none focus:ring-1 focus:ring-ring"
-          >
-            {efforts.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </header>
 
       <div
@@ -108,7 +69,45 @@ export function SessionPane({
         )}
       </div>
 
-      <Composer session={session} />
+      {session.permission ? (
+        <div className="border-t border-border bg-surface px-3 py-3 md:px-4">
+          <p className="text-xs font-medium">
+            {provider.short} wants to run {session.permission.tool}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {(session.permission.options.length
+              ? session.permission.options
+              : [
+                  { optionId: "allow-once", name: "Allow once" },
+                  { optionId: "allow-always", name: "Allow always" },
+                  { optionId: "reject", name: "Reject" },
+                ]
+            ).map((opt) => (
+              <Button
+                key={opt.optionId || opt.name}
+                size="sm"
+                variant={
+                  (opt.kind || opt.optionId || "").toLowerCase().includes("reject")
+                    ? "ghost"
+                    : "default"
+                }
+                onClick={() =>
+                  useHelix
+                    .getState()
+                    .answerPermission(
+                      session.id,
+                      opt.optionId || "allow-once",
+                    )
+                }
+              >
+                {opt.name || opt.optionId}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <Composer key={session.id} session={session} />
     </section>
   );
 }
