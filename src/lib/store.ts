@@ -1253,9 +1253,10 @@ export const useHelix = create<HelixState>((set, get) => ({
     const incomingNote = wantsReply
       ? `Incoming work from another WestCode session. Act on it now. When you finish (or if you are blocked), you MUST call westcode_send_message with to="${opts?.incoming?.fromSessionId}" and a short result — the sender is waiting for your reply.`
       : `Incoming status report from another WestCode session. Read it. Do NOT reply unless it assigns you new work or asks a direct question — a completion report is terminal, and acknowledgment ping-pong wastes both sessions.`;
-    const promptText = opts?.incoming
-      ? `${bus}\n${persona}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n${outgoing}`
-      : `${bus}\n${persona}${mentionNotes}${outgoing}`;
+    const preambleText = opts?.incoming
+      ? `${bus}\n${persona}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
+      : `${bus}\n${persona}${mentionNotes}`;
+    const promptText = `${preambleText}${outgoing}`;
 
     const api = westcode();
     if (!api) {
@@ -1306,7 +1307,7 @@ export const useHelix = create<HelixState>((set, get) => ({
           apiKey: customApi.apiKey,
           model: latest.model || customApi.defaultModel,
           messages: [
-            { role: "system", text: promptText.slice(0, promptText.length - outgoing.length) },
+            { role: "system", text: preambleText },
             ...history.map((h) => ({
               role: h.role === "assistant" ? "assistant" : "user",
               text: h.text,
