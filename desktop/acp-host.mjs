@@ -571,7 +571,9 @@ function mapUpdate(params) {
     return {
       type: "tool",
       toolId: u.toolCallId || u.tool_call_id || u.id,
-      name: u.title || u.toolName || u.kind || "Tool",
+      // toolName first: dedupe logic (extractSendMessages) must recognize the
+      // raw tool id; a prettified title is only a display fallback.
+      name: u.toolName || u.title || u.kind || "Tool",
       path: u.locations?.[0]?.path || raw.path,
       command: raw.command,
       content,
