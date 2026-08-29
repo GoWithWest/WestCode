@@ -263,15 +263,22 @@ app.whenReady().then(async () => {
   installMenu();
   // Quick entry: summon WestCode and open the New Session dialog from
   // anywhere (mirrors the desktop-assistant global-hotkey pattern).
-  globalShortcut.register("CommandOrControl+Shift+Space", () => {
+  const hotkeyOk = globalShortcut.register("CommandOrControl+Shift+Space", () => {
     if (!win || win.isDestroyed()) {
-      void createWindow();
+      void createWindow().then(() => {
+        win?.webContents.once("did-finish-load", () => sendMenu("new"));
+      });
       return;
     }
     win.show();
     win.focus();
     sendMenu("new");
   });
+  if (!hotkeyOk) {
+    // Another app owns the accelerator (Raycast/Alfred etc.) — quick entry
+    // is unavailable this run; everything else works.
+    console.warn("westcode: quick-entry hotkey Cmd+Shift+Space is taken");
+  }
   void createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();

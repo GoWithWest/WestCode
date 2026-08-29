@@ -160,7 +160,13 @@ export function exportTranscript(session: {
   model: string;
   cwd: string;
   createdAt: number;
-  messages: { role: string; createdAt: number; blocks: Block[]; fromTitle?: string }[];
+  messages: {
+    role: string;
+    createdAt: number;
+    blocks: Block[];
+    fromTitle?: string;
+    streaming?: boolean;
+  }[];
 }): string {
   const lines = [
     `# ${session.title}`,
@@ -170,6 +176,7 @@ export function exportTranscript(session: {
     "",
   ];
   for (const m of session.messages) {
+    if (m.streaming || !m.blocks.length) continue;
     const who =
       m.role === "user"
         ? "User"
@@ -187,7 +194,13 @@ export function exportTranscript(session: {
           `**${b.name}**${b.path ? ` · ${b.path}` : ""}${b.command ? ` · \`${b.command}\`` : ""}`,
           "",
         );
-        if (b.content) lines.push("```", b.content, "```", "");
+        if (b.content) {
+          // A fence longer than any run of backticks in the payload keeps
+          // tool output that itself contains ``` from breaking the document.
+          const runs = b.content.match(/`+/g) ?? [];
+          const fence = "`".repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
+          lines.push(fence, b.content, fence, "");
+        }
       }
     }
   }
