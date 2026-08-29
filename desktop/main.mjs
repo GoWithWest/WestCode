@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
@@ -112,6 +113,7 @@ function installMenu() {
         { type: "separator" },
         { label: "Connections", click: () => sendMenu("providers") },
         { label: "Library", click: () => sendMenu("library") },
+        { label: "Agents", click: () => sendMenu("agents") },
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },
@@ -318,6 +320,95 @@ ipcMain.handle("cli:logout", async (_e, providerId) => {
   if (!bin) return { ok: true };
   await openInTerminal(`${shellQuote(bin)} ${spec.logoutArgs.join(" ")}`);
   return { ok: true };
+});
+
+ipcMain.handle("fs:pickFile", async () => {
+  const res = await dialog.showOpenDialog(win, {
+    properties: ["openFile"],
+    filters: [
+      { name: "Skills & configs", extensions: ["md", "json", "yaml", "yml", "toml", "txt"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  if (res.canceled || !res.filePaths[0]) return null;
+  const path = res.filePaths[0];
+  const name = path.split("/").filter(Boolean).pop() || path;
+  let snippet = "";
+  try {
+    const raw = await readFile(path, "utf8");
+    snippet = raw.replace(/^---[\s\S]*?---/, "").replace(/\s+/g, " ").trim().slice(0, 160);
+  } catch {
+    /* binary or unreadable — import by path only */
+  }
+  return { name, path, snippet };
+});
+
+function git(cwd, args) {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, { cwd, env: childEnv() });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.on("error", () => resolve(null));
+    child.on("exit", (code) => resolve(code === 0 ? out.trim() : null));
+  });
+}
+
+ipcMain.handle("git:status", async (_e, cwd) => {
+  const dir = cwd?.startsWith("~/") ? join(homedir(), cwd.slice(2)) : cwd;
+  const branch = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch == null) return { repo: false };
+  const numstat = await git(dir, ["diff", "--numstat", "HEAD"]);
+  let adds = 0;
+  let dels = 0;
+  let files = 0;
+  for (const line of (numstat || "").split("\n")) {
+    const m = /^(\d+|-)\s+(\d+|-)\s+/.exec(line);
+    if (!m) continue;
+    files += 1;
+    adds += m[1] === "-" ? 0 : Number(m[1]);
+    dels += m[2] === "-" ? 0 : Number(m[2]);
+  }
+  const untracked = await git(dir, ["ls-files", "--others", "--exclude-standard"]);
+  files += (untracked || "").split("\n").filter(Boolean).length;
+  const counts = await git(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+  const [behind, ahead] = (counts || "0\t0").split(/\s+/).map((n) => Number(n) || 0);
+  const remote = await git(dir, ["remote", "get-url", "origin"]);
+  return { repo: true, branch, adds, dels, files, ahead, behind, remote: remote || "" };
+});
+
+ipcMain.handle("api:prompt", async (_e, payload) => {
+  const { endpoint, apiKey, model, messages } = payload || {};
+  if (!endpoint || !model || !Array.isArray(messages)) {
+    return { ok: false, error: "endpoint, model, and messages are required." };
+  }
+  try {
+    const base = String(endpoint).replace(/\/+$/, "");
+    const url = /\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 120_000);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      body: JSON.stringify({ model, messages }),
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: data?.error?.message || `${res.status} ${res.statusText}`,
+      };
+    }
+    const text = data?.choices?.[0]?.message?.content ?? "";
+    if (!text) return { ok: false, error: "The endpoint returned no content." };
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 ipcMain.handle("fs:pickFolder", async () => {

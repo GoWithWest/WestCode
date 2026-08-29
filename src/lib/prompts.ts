@@ -58,7 +58,7 @@ export function formatRoster(items: AgentRosterItem[]): string {
   return items
     .map(
       (a) =>
-        `- ${a.id} · ${a.provider} · ${a.model} · ${a.cwd} · ${a.status} · ${a.title}`,
+        `- ${a.id} · ${a.provider} · ${a.model} · ${a.cwd} · ${a.status} · ${a.title}${a.agentName ? ` · agent: ${a.agentName}` : ""}`,
     )
     .join("\n");
 }
