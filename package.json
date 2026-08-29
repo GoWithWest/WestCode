@@ -27,12 +27,13 @@
     "app": "node desktop/dev.mjs",
     "electron": "WESTCODE_DEV=1 electron .",
     "build:desktop": "WESTCODE_DESKTOP_BUILD=1 node scripts/with-app-env.mjs vite build",
-    "dist": "npm run build:desktop && electron-builder --mac --publish never"
+    "dist": "npm run build:desktop && electron-builder --mac --publish never -c.directories.output=/tmp/westcode-release && rm -rf release && mkdir -p release && cp /tmp/westcode-release/*.dmg /tmp/westcode-release/*.zip release/"
   },
   "build": {
     "appId": "dev.westcode.app",
     "productName": "WestCode",
     "asar": false,
+    "afterPack": "desktop/after-pack.cjs",
     "directories": {
       "output": "release"
     },
@@ -48,7 +49,10 @@
         "zip"
       ],
       "icon": "desktop/icon.icns",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": "Jago Westerduin (R7BRR46TY2)",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
     }
   },
   "dependencies": {
