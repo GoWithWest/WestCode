@@ -1,4 +1,5 @@
-import { Blocks, Plus, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { useState } from "react";
+import { Blocks, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
 import { useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,16 @@ export function Sidebar() {
   const setView = useHelix((s) => s.setView);
   const setNewOpen = useHelix((s) => s.setNewOpen);
   const providers = useAllProviders();
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? sessions.filter(
+        (s) =>
+          s.title.toLowerCase().includes(q) ||
+          s.providerId.toLowerCase().includes(q) ||
+          s.cwd.toLowerCase().includes(q),
+      )
+    : sessions;
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-surface md:w-60">
@@ -30,14 +41,23 @@ export function Sidebar() {
           <Plus className="size-4" />
         </Button>
       </div>
+      <div className="relative px-3 pb-2">
+        <Search className="pointer-events-none absolute top-1/2 left-5 size-3 -translate-y-[80%] text-subtle" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search sessions"
+          className="h-7 w-full rounded-md border border-border bg-window pr-2 pl-6 text-xs outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
+        />
+      </div>
       <nav className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
-        {sessions.length === 0 ? (
+        {visible.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-            No sessions yet
+            {q ? "No matches" : "No sessions yet"}
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5">
-            {sessions.map((ses) => {
+            {visible.map((ses) => {
               const active = ses.id === activeId && view === "focus";
               return (
                 <li key={ses.id} className="group/row relative">
