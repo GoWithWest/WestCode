@@ -380,18 +380,23 @@ ipcMain.handle("git:status", async (_e, cwd) => {
 // in ~/.westcode/secrets.json, never in renderer localStorage.
 const SECRETS_PATH = join(homedir(), ".westcode", "secrets.json");
 
+/** {ok:false} means the vault exists but is unreadable — never overwrite it. */
 async function readSecrets() {
   try {
-    return JSON.parse(await readFile(SECRETS_PATH, "utf8"));
-  } catch {
-    return {};
+    const raw = await readFile(SECRETS_PATH, "utf8");
+    return { ok: true, data: JSON.parse(raw) };
+  } catch (err) {
+    if (err?.code === "ENOENT") return { ok: true, data: {} };
+    return { ok: false, data: {} };
   }
 }
 
 async function writeSecrets(secrets) {
-  const { writeFile: write, mkdir } = await import("node:fs/promises");
+  const { writeFile: write, mkdir, rename } = await import("node:fs/promises");
   await mkdir(dirname(SECRETS_PATH), { recursive: true });
-  await write(SECRETS_PATH, JSON.stringify(secrets), { mode: 0o600 });
+  const tmp = `${SECRETS_PATH}.tmp`;
+  await write(tmp, JSON.stringify(secrets), { mode: 0o600 });
+  await rename(tmp, SECRETS_PATH);
 }
 
 ipcMain.handle("secret:set", async (_e, { id, value }) => {
@@ -399,20 +404,31 @@ ipcMain.handle("secret:set", async (_e, { id, value }) => {
   if (!safeStorage.isEncryptionAvailable()) {
     return { ok: false, error: "OS encryption is unavailable." };
   }
-  const secrets = await readSecrets();
+  const vault = await readSecrets();
+  if (!vault.ok) {
+    return {
+      ok: false,
+      error: `The secret store at ${SECRETS_PATH} is unreadable. Fix or delete it, then retry.`,
+    };
+  }
+  const secrets = vault.data;
   if (value) {
     secrets[id] = safeStorage.encryptString(String(value)).toString("base64");
   } else {
     delete secrets[id];
   }
-  await writeSecrets(secrets);
+  try {
+    await writeSecrets(secrets);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
   return { ok: true };
 });
 
 async function secretFor(id) {
   if (!id || !safeStorage.isEncryptionAvailable()) return "";
-  const secrets = await readSecrets();
-  const raw = secrets[id];
+  const vault = await readSecrets();
+  const raw = vault.data[id];
   if (!raw) return "";
   try {
     return safeStorage.decryptString(Buffer.from(raw, "base64"));
@@ -423,7 +439,9 @@ async function secretFor(id) {
 
 ipcMain.handle("api:prompt", async (_e, payload) => {
   const { endpoint, model, messages, providerId } = payload || {};
-  const apiKey = payload?.apiKey || (await secretFor(providerId));
+  // The encrypted store wins; a renderer-supplied key is honored only for
+  // providers whose key has not migrated into the vault yet.
+  const apiKey = (await secretFor(providerId)) || payload?.apiKey || "";
   if (!endpoint || !model || !Array.isArray(messages)) {
     return { ok: false, error: "endpoint, model, and messages are required." };
   }

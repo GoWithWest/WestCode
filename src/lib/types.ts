@@ -84,7 +84,7 @@ export type Session = {
   slashCommands?: { cmd: string; args?: string; hint: string; kind: "builtin" | "skill" }[];
   permission?: PermissionPrompt | null;
   availableModels?: { id: string; label: string }[];
-  queued?: { text: string; incoming?: IncomingRef }[];
+  queued?: { text: string; incoming?: IncomingRef; msgId?: string }[];
   agentSessionId?: string;
   /** Persona from the Agents menu ("You are @Cleo-Sam" assigns it). */
   agentId?: string;

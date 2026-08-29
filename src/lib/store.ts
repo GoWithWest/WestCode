@@ -75,6 +75,28 @@ function mergeAgents(p: AgentsPersist): AgentProfile[] {
   return [...presets, ...p.custom.filter((a) => !removed.has(a.id))];
 }
 
+function migrateProviderKey(
+  get: () => HelixState,
+  set: (fn: (s: HelixState) => Partial<HelixState>) => void,
+  id: string,
+  apiKey: string,
+) {
+  const secretStore = westcode()?.setSecret;
+  if (!secretStore || !apiKey) return;
+  void secretStore(id, apiKey)
+    .then((r) => {
+      if (!r?.ok) return;
+      const list = get().customProviders.map((c) =>
+        c.id === id ? { ...c, apiKey: "" } : c,
+      );
+      persistProviders(list);
+      set(() => ({ customProviders: list }));
+    })
+    .catch(() => {
+      /* keep the local key; retried on next launch */
+    });
+}
+
 function persistAgents(p: AgentsPersist) {
   try {
     localStorage.setItem(AGENTS_KEY, JSON.stringify(p));
@@ -100,6 +122,8 @@ export type SendOpts = {
   attachments?: Attachment[];
   incoming?: Incoming;
   replay?: boolean;
+  /** Transcript message id of the queued row a replay re-sends. */
+  replayOf?: string;
 };
 
 type CreateOpts = {
@@ -643,6 +667,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       customAddons: Array.isArray(lib.custom) ? lib.custom : [],
       customProviders: Array.isArray(prov) ? prov : [],
       agentsPersist,
+      // (keys left over from before the encrypted store migrate below)
       agents: mergeAgents(agentsPersist),
       providerColors,
       recentFolders: Array.isArray(folders) ? folders : [],
@@ -659,6 +684,11 @@ export const useHelix = create<HelixState>((set, get) => ({
     void get().refreshCli();
     void get().refreshLibrary();
     void get().refreshUpdates();
+    for (const c of get().customProviders) {
+      if (c.apiKey) {
+        migrateProviderKey(get, (fn) => set(fn), c.id, c.apiKey);
+      }
+    }
   },
 
   refreshCli: async () => {
@@ -894,10 +924,6 @@ export const useHelix = create<HelixState>((set, get) => ({
   addCustomProvider: (p) => {
     const taken = new Set(get().customProviders.map((c) => c.id));
     const id = p.id && !taken.has(p.id) ? p.id : slugId(p.name, taken);
-    // On desktop the key goes to the OS-encrypted secret store, never to
-    // localStorage; the browser preview keeps the local fallback.
-    const secretStore = westcode()?.setSecret;
-    if (secretStore && p.apiKey) void secretStore(id, p.apiKey);
     const next: CustomProvider = {
       id,
       name: p.name,
@@ -905,7 +931,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       auth: p.auth,
       authLabel: p.authLabel,
       endpoint: p.endpoint,
-      apiKey: secretStore ? "" : p.apiKey,
+      apiKey: p.apiKey,
       models: p.models.length ? p.models : ["default"],
       defaultModel: p.defaultModel || p.models[0] || "default",
       connected: true,
@@ -913,6 +939,10 @@ export const useHelix = create<HelixState>((set, get) => ({
     const list = [...get().customProviders.filter((c) => c.id !== id), next];
     persistProviders(list);
     set({ customProviders: list });
+    // Move the key into the OS-encrypted secret store; strip the local copy
+    // only after the store CONFIRMS the write, so a failed secret:set never
+    // leaves a provider with no key anywhere.
+    migrateProviderKey(get, set, id, p.apiKey);
   },
 
   removeCustomProvider: (id) => {
@@ -1055,14 +1085,24 @@ export const useHelix = create<HelixState>((set, get) => ({
     abortBySession.get(sessionId)?.abort();
     abortBySession.delete(sessionId);
     void westcode()?.cancel(sessionId);
+    const hadQueued = (get().sessions.find((s) => s.id === sessionId)?.queued ?? [])
+      .length;
     set((state) => ({
       sessions: patchSession(state.sessions, sessionId, (s) => ({
         ...s,
         status: "waiting",
         updatedAt: Date.now(),
-        messages: s.messages.map((m) =>
-          m.streaming ? { ...m, streaming: false } : m,
-        ),
+        // Stop discards pending work: queued rows are already visible in the
+        // transcript and must not auto-replay after some later send.
+        queued: [],
+        messages: [
+          ...s.messages.map((m) =>
+            m.streaming ? { ...m, streaming: false } : m,
+          ),
+          ...(hadQueued
+            ? [systemNote(`Stopped. ${hadQueued} queued message${hadQueued === 1 ? " was" : "s were"} discarded — resend what you still need.`)]
+            : []),
+        ],
       })),
     }));
   },
@@ -1176,7 +1216,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         sessions: patchSession(s.sessions, sessionId, (ses) => ({
           ...ses,
           updatedAt: Date.now(),
-          queued: [...(ses.queued ?? []), { text: outgoing, incoming: opts?.incoming }].slice(0, 8),
+          queued: [...(ses.queued ?? []), { text: outgoing, incoming: opts?.incoming, msgId: userMsg.id }].slice(0, 8),
           messages: [...ses.messages, userMsg],
         })),
       }));
@@ -1336,17 +1376,10 @@ export const useHelix = create<HelixState>((set, get) => ({
       if (customApi) {
         // `outgoing` is appended as the trailing user message, so drop this
         // turn's copy from history (it was already added to session.messages
-        // — directly, or when the message was queued).
-        const apiRows = historyRaw.filter((m) => m.id !== userMsg?.id);
-        const lastRow = apiRows[apiRows.length - 1];
-        if (
-          replay &&
-          lastRow &&
-          lastRow.role !== "assistant" &&
-          blocksToPlain(lastRow.blocks).trim() === trimmed
-        ) {
-          apiRows.pop();
-        }
+        // — directly, or by id via the queue that replays it).
+        const apiRows = historyRaw.filter(
+          (m) => m.id !== userMsg?.id && m.id !== opts?.replayOf,
+        );
         const res = await api.apiPrompt({
           endpoint: customApi.endpoint,
           apiKey: customApi.apiKey || undefined,
@@ -1405,6 +1438,9 @@ export const useHelix = create<HelixState>((set, get) => ({
         history,
         text: promptText,
       });
+      // Same supersede/abort rule as the HTTP branch: a stopped or replaced
+      // turn must not paint results or dispatch desk-bus work.
+      if (ac.signal.aborted || abortBySession.get(sessionId) !== ac) return;
       if (!res.ok) throw new Error(res.error || `${provider.name} failed`);
       set((s) => ({
         sessions: patchSession(s.sessions, sessionId, (ses) => ({
@@ -1426,6 +1462,9 @@ export const useHelix = create<HelixState>((set, get) => ({
       }
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
+      // A Stop (cancel surfaces as {ok:false}) or a newer turn owns the
+      // session now — do not flicker waiting→error over it.
+      if (ac.signal.aborted || abortBySession.get(sessionId) !== ac) return;
       set((s) => ({
         sessions: patchSession(s.sessions, sessionId, (ses) => ({
           ...ses,
@@ -1467,6 +1506,7 @@ export const useHelix = create<HelixState>((set, get) => ({
           void get().send(sessionId, next.text, {
             incoming: next.incoming,
             replay: true,
+            replayOf: next.msgId,
           });
         });
       }
