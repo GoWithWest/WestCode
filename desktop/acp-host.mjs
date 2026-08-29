@@ -597,6 +597,14 @@ export function getSession(id) {
   return sessions.get(id);
 }
 
+/** True while any live agent process for this provider is running. */
+export function hasLiveSession(providerId) {
+  for (const s of sessions.values()) {
+    if (s.providerId === providerId && !s.dead) return true;
+  }
+  return false;
+}
+
 function pickAllowOption(options) {
   const list = Array.isArray(options) ? options : [];
   const blob = (o) =>

@@ -7,6 +7,7 @@ export function UpdateBanner() {
   const busy = useHelix((s) => s.updateBusy);
   const apply = useHelix((s) => s.applyCliUpdate);
   const dismiss = useHelix((s) => s.dismissCliUpdate);
+  const error = useHelix((s) => s.updateError);
   const next = updates[0];
   if (!next) return null;
 
@@ -14,7 +15,9 @@ export function UpdateBanner() {
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-4 py-2">
       <ArrowUpCircle className="size-4 shrink-0 text-muted-foreground" />
       <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-        New {next.name} CLI available ({next.current} → {next.latest}).
+        {error
+          ? `Update failed: ${error}`
+          : `New ${next.name} CLI available (${next.current} → ${next.latest}).`}
       </p>
       <Button
         size="sm"

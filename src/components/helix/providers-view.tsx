@@ -12,6 +12,7 @@ export function ProvidersView() {
   const cli = useHelix((s) => s.cliStatus);
   const providers = useAllProviders();
   const [busy, setBusy] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
   const api = westcode();
 
   async function login(id: string) {
@@ -39,9 +40,17 @@ export function ProvidersView() {
   async function install(id: string) {
     if (!api?.installCli) return;
     setBusy(id);
+    setInstallError(null);
     try {
-      await api.installCli(id);
+      const res = await api.installCli(id);
+      if (!res.ok) {
+        setInstallError(
+          (res.output || "Install failed.").split("\n").filter(Boolean).slice(-3).join(" ").slice(0, 300),
+        );
+      }
       await refreshCli();
+    } catch (err) {
+      setInstallError((err as Error).message.slice(0, 300));
     } finally {
       setBusy(null);
     }
@@ -173,6 +182,11 @@ export function ProvidersView() {
                         WestCode installs and manages this CLI for you — or
                         install it yourself in Terminal, then Recheck.
                       </p>
+                      {installError && busy === null ? (
+                        <p className="w-full text-2xs text-destructive">
+                          {installError}
+                        </p>
+                      ) : null}
                     </>
                   )}
                 </div>
