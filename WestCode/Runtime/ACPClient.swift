@@ -71,14 +71,19 @@ final class ACPClient {
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty {
-                self?.failAll(.exited(Int32(self?.process?.terminationStatus ?? 0), self?.lastStderr ?? ""))
+                // EOF or a spurious empty read. Never touch terminationStatus here —
+                // NSTask throws if the child is still running (stdout can close first).
+                handle.readabilityHandler = nil
                 return
             }
             self?.consume(data)
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
             self?.lock.lock()
             self?.stderrBytes.append(data)
             if let s = self, s.stderrBytes.count > 16_000 {
@@ -97,10 +102,13 @@ final class ACPClient {
     func stop() {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
-        process?.terminationHandler = nil
-        process?.terminate()
-        process = nil
         stdin = nil
+        let proc = process
+        process = nil
+        proc?.terminationHandler = nil
+        if let proc, proc.isRunning {
+            proc.terminate()
+        }
         failAll(.cancelled)
     }
 

@@ -10,7 +10,7 @@ enum ParseAgent {
             guard let m, m.numberOfRanges > 1 else { return }
             thinks.append(ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        var text = thinkRe.stringByReplacingMatches(in: raw, options: [], range: full, withTemplate: "")
+        let text = thinkRe.stringByReplacingMatches(in: raw, options: [], range: full, withTemplate: "")
 
         var blocks: [Block] = thinks.filter { !$0.isEmpty }.map { .think($0) }
         let toolRe = try! NSRegularExpression(
