@@ -114,6 +114,7 @@ function installMenu() {
         { label: "Connections", click: () => sendMenu("providers") },
         { label: "Library", click: () => sendMenu("library") },
         { label: "Agents", click: () => sendMenu("agents") },
+        { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => sendMenu("settings") },
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FolderOpen } from "lucide-react";
 import { defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
@@ -14,15 +14,43 @@ export function NewSessionDialog() {
   const createSession = useHelix((s) => s.createSession);
   const rememberFolder = useHelix((s) => s.rememberFolder);
   const recents = useHelix((s) => s.recentFolders);
+  const settings = useHelix((s) => s.settings);
   const allProviders = useAllProviders();
   const providers = allProviders.filter((p) => p.connected);
   const list = providers.length ? providers : allProviders;
-  const [providerId, setProviderId] = useState(list[0]?.id ?? "grok");
+  const initialProvider =
+    (settings.defaultProviderId &&
+      list.find((p) => p.id === settings.defaultProviderId)?.id) ||
+    list[0]?.id ||
+    "grok";
+  const [providerId, setProviderId] = useState(initialProvider);
   const [projectId, setProjectId] = useState("scratch");
-  const [cwd, setCwd] = useState("");
+  const [cwd, setCwd] = useState(settings.defaultCwd);
   const [title, setTitle] = useState("");
-  const [model, setModel] = useState(list[0]?.defaultModel ?? "grok-4.6");
-  const [effort, setEffort] = useState(defaultEffortFor(list[0]?.id ?? "grok"));
+  const [model, setModel] = useState(
+    settings.defaultModel ||
+      list.find((p) => p.id === initialProvider)?.defaultModel ||
+      "grok-4.6",
+  );
+  const [effort, setEffort] = useState(
+    settings.defaultEffort || defaultEffortFor(initialProvider),
+  );
+
+  // Re-seed from Settings each time the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    const id =
+      (settings.defaultProviderId &&
+        list.find((p) => p.id === settings.defaultProviderId)?.id) ||
+      list[0]?.id ||
+      "grok";
+    setProviderId(id);
+    const p = list.find((x) => x.id === id);
+    setModel(settings.defaultModel || p?.defaultModel || "");
+    setEffort(settings.defaultEffort || defaultEffortFor(id));
+    if (!cwd.trim() && settings.defaultCwd) setCwd(settings.defaultCwd);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const provider = list.find((p) => p.id === providerId) ?? list[0];
   const modelOpts = useMemo(
