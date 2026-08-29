@@ -470,8 +470,15 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
         };
         if (idx >= 0) {
           const prev = blocks[idx] as Extract<Block, { type: "tool" }>;
+          // tool_call_update is a PATCH: a completion event often carries only
+          // {toolCallId, status}. Never let a fabricated/generic name replace
+          // the recorded one — extractSendMessages relies on the original
+          // westcode_send_message name to suppress double sends.
+          const meaningfulName =
+            ev.name && ev.name !== "Tool" ? ev.name : prev.name;
           blocks[idx] = {
             ...tool,
+            name: meaningfulName,
             content: tool.content || prev.content,
             path: tool.path || prev.path,
             command: tool.command || prev.command,
