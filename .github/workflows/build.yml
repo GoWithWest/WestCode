@@ -63,6 +63,9 @@ jobs:
             -c.directories.output=/tmp/westcode-release
           mkdir -p release
           cp /tmp/westcode-release/*.dmg /tmp/westcode-release/*.zip release/
+          # electron-builder notarized the .app; the DMG needs its own
+          # ticket before it can be stapled for offline Gatekeeper checks.
+          xcrun notarytool submit release/*.dmg --key "$APPLE_API_KEY"             --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
           xcrun stapler staple release/*.dmg
       - name: Build unsigned dev app
         if: env.RELEASE_READY != 'true'
