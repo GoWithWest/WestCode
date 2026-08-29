@@ -1,0 +1,50 @@
+name: Build WestCode
+
+# Every run produces a fresh standalone WestCode.app (DMG + ZIP). Provider
+# CLIs are not baked into the bundle — the app installs and updates them
+# itself (desktop/cli-manager.mjs) — so a scheduled rebuild plus the in-app
+# update banner keeps users current without a repo change per CLI release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+  schedule:
+    # Weekly rebuild so releases pick up fresh dependencies.
+    - cron: "0 6 * * 1"
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  build:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build standalone app
+        run: npm run dist
+      # NOTE: artifacts are unsigned/un-notarized dev builds — Gatekeeper will
+      # warn on other Macs until Developer ID signing secrets are added.
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: WestCode-mac-unsigned
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error

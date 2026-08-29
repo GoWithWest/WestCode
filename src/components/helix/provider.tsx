@@ -25,7 +25,17 @@ export function useResolvedProvider(id: string) {
 
 export function useAllProviders() {
   const custom = useHelix((s) => s.customProviders);
-  return allProviders(custom);
+  const cli = useHelix((s) => s.cliStatus);
+  return allProviders(custom).map((p) => {
+    const hit = cli.find((c) => c.id === p.id);
+    if (!hit) return { ...p, connected: false, live: false };
+    return {
+      ...p,
+      connected: hit.connected,
+      live: Boolean(hit.found && hit.loggedIn),
+      how: hit.found ? p.how : `${p.how} Missing binary — ${hit.install}`,
+    };
+  });
 }
 
 export function ProviderDot({

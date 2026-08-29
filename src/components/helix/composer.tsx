@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, FileText, Plus, Square, X } from "lucide-react";
-import { effortLabel, filterSlash, type SlashCmd } from "@/lib/catalog";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowUp, ChevronDown, FileText, Plus, Shield, Square, X } from "lucide-react";
+import {
+  effortLabel,
+  effortsFor,
+  filterSlash,
+  modelLabel,
+  modelsFor,
+  PERMISSION_MODES,
+  permissionLabel,
+  type SlashCmd,
+} from "@/lib/catalog";
 import { prettySize, readAttachments } from "@/lib/fs";
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -8,37 +17,58 @@ import type { Attachment, Session } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useResolvedProvider } from "./provider";
 
+type Panel = "mode" | "model" | "effort" | null;
+
+const drafts = new Map<string, { text: string; files: Attachment[] }>();
+
 export function Composer({ session }: { session: Session }) {
   const send = useHelix((s) => s.send);
   const stop = useHelix((s) => s.stop);
+  const setSessionModel = useHelix((s) => s.setSessionModel);
+  const setSessionEffort = useHelix((s) => s.setSessionEffort);
+  const setSessionPermissionMode = useHelix((s) => s.setSessionPermissionMode);
   const sessions = useHelix((s) => s.sessions);
-  const [value, setValue] = useState("");
-  const [files, setFiles] = useState<Attachment[]>([]);
+  const saved = drafts.get(session.id);
+  const [value, setValue] = useState(saved?.text ?? "");
+  const [files, setFiles] = useState<Attachment[]>(saved?.files ?? []);
   const [hi, setHi] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [menu, setMenu] = useState(false);
   const [peersOpen, setPeersOpen] = useState(false);
+  const [panel, setPanel] = useState<Panel>(null);
   const [drop, setDrop] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const metaRef = useRef<HTMLDivElement>(null);
   const running = session.status === "running";
+  const queued = session.queued?.length ?? 0;
   const provider = useResolvedProvider(session.providerId);
   const peers = sessions.filter((s) => s.id !== session.id);
+  const models = session.availableModels?.length
+    ? session.availableModels
+    : modelsFor(session.providerId, provider.models);
+  const efforts = effortsFor(session.providerId);
+  const effortIdx = Math.max(
+    0,
+    efforts.findIndex((e) => e.id === session.effort),
+  );
 
   const slashOpen =
-    !running &&
     !dismissed &&
     value.startsWith("/") &&
     !value.includes("\n") &&
     !value.includes(" ");
   const matches = useMemo(
-    () => (slashOpen ? filterSlash(session.providerId, value) : []),
-    [slashOpen, session.providerId, value],
+    () =>
+      slashOpen
+        ? filterSlash(session.providerId, value, session.slashCommands)
+        : [],
+    [slashOpen, session.providerId, session.slashCommands, value],
   );
 
   const atMatch = /(?:^|\s)@([^\s]*)$/.exec(value);
-  const atOpen = !running && !slashOpen && Boolean(atMatch);
+  const atOpen = !slashOpen && Boolean(atMatch);
   const atQuery = (atMatch?.[1] ?? "").toLowerCase();
   const atMatches = atOpen
     ? peers.filter((s) => {
@@ -51,8 +81,19 @@ export function Composer({ session }: { session: Session }) {
       })
     : [];
 
+  const draftRef = useRef({ value, files });
+  draftRef.current = { value, files };
+
   useEffect(() => {
     ref.current?.focus();
+    return () => {
+      const { value: text, files: attached } = draftRef.current;
+      if (text.trim() || attached.length) {
+        drafts.set(session.id, { text, files: attached });
+      } else {
+        drafts.delete(session.id);
+      }
+    };
   }, [session.id]);
 
   useEffect(() => {
@@ -60,25 +101,28 @@ export function Composer({ session }: { session: Session }) {
   }, [value, session.id, peersOpen]);
 
   useEffect(() => {
-    if (!menu) return;
     function onDown(e: MouseEvent) {
-      if (!menuRef.current?.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (menu && !menuRef.current?.contains(t)) {
         setMenu(false);
         setPeersOpen(false);
       }
+      if (panel && !metaRef.current?.contains(t)) setPanel(null);
     }
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
-  }, [menu]);
+  }, [menu, panel]);
 
   function submit(text = value) {
     const t = text.trim();
-    if ((!t && files.length === 0) || running) return;
+    if (!t && files.length === 0) return;
     const attached = files;
     setValue("");
     setFiles([]);
     setDismissed(false);
     setMenu(false);
+    setPanel(null);
+    drafts.delete(session.id);
     void send(session.id, t, { attachments: attached });
   }
 
@@ -110,6 +154,7 @@ export function Composer({ session }: { session: Session }) {
   }
 
   const palette = slashOpen ? matches : atOpen ? atMatches : [];
+  const canSend = Boolean(value.trim() || files.length);
 
   return (
     <div className="border-t border-border bg-surface px-3 py-3 md:px-4">
@@ -246,6 +291,7 @@ export function Composer({ session }: { session: Session }) {
               }
             }}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
               if (palette.length > 0) {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
@@ -257,7 +303,7 @@ export function Composer({ session }: { session: Session }) {
                   setHi((n) => (n - 1 + palette.length) % palette.length);
                   return;
                 }
-                if (e.key === "Tab" || (e.key === "Enter" && !e.metaKey && !e.ctrlKey)) {
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
                   e.preventDefault();
                   if (slashOpen) {
                     const c = matches[hi] ?? matches[0];
@@ -274,7 +320,7 @@ export function Composer({ session }: { session: Session }) {
                   return;
                 }
               }
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
                 e.preventDefault();
                 submit();
               }
@@ -282,25 +328,24 @@ export function Composer({ session }: { session: Session }) {
             rows={2}
             placeholder={
               running
-                ? `${provider.short} is working…`
-                : `Steer ${provider.short}…  / commands  @ a session`
+                ? `Queue a follow-up for ${provider.short}…`
+                : `Message ${provider.short}…  / commands  @ a session`
             }
-            disabled={running}
-            className="w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-sm leading-relaxed text-foreground outline-none placeholder:text-subtle disabled:opacity-60"
+            className="w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-sm leading-relaxed text-foreground outline-none placeholder:text-subtle"
           />
           <div className="flex items-center justify-between gap-2 px-2 pb-2">
-            <div className="flex min-w-0 items-center gap-1">
+            <div className="flex min-w-0 items-center gap-0.5">
               <div ref={menuRef} className="relative">
                 <Button
                   size="icon"
                   variant="ghost"
                   aria-label="Add to message"
                   aria-expanded={menu}
-                  disabled={running}
                   className="size-11 md:size-8"
                   onClick={() => {
                     setMenu((v) => !v);
                     setPeersOpen(false);
+                    setPanel(null);
                   }}
                 >
                   <Plus className="size-4" />
@@ -363,42 +408,162 @@ export function Composer({ session }: { session: Session }) {
                   </div>
                 ) : null}
               </div>
-              <span className="inline-flex min-w-0 items-center gap-1.5 px-1 text-2xs text-muted-foreground">
-                <ProviderDot id={session.providerId} />
-                {provider.short}
-                <span className="text-subtle">·</span>
-                <span className="truncate">{session.model}</span>
-                <span className="text-subtle">·</span>
-                {effortLabel(session.providerId, session.effort)}
-              </span>
+
+              <div ref={metaRef} className="flex min-w-0 items-center gap-0.5">
+                <MetaButton
+                  open={panel === "mode"}
+                  onToggle={() => setPanel(panel === "mode" ? null : "mode")}
+                  label={permissionLabel(session.permissionMode || "ask")}
+                  icon={<Shield className="size-3" />}
+                >
+                  {PERMISSION_MODES.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        setSessionPermissionMode(session.id, m.id);
+                        setPanel(null);
+                      }}
+                      className={cn(
+                        "block w-full px-3 py-2 text-left hover:bg-muted",
+                        m.id === (session.permissionMode || "ask") && "bg-muted",
+                      )}
+                    >
+                      <span className="block text-xs font-medium">{m.label}</span>
+                      <span className="block text-2xs text-muted-foreground">
+                        {m.hint}
+                      </span>
+                    </button>
+                  ))}
+                </MetaButton>
+
+                <MetaButton
+                  open={panel === "model"}
+                  onToggle={() => setPanel(panel === "model" ? null : "model")}
+                  label={modelLabel(
+                    session.providerId,
+                    session.model,
+                    provider.models,
+                  )}
+                >
+                  {models.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        setSessionModel(session.id, m.id);
+                        setPanel(null);
+                      }}
+                      className={cn(
+                        "block w-full truncate px-3 py-2 text-left text-xs hover:bg-muted",
+                        m.id === session.model && "bg-muted font-medium",
+                      )}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </MetaButton>
+
+                <MetaButton
+                  open={panel === "effort"}
+                  onToggle={() => setPanel(panel === "effort" ? null : "effort")}
+                  label={effortLabel(session.providerId, session.effort)}
+                >
+                  <div className="px-3 py-3">
+                    <p className="text-xs font-medium">
+                      {efforts[effortIdx]?.label ?? session.effort}
+                    </p>
+                    <p className="mt-0.5 text-2xs text-muted-foreground">
+                      {efforts[effortIdx]?.hint}
+                    </p>
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(0, efforts.length - 1)}
+                      step={1}
+                      value={effortIdx}
+                      onChange={(e) => {
+                        const next = efforts[Number(e.target.value)];
+                        if (next) setSessionEffort(session.id, next.id);
+                      }}
+                      className="mt-3 w-full"
+                      style={{ accentColor: "var(--color-accent)" }}
+                    />
+                    <div className="mt-1 flex justify-between text-2xs text-subtle">
+                      <span>{efforts[0]?.label}</span>
+                      <span>{efforts[efforts.length - 1]?.label}</span>
+                    </div>
+                  </div>
+                </MetaButton>
+              </div>
             </div>
-            {running ? (
+            <div className="flex shrink-0 items-center gap-1">
+              {queued > 0 ? (
+                <span className="text-2xs text-subtle">{queued} queued</span>
+              ) : null}
+              {running ? (
+                <Button
+                  size="icon"
+                  variant="subtle"
+                  aria-label="Stop"
+                  className="size-11 md:size-8"
+                  onClick={() => stop(session.id)}
+                >
+                  <Square className="size-3.5 fill-current" />
+                </Button>
+              ) : null}
               <Button
                 size="icon"
-                variant="subtle"
-                aria-label="Stop"
+                aria-label={running ? "Queue" : "Send"}
                 className="size-11 md:size-8"
-                onClick={() => stop(session.id)}
-              >
-                <Square className="size-3.5 fill-current" />
-              </Button>
-            ) : (
-              <Button
-                size="icon"
-                aria-label="Send"
-                className="size-11 md:size-8"
-                disabled={!value.trim() && files.length === 0}
+                disabled={!canSend}
                 onClick={() => submit()}
               >
                 <ArrowUp className="size-4" />
               </Button>
-            )}
+            </div>
           </div>
         </div>
       </div>
       <p className="mt-1.5 px-1 text-2xs text-subtle">
-        ⌘ Enter · + files · @ a session · {provider.authLabel}
+        Enter to send · Shift Enter for a new line · {provider.authLabel}
       </p>
+    </div>
+  );
+}
+
+function MetaButton({
+  open,
+  onToggle,
+  label,
+  icon,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: string;
+  icon?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={onToggle}
+        className={cn(
+          "inline-flex h-8 max-w-36 items-center gap-1 rounded-md px-1.5 text-2xs text-muted-foreground hover:bg-muted hover:text-foreground",
+          open && "bg-muted text-foreground",
+        )}
+      >
+        {icon}
+        <span className="truncate">{label}</span>
+        <ChevronDown className="size-3 shrink-0 opacity-70" />
+      </button>
+      {open ? (
+        <div className="absolute bottom-full left-0 z-20 mb-1 min-w-48 overflow-hidden rounded-md border border-border bg-window py-1 shadow-window">
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }

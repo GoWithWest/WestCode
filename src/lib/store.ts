@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  DEFAULT_PERMISSION,
   defaultEffortFor,
   effortLabel,
   effortsFor,
@@ -16,23 +17,27 @@ import {
   type Addon,
   type AddonKind,
 } from "./library";
+import { blocksToPlain, extractSendMessages } from "./parse-agent";
+import { deskPreamble, formatRoster } from "./prompts";
 import {
-  blocksToPlain,
-  extractSendMessages,
-  parseAgentOutput,
-} from "./parse-agent";
-import { formatRoster, titleFromPrompt } from "./prompts";
-import {
+  PROVIDER_ORDER,
   PROVIDERS_KEY,
   resolveProvider,
   type CustomProvider,
 } from "./providers";
-import { SEED_SESSIONS } from "./seed";
+import {
+  westcode,
+  type CliProbe,
+  type CliUpdate,
+  type LiveAddon,
+  type SessionEvent,
+} from "./desktop";
 import type {
   AgentRosterItem,
   Attachment,
   Block,
   ChatMessage,
+  IncomingRef,
   LayoutView,
   Session,
 } from "./types";
@@ -41,15 +46,11 @@ import { uid } from "./utils";
 
 const ONBOARD_KEY = "helix-onboarding-v1";
 const FOLDERS_KEY = "helix-folders-v1";
-const MAX_HOP = 3;
+const DESK_KEY = "helix-desk-v1";
+const UPDATES_KEY = "helix-cli-updates-dismissed-v1";
+const MAX_HOP = 6;
 const abortBySession = new Map<string, AbortController>();
 const hopBySession = new Map<string, number>();
-
-type InboxItem = {
-  text: string;
-  incoming: Incoming;
-};
-const inbox = new Map<string, InboxItem[]>();
 const busLog: { from: string; to: string; at: number; hash: string }[] = [];
 
 export type RecentFolder = {
@@ -59,24 +60,22 @@ export type RecentFolder = {
   hint: string;
 };
 
-export type Incoming = {
-  fromSessionId: string;
-  fromProviderId: string;
-  fromTitle: string;
-  hop: number;
-};
+export type Incoming = IncomingRef;
 
 export type SendOpts = {
   attachments?: Attachment[];
   incoming?: Incoming;
+  replay?: boolean;
 };
 
 type CreateOpts = {
   providerId: string;
   projectId: string;
-  prompt: string;
+  title?: string;
+  prompt?: string;
   model?: string;
   effort?: string;
+  permissionMode?: string;
   cwd?: string;
   attachments?: Attachment[];
 };
@@ -94,6 +93,12 @@ export type HelixState = {
   customAddons: Addon[];
   customProviders: CustomProvider[];
   recentFolders: RecentFolder[];
+  cliStatus: CliProbe[];
+  cliUpdates: CliUpdate[];
+  updateBusy: string | null;
+  updateError: string | null;
+  liveAddons: LiveAddon[];
+  libraryStatus: "idle" | "loading" | "ready";
 
   setView: (v: LayoutView) => void;
   setActive: (id: string) => void;
@@ -105,6 +110,12 @@ export type HelixState = {
   dismissOnboarding: () => void;
   resetDemo: () => void;
   finishCodexDemo: () => void;
+  refreshCli: () => Promise<void>;
+  refreshLibrary: () => Promise<void>;
+  refreshUpdates: () => Promise<void>;
+  applyCliUpdate: (id: string) => Promise<void>;
+  dismissCliUpdate: (id: string) => void;
+  answerPermission: (sessionId: string, optionId: string) => void;
   rememberFolder: (folder: RecentFolder) => void;
   createSession: (opts: CreateOpts) => void;
   send: (sessionId: string, text: string, opts?: SendOpts) => Promise<void>;
@@ -113,10 +124,11 @@ export type HelixState = {
     toQuery: string,
     text: string,
     opts?: { echo?: boolean },
-  ) => boolean;
+  ) => string | false;
   stop: (sessionId: string) => void;
   setSessionModel: (sessionId: string, model: string) => void;
   setSessionEffort: (sessionId: string, effort: string) => void;
+  setSessionPermissionMode: (sessionId: string, mode: string) => void;
   toggleAddon: (id: string) => void;
   importAddon: (addon: Omit<Addon, "id" | "custom">) => void;
   removeAddon: (id: string) => void;
@@ -160,6 +172,72 @@ function persistFolders(list: RecentFolder[]) {
   }
 }
 
+function sanitizeSession(s: Session): Session {
+  return {
+    ...s,
+    status: s.status === "running" ? "waiting" : s.status,
+    permission: null,
+    queued: undefined,
+    permissionMode: s.permissionMode || DEFAULT_PERMISSION,
+    agentSessionId: s.agentSessionId,
+    messages: s.messages.map((m) => ({ ...m, streaming: false })),
+  };
+}
+
+function persistDesk() {
+  if (typeof window === "undefined") return;
+  try {
+    const { sessions, activeId, splitIds, view } = useHelix.getState();
+    localStorage.setItem(
+      DESK_KEY,
+      JSON.stringify({
+        sessions: sessions.map(sanitizeSession),
+        activeId,
+        splitIds,
+        view,
+      }),
+    );
+  } catch {
+    /* quota */
+  }
+}
+
+let deskBound = false;
+function deskRows(
+  sessions: Session[],
+  custom: CustomProvider[],
+) {
+  return sessions.map((s) => ({
+    id: s.id,
+    title: s.title,
+    providerId: s.providerId,
+    provider: resolveProvider(s.providerId, custom).short,
+    cwd: s.cwd,
+    model: s.model,
+    status: s.status,
+  }));
+}
+
+function bindDeskPersist() {
+  if (deskBound || typeof window === "undefined") return;
+  deskBound = true;
+  const push = (s: HelixState) => {
+    persistDesk();
+    westcode()?.syncDesk?.(deskRows(s.sessions, s.customProviders));
+  };
+  push(useHelix.getState());
+  useHelix.subscribe((s, prev) => {
+    if (
+      s.sessions !== prev.sessions ||
+      s.activeId !== prev.activeId ||
+      s.splitIds !== prev.splitIds ||
+      s.view !== prev.view
+    ) {
+      push(s);
+    }
+  });
+}
+
 function slugId(name: string, taken: Set<string>) {
   const base =
     name
@@ -194,17 +272,19 @@ function addonNames(
   custom: Addon[],
   kind: AddonKind,
   providerId: string,
+  live: LiveAddon[] = [],
 ) {
-  return [...LIBRARY, ...custom]
+  const names = [...LIBRARY, ...custom, ...live]
     .filter(
       (a) =>
         a.kind === kind &&
         enabled.includes(a.id) &&
-        (a.providers.includes(providerId) ||
-          a.providers.includes("*") ||
-          a.custom),
+        ((a.providers ?? []).includes(providerId) ||
+          (a.providers ?? []).includes("*") ||
+          ("custom" in a && a.custom)),
     )
     .map((a) => a.name);
+  return [...new Set(names)];
 }
 
 function rosterFor(
@@ -263,7 +343,7 @@ function busAllowed(from: string, to: string, text: string, hop: number) {
   const recent = busLog.filter((e) => now - e.at < 90_000);
   busLog.length = 0;
   busLog.push(...recent);
-  if (recent.filter((e) => e.from === from && e.to === to).length >= 4) {
+  if (recent.filter((e) => e.from === from && e.to === to).length >= 8) {
     return "Desk bus rate-limited this pair.";
   }
   if (recent.some((e) => e.from === from && e.to === to && e.hash === h)) {
@@ -273,17 +353,188 @@ function busAllowed(from: string, to: string, text: string, hop: number) {
   return null;
 }
 
-function fillListAgents(blocks: Block[], roster: string): Block[] {
-  return blocks.map((b) =>
-    b.type === "tool" && /^listagents$/i.test(b.name)
-      ? { ...b, content: roster, status: "done" as const }
-      : b,
-  );
+function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
+  const patch = (fn: (s: Session) => Session) =>
+    useHelix.setState((s) => ({
+      sessions: patchSession(s.sessions, sessionId, fn),
+    }));
+
+  if (ev.type === "ready" && ev.agentSessionId) {
+    patch((ses) => ({
+      ...ses,
+      agentSessionId: ev.agentSessionId,
+      updatedAt: Date.now(),
+    }));
+    return;
+  }
+  if (ev.type === "commands" && ev.commands) {
+    patch((ses) => ({ ...ses, slashCommands: ev.commands, updatedAt: Date.now() }));
+    return;
+  }
+  if (ev.type === "models" && ev.models?.length) {
+    patch((ses) => ({
+      ...ses,
+      updatedAt: Date.now(),
+      availableModels: ev.models,
+      model: ev.models!.some((m) => m.id === ses.model)
+        ? ses.model
+        : (ev.models![0]!.id ?? ses.model),
+    }));
+    return;
+  }
+  if (ev.type === "error" && ev.message) {
+    patch((ses) => ({
+      ...ses,
+      status: "error",
+      permission: null,
+      updatedAt: Date.now(),
+      messages: ses.messages.map((m) =>
+        m.id === asstId
+          ? {
+              ...m,
+              streaming: false,
+              blocks: m.blocks.length
+                ? m.blocks
+                : [{ type: "text" as const, text: ev.message! }],
+            }
+          : m,
+      ),
+    }));
+    return;
+  }
+  if (ev.type === "permission" && ev.rpcId != null) {
+    patch((ses) => ({
+      ...ses,
+      permission: { rpcId: ev.rpcId!, tool: ev.tool || "tool", options: ev.options || [] },
+      updatedAt: Date.now(),
+    }));
+    return;
+  }
+  if (ev.type === "thought" && ev.text) {
+    patch((ses) => ({
+      ...ses,
+      updatedAt: Date.now(),
+      messages: ses.messages.map((m) => {
+        if (m.id !== asstId) return m;
+        const blocks = [...m.blocks];
+        const last = blocks[blocks.length - 1];
+        if (last?.type === "think") {
+          blocks[blocks.length - 1] = { type: "think", text: last.text + ev.text };
+        } else {
+          blocks.push({ type: "think", text: ev.text! });
+        }
+        return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true };
+      }),
+    }));
+    return;
+  }
+  if (ev.type === "text" && ev.text) {
+    patch((ses) => ({
+      ...ses,
+      updatedAt: Date.now(),
+      messages: ses.messages.map((m) => {
+        if (m.id !== asstId) return m;
+        const blocks = [...m.blocks];
+        const last = blocks[blocks.length - 1];
+        if (last?.type === "text") {
+          blocks[blocks.length - 1] = { type: "text", text: last.text + ev.text };
+        } else {
+          blocks.push({ type: "text", text: ev.text! });
+        }
+        return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true };
+      }),
+    }));
+    return;
+  }
+  if (ev.type === "tool") {
+    patch((ses) => ({
+      ...ses,
+      updatedAt: Date.now(),
+      messages: ses.messages.map((m) => {
+        if (m.id !== asstId) return m;
+        const blocks = [...m.blocks];
+        const idx = blocks.findIndex(
+          (b) =>
+            b.type === "tool" &&
+            (ev.toolId
+              ? b.path === ev.toolId || b.name === ev.name
+              : b.name === ev.name && b.status === "running"),
+        );
+        const tool: Block = {
+          type: "tool",
+          name: ev.name || "Tool",
+          path: ev.path || ev.toolId,
+          command: ev.command,
+          content: ev.content || "",
+          status: ev.status || "running",
+        };
+        if (idx >= 0) {
+          const prev = blocks[idx] as Extract<Block, { type: "tool" }>;
+          // tool_call_update is a PATCH: a completion event often carries only
+          // {toolCallId, status}. Never let a fabricated/generic name replace
+          // the recorded one — extractSendMessages relies on the original
+          // westcode_send_message name to suppress double sends.
+          const meaningfulName =
+            ev.name && ev.name !== "Tool" ? ev.name : prev.name;
+          blocks[idx] = {
+            ...tool,
+            name: meaningfulName,
+            content: tool.content || prev.content,
+            path: tool.path || prev.path,
+            command: tool.command || prev.command,
+          };
+        } else {
+          blocks.push(tool);
+        }
+        return { ...m, blocks, streaming: true };
+      }),
+    }));
+  }
 }
 
+let eventsBound = false;
+function bindDesktopEvents() {
+  const api = westcode();
+  if (!api || eventsBound) return;
+  eventsBound = true;
+  api.onEvent((ev) => {
+    const pending = promptAsst.get(ev.sessionId);
+    if (!pending) {
+      if (
+        ev.type === "commands" ||
+        ev.type === "permission" ||
+        ev.type === "models" ||
+        ev.type === "ready"
+      ) {
+        applyEvent(ev.sessionId, "", ev);
+      }
+      return;
+    }
+    applyEvent(ev.sessionId, pending, ev);
+    if (ev.type === "done" || ev.type === "error") {
+      promptAsst.delete(ev.sessionId);
+    }
+  });
+  api.onDeskDeliver?.((p) => {
+    const deliveredTo = useHelix
+      .getState()
+      .messageSession(p.from, p.to, p.text, { echo: false });
+    api.deskDelivered?.({
+      requestId: p.requestId,
+      ok: Boolean(deliveredTo),
+      error: deliveredTo
+        ? undefined
+        : `No session matching “${p.to}”. Try westcode_list_sessions.`,
+      deliveredTo: deliveredTo || undefined,
+    });
+  });
+}
+
+const promptAsst = new Map<string, string>();
+
 export const useHelix = create<HelixState>((set, get) => ({
-  sessions: SEED_SESSIONS,
-  activeId: SEED_SESSIONS[0]?.id ?? null,
+  sessions: [],
+  activeId: null,
   splitIds: null,
   view: "mosaic",
   onboarding: true,
@@ -294,6 +545,12 @@ export const useHelix = create<HelixState>((set, get) => ({
   customAddons: [],
   customProviders: [],
   recentFolders: [],
+  cliStatus: [],
+  cliUpdates: [],
+  updateBusy: null,
+  updateError: null,
+  liveAddons: [],
+  libraryStatus: "idle",
 
   setView: (view) => set({ view, mobileNav: "desk" }),
   setActive: (id) =>
@@ -305,6 +562,7 @@ export const useHelix = create<HelixState>((set, get) => ({
 
   restoreOnboarding: () => {
     if (typeof window === "undefined") return;
+    bindDesktopEvents();
     const seen = localStorage.getItem(ONBOARD_KEY);
     const lib = readJson<{ enabled?: string[]; custom?: Addon[] }>(
       LIBRARY_KEY,
@@ -312,13 +570,138 @@ export const useHelix = create<HelixState>((set, get) => ({
     );
     const prov = readJson<CustomProvider[]>(PROVIDERS_KEY, []);
     const folders = readJson<RecentFolder[]>(FOLDERS_KEY, []);
+    const desk = readJson<{
+      sessions?: Session[];
+      activeId?: string | null;
+      splitIds?: [string, string] | null;
+      view?: LayoutView;
+    }>(DESK_KEY, {});
+    const saved = Array.isArray(desk.sessions)
+      ? desk.sessions.map(sanitizeSession)
+      : [];
+    const live = get().sessions;
+    const sessions = live.length ? live : saved;
     set({
       onboarding: seen !== "1",
       enabledAddons: lib.enabled ?? DEFAULT_ENABLED,
       customAddons: Array.isArray(lib.custom) ? lib.custom : [],
       customProviders: Array.isArray(prov) ? prov : [],
       recentFolders: Array.isArray(folders) ? folders : [],
+      ...(live.length
+        ? {}
+        : {
+            sessions,
+            activeId: desk.activeId ?? sessions[0]?.id ?? null,
+            splitIds: desk.splitIds ?? null,
+            view: desk.view ?? (sessions.length ? "focus" : "mosaic"),
+          }),
     });
+    bindDeskPersist();
+    void get().refreshCli();
+    void get().refreshLibrary();
+    void get().refreshUpdates();
+  },
+
+  refreshCli: async () => {
+    const api = westcode();
+    if (!api) return;
+    try {
+      const cliStatus = await api.probe();
+      set({ cliStatus });
+    } catch {
+      /* probe failed; Connections will show install hints */
+    }
+  },
+
+  refreshUpdates: async () => {
+    const api = westcode();
+    if (!api?.updates) return;
+    try {
+      const all = await api.updates();
+      const dismissed = readJson<string[]>(UPDATES_KEY, []);
+      set({
+        cliUpdates: all.filter(
+          (u) => !dismissed.includes(`${u.id}@${u.latest}`),
+        ),
+      });
+    } catch {
+      /* update check failed; try again next launch */
+    }
+  },
+
+  applyCliUpdate: async (id) => {
+    const api = westcode();
+    if (!api?.updateCli || get().updateBusy) return;
+    set({ updateBusy: id, updateError: null });
+    try {
+      const res = await api.updateCli(id);
+      if (res.ok) {
+        set((s) => ({ cliUpdates: s.cliUpdates.filter((u) => u.id !== id) }));
+        void get().refreshCli();
+      } else {
+        set({
+          updateError:
+            (res.output || "The update failed.").split("\n").filter(Boolean).slice(-3).join(" ").slice(0, 300),
+        });
+      }
+    } catch (err) {
+      set({ updateError: (err as Error).message.slice(0, 300) });
+    } finally {
+      set({ updateBusy: null });
+    }
+  },
+
+  dismissCliUpdate: (id) => {
+    const u = get().cliUpdates.find((x) => x.id === id);
+    if (u) {
+      const dismissed = readJson<string[]>(UPDATES_KEY, []);
+      try {
+        localStorage.setItem(
+          UPDATES_KEY,
+          JSON.stringify(
+            [...dismissed, `${u.id}@${u.latest}`].slice(-12),
+          ),
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    set((s) => ({ cliUpdates: s.cliUpdates.filter((x) => x.id !== id) }));
+  },
+
+  refreshLibrary: async () => {
+    const api = westcode();
+    if (!api) return;
+    if (get().libraryStatus === "loading") return;
+    const had = get().liveAddons;
+    set({ libraryStatus: "loading" });
+    try {
+      const lists = await Promise.all(
+        PROVIDER_ORDER.map((id) => api.library(id)),
+      );
+      set({
+        liveAddons: lists.flat().map((a) => ({
+          ...a,
+          summary: (a.summary || "").slice(0, 180),
+        })),
+        libraryStatus: "ready",
+      });
+    } catch {
+      set({ liveAddons: had, libraryStatus: "ready" });
+    }
+  },
+
+  answerPermission: (sessionId, optionId) => {
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    const rpcId = ses?.permission?.rpcId;
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        permission: null,
+      })),
+    }));
+    if (rpcId == null) return;
+    void westcode()?.permission({ sessionId, rpcId, optionId });
   },
 
   dismissOnboarding: () => {
@@ -330,51 +713,17 @@ export const useHelix = create<HelixState>((set, get) => ({
     set({ onboarding: false });
   },
 
-  resetDemo: () =>
+  resetDemo: () => {
     set({
-      sessions: SEED_SESSIONS,
-      activeId: SEED_SESSIONS[0]?.id ?? null,
+      sessions: [],
+      activeId: null,
       splitIds: null,
       view: "mosaic",
-    }),
-
-  finishCodexDemo: () => {
-    set((state) => ({
-      sessions: patchSession(state.sessions, "ses-codex-flake", (s) => {
-        if (s.status !== "running") return s;
-        const messages = s.messages.map((m) => {
-          if (m.id !== "m-x-a1") return m;
-          const blocks = m.blocks.map((b) => {
-            if (b.type === "tool" && b.status === "running") {
-              return {
-                ...b,
-                status: "done" as const,
-                content: `${b.content}
-[5/8] passed
-[6/8] passed
-[7/8] passed
-[8/8] passed
-
-  8 passed (8)`,
-              };
-            }
-            return b;
-          });
-          return {
-            ...m,
-            blocks: [
-              ...blocks,
-              {
-                type: "text" as const,
-                text: "8/8 green after waiting on `data-ready`. Race was the webhook vs navigate, not Playwright itself.",
-              },
-            ],
-          };
-        });
-        return { ...s, messages, status: "idle", updatedAt: Date.now() };
-      }),
-    }));
+    });
+    persistDesk();
   },
+
+  finishCodexDemo: () => {},
 
   rememberFolder: (folder) => {
     const next = [
@@ -388,22 +737,27 @@ export const useHelix = create<HelixState>((set, get) => ({
   createSession: ({
     providerId,
     projectId,
+    title,
     prompt,
     model,
     effort,
+    permissionMode,
     cwd,
     attachments,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
     const project = projectById(projectId);
+    const path = cwd?.trim() || project.path;
+    const folderName = path.split("/").filter(Boolean).pop() || "session";
     const session: Session = {
       id: uid("ses"),
-      title: titleFromPrompt(prompt),
+      title: title?.trim() || folderName,
       providerId,
       projectId,
-      cwd: cwd?.trim() || project.path,
+      cwd: path,
       model: model ?? p.defaultModel,
       effort: effort ?? defaultEffortFor(providerId),
+      permissionMode: permissionMode || DEFAULT_PERMISSION,
       status: "idle",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -417,7 +771,9 @@ export const useHelix = create<HelixState>((set, get) => ({
       newOpen: false,
       mobileNav: "desk",
     }));
-    void get().send(session.id, prompt, { attachments });
+    if (prompt?.trim() || attachments?.length) {
+      void get().send(session.id, prompt ?? "", { attachments });
+    }
   },
 
   setSessionModel: (sessionId, model) => {
@@ -435,6 +791,16 @@ export const useHelix = create<HelixState>((set, get) => ({
       sessions: patchSession(state.sessions, sessionId, (s) => ({
         ...s,
         effort,
+        updatedAt: Date.now(),
+      })),
+    }));
+  },
+
+  setSessionPermissionMode: (sessionId, mode) => {
+    set((state) => ({
+      sessions: patchSession(state.sessions, sessionId, (s) => ({
+        ...s,
+        permissionMode: mode,
         updatedAt: Date.now(),
       })),
     }));
@@ -495,6 +861,7 @@ export const useHelix = create<HelixState>((set, get) => ({
   stop: (sessionId) => {
     abortBySession.get(sessionId)?.abort();
     abortBySession.delete(sessionId);
+    void westcode()?.cancel(sessionId);
     set((state) => ({
       sessions: patchSession(state.sessions, sessionId, (s) => ({
         ...s,
@@ -518,6 +885,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       state.customProviders,
     );
     if (!target) return false;
+    const deliveredTo = `${resolveProvider(target.providerId, state.customProviders).short} · ${target.title}`;
     const hop = (hopBySession.get(fromId) ?? 0) + 1;
     const blocked = busAllowed(fromId, target.id, text, hop);
     if (blocked) {
@@ -528,10 +896,8 @@ export const useHelix = create<HelixState>((set, get) => ({
           updatedAt: Date.now(),
         })),
       }));
-      return true;
+      return false;
     }
-    const toShort = resolveProvider(target.providerId, state.customProviders)
-      .short;
     if (opts?.echo) {
       set((s) => ({
         sessions: patchSession(s.sessions, fromId, (ses) => ({
@@ -547,7 +913,7 @@ export const useHelix = create<HelixState>((set, get) => ({
                 {
                   type: "tool" as const,
                   name: "SendMessage",
-                  to: `${toShort} · ${target.title}`,
+                  to: deliveredTo,
                   content: text,
                   status: "done" as const,
                 },
@@ -565,7 +931,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       text,
       hop,
     });
-    return true;
+    return deliveredTo;
   },
 
   send: async (sessionId, text, opts) => {
@@ -582,16 +948,37 @@ export const useHelix = create<HelixState>((set, get) => ({
     const session = state.sessions.find((s) => s.id === sessionId);
     if (!session) return;
 
-    if (session.status === "running") {
-      if (opts?.incoming) {
-        const q = inbox.get(sessionId) ?? [];
-        if (q.length < 8) {
-          inbox.set(sessionId, [
-            ...q,
-            { text: trimmed, incoming: opts.incoming },
-          ]);
-        }
-      }
+    const replay = Boolean(opts?.replay);
+    const outgoing = replay ? trimmed : formatOutgoing(trimmed, attachments);
+
+    if (session.status === "running" && !replay) {
+      const hop = opts?.incoming?.hop ?? 0;
+      const userMsg: ChatMessage = opts?.incoming
+        ? {
+            id: uid("m"),
+            role: "agent",
+            createdAt: Date.now(),
+            blocks: [{ type: "text", text: trimmed }],
+            fromSessionId: opts.incoming.fromSessionId,
+            fromProviderId: opts.incoming.fromProviderId,
+            fromTitle: opts.incoming.fromTitle,
+            hop,
+          }
+        : {
+            id: uid("m"),
+            role: "user",
+            createdAt: Date.now(),
+            blocks: [{ type: "text", text: trimmed || "Attached files" }],
+            attachments: attachments.length ? attachments : undefined,
+          };
+      set((s) => ({
+        sessions: patchSession(s.sessions, sessionId, (ses) => ({
+          ...ses,
+          updatedAt: Date.now(),
+          queued: [...(ses.queued ?? []), { text: outgoing, incoming: opts?.incoming }].slice(0, 8),
+          messages: [...ses.messages, userMsg],
+        })),
+      }));
       return;
     }
 
@@ -602,25 +989,26 @@ export const useHelix = create<HelixState>((set, get) => ({
     const hop = opts?.incoming?.hop ?? 0;
     hopBySession.set(sessionId, hop);
 
-    const outgoing = formatOutgoing(trimmed, attachments);
-    const userMsg: ChatMessage = opts?.incoming
-      ? {
-          id: uid("m"),
-          role: "agent",
-          createdAt: Date.now(),
-          blocks: [{ type: "text", text: trimmed }],
-          fromSessionId: opts.incoming.fromSessionId,
-          fromProviderId: opts.incoming.fromProviderId,
-          fromTitle: opts.incoming.fromTitle,
-          hop,
-        }
-      : {
-          id: uid("m"),
-          role: "user",
-          createdAt: Date.now(),
-          blocks: [{ type: "text", text: trimmed || "Attached files" }],
-          attachments: attachments.length ? attachments : undefined,
-        };
+    const userMsg: ChatMessage | null = replay
+      ? null
+      : opts?.incoming
+        ? {
+            id: uid("m"),
+            role: "agent",
+            createdAt: Date.now(),
+            blocks: [{ type: "text", text: trimmed }],
+            fromSessionId: opts.incoming.fromSessionId,
+            fromProviderId: opts.incoming.fromProviderId,
+            fromTitle: opts.incoming.fromTitle,
+            hop,
+          }
+        : {
+            id: uid("m"),
+            role: "user",
+            createdAt: Date.now(),
+            blocks: [{ type: "text", text: trimmed || "Attached files" }],
+            attachments: attachments.length ? attachments : undefined,
+          };
 
     const asstId = uid("m");
     const asstMsg: ChatMessage = {
@@ -635,167 +1023,113 @@ export const useHelix = create<HelixState>((set, get) => ({
     set((s) => ({
       sessions: patchSession(s.sessions, sessionId, (ses) => ({
         ...ses,
-        title:
-          ses.turns === 0 && ses.messages.length === 0
-            ? titleFromPrompt(trimmed || attachments[0]?.name || "Session")
-            : ses.title,
         status: "running",
         updatedAt: Date.now(),
         turns: ses.turns + 1,
-        messages: [...ses.messages, userMsg, asstMsg],
+        messages: userMsg
+          ? [...ses.messages, userMsg, asstMsg]
+          : [...ses.messages, asstMsg],
       })),
     }));
 
     const latest = get().sessions.find((s) => s.id === sessionId);
     if (!latest) return;
     const provider = resolveProvider(latest.providerId, get().customProviders);
-    const history = latest.messages
-      .filter(
-        (m) =>
-          m.role === "user" || m.role === "assistant" || m.role === "agent",
-      )
-      .filter((m) => m.id !== asstId)
-      .map((m) => {
-        if (m.role === "agent") {
-          const who = resolveProvider(
-            m.fromProviderId ?? "",
-            get().customProviders,
-          ).short;
-          return {
-            role: "user" as const,
-            content: `[Peer agent: ${who} · ${m.fromTitle ?? "session"}]\nIncoming message from another WestCode session. Act on it. SendMessage a result back if they need one.\n\n${blocksToPlain(m.blocks)}`.slice(
-              0,
-              6000,
-            ),
-          };
-        }
-        const content =
-          m.role === "user"
-            ? formatOutgoing(blocksToPlain(m.blocks), m.attachments)
-            : blocksToPlain(m.blocks);
-        return {
-          role: m.role as "user" | "assistant",
-          content: content.slice(0, 6000),
-        };
-      });
+    const roster = rosterFor(
+      get().sessions,
+      sessionId,
+      get().customProviders,
+    );
+    const bus = deskPreamble(sessionId, latest.providerId, roster, {
+      skills: addonNames(
+        get().enabledAddons,
+        get().customAddons,
+        "skill",
+        latest.providerId,
+        get().liveAddons,
+      ),
+      connectors: addonNames(
+        get().enabledAddons,
+        get().customAddons,
+        "connector",
+        latest.providerId,
+        get().liveAddons,
+      ),
+    });
+    const wantsReply =
+      hop <= 1 || /reply to session|reply to me|message (me|us) back/i.test(outgoing);
+    const incomingNote = wantsReply
+      ? `Incoming work from another WestCode session. Act on it now. When you finish (or if you are blocked), you MUST call westcode_send_message with to="${opts?.incoming?.fromSessionId}" and a short result — the sender is waiting for your reply.`
+      : `Incoming status report from another WestCode session. Read it. Do NOT reply unless it assigns you new work or asks a direct question — a completion report is terminal, and acknowledgment ping-pong wastes both sessions.`;
+    const promptText = opts?.incoming
+      ? `${bus}\n[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n${outgoing}`
+      : `${bus}\n${outgoing}`;
 
-    if (opts?.incoming) {
-      const last = history[history.length - 1];
-      if (last) last.content = last.content;
-    } else if (attachments.length && history.length) {
-      const last = history[history.length - 1];
-      if (last && last.role === "user") last.content = outgoing.slice(0, 6000);
+    const api = westcode();
+    if (!api) {
+      set((s) => ({
+        sessions: patchSession(s.sessions, sessionId, (ses) => ({
+          ...ses,
+          status: "error",
+          messages: ses.messages.map((m) =>
+            m.id === asstId
+              ? {
+                  ...m,
+                  streaming: false,
+                  blocks: [
+                    {
+                      type: "text" as const,
+                      text: "WestCode hosts Claude, Grok, and Codex as local CLIs. Run `npm run app` (the Mac desktop shell) — the browser preview cannot spawn those binaries.",
+                    },
+                  ],
+                }
+              : m,
+          ),
+        })),
+      }));
+      abortBySession.delete(sessionId);
+      return;
     }
 
-    const { enabledAddons, customAddons, customProviders } = get();
-    const roster = rosterFor(get().sessions, sessionId, customProviders);
-
+    promptAsst.set(sessionId, asstId);
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          providerId: latest.providerId,
-          providerName: provider.name,
-          vendor: provider.vendor,
-          projectId: latest.projectId,
-          cwd: latest.cwd,
-          model: latest.model,
-          effort: latest.effort,
-          selfId: latest.id,
-          roster,
-          skills: addonNames(
-            enabledAddons,
-            customAddons,
-            "skill",
-            latest.providerId,
-          ),
-          connectors: addonNames(
-            enabledAddons,
-            customAddons,
-            "connector",
-            latest.providerId,
-          ),
-          messages: history,
-        }),
-        signal: ac.signal,
+      const history = latest.messages
+        .filter((m) => m.id !== asstId && (m.role === "user" || m.role === "assistant" || m.role === "agent"))
+        .slice(-16)
+        .map((m) => ({
+          role: m.role,
+          text: blocksToPlain(m.blocks).slice(0, 1500),
+        }))
+        .filter((m) => m.text.trim());
+      const res = await api.prompt({
+        sessionId,
+        providerId: latest.providerId,
+        cwd: latest.cwd,
+        model: latest.model,
+        effort: latest.effort,
+        permissionMode: latest.permissionMode,
+        agentSessionId: latest.agentSessionId,
+        history,
+        text: promptText,
       });
-
-      if (!res.ok || !res.body) {
-        throw new Error(`Chat failed (${res.status})`);
-      }
-
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let carry = "";
-      let raw = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        carry += dec.decode(value, { stream: true });
-        const lines = carry.split("\n");
-        carry = lines.pop() ?? "";
-        for (const line of lines) {
-          const row = line.trim();
-          if (!row.startsWith("data:")) continue;
-          const data = row.slice(5).trim();
-          if (!data || data === "[DONE]") continue;
-          try {
-            const json = JSON.parse(data) as {
-              content?: string;
-              error?: string;
-            };
-            if (json.error) throw new Error(json.error);
-            if (json.content) {
-              raw += json.content;
-              const blocks = parseAgentOutput(raw);
-              set((s) => ({
-                sessions: patchSession(s.sessions, sessionId, (ses) => ({
-                  ...ses,
-                  updatedAt: Date.now(),
-                  messages: ses.messages.map((m) =>
-                    m.id === asstId
-                      ? { ...m, raw, blocks, streaming: true }
-                      : m,
-                  ),
-                })),
-              }));
-            }
-          } catch (err) {
-            if (err instanceof SyntaxError) continue;
-            throw err;
-          }
-        }
-      }
-
-      const rosterText = formatRoster(roster);
-      const finalBlocks = fillListAgents(parseAgentOutput(raw), rosterText);
-
+      if (!res.ok) throw new Error(res.error || `${provider.name} failed`);
       set((s) => ({
         sessions: patchSession(s.sessions, sessionId, (ses) => ({
           ...ses,
           status: "waiting",
           updatedAt: Date.now(),
           messages: ses.messages.map((m) =>
-            m.id === asstId
-              ? {
-                  ...m,
-                  streaming: false,
-                  blocks: finalBlocks,
-                }
-              : m,
+            m.id === asstId ? { ...m, streaming: false } : m,
           ),
         })),
       }));
-
-      const sends = extractSendMessages(finalBlocks);
-      if (sends.length) {
-        queueMicrotask(() => {
-          for (const msg of sends) {
-            get().messageSession(sessionId, msg.to, msg.text);
-          }
-        });
+      const asst = get()
+        .sessions.find((x) => x.id === sessionId)
+        ?.messages.find((m) => m.id === asstId);
+      if (asst) {
+        for (const msg of extractSendMessages(asst.blocks)) {
+          get().messageSession(sessionId, msg.to, msg.text, { echo: true });
+        }
       }
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
@@ -821,16 +1155,23 @@ export const useHelix = create<HelixState>((set, get) => ({
         })),
       }));
     } finally {
+      promptAsst.delete(sessionId);
       abortBySession.delete(sessionId);
-      const queued = inbox.get(sessionId);
-      if (queued?.length) {
-        const next = queued.shift();
-        inbox.set(sessionId, queued);
-        if (next) {
-          queueMicrotask(() => {
-            void get().send(sessionId, next.text, { incoming: next.incoming });
+      const ses = get().sessions.find((x) => x.id === sessionId);
+      const next = ses?.queued?.[0];
+      if (next) {
+        set((s) => ({
+          sessions: patchSession(s.sessions, sessionId, (x) => ({
+            ...x,
+            queued: (x.queued ?? []).slice(1),
+          })),
+        }));
+        queueMicrotask(() => {
+          void get().send(sessionId, next.text, {
+            incoming: next.incoming,
+            replay: true,
           });
-        }
+        });
       }
     }
   },
@@ -875,7 +1216,7 @@ function runSlash(
   if (!match) return false;
   const cmd = match[1]!.toLowerCase();
   const arg = (match[2] ?? "").trim();
-  const known = slashFor(session.providerId);
+  const known = slashFor(session.providerId, session.slashCommands);
   const spec = known.find((c) => c.cmd === cmd);
 
   const note = (text: string) => {
@@ -891,20 +1232,6 @@ function runSlash(
   const local = new Set([
     "help",
     "clear",
-    "compact",
-    "compress",
-    "model",
-    "effort",
-    "skills",
-    "mcp",
-    "plugin",
-    "cost",
-    "status",
-    "permissions",
-    "context",
-    "fast",
-    "approvals",
-    "rules",
     "agents",
     "peers",
     "list-agents",
@@ -949,6 +1276,7 @@ function runSlash(
   }
 
   if (cmd === "clear") {
+    void westcode()?.stopSession(sessionId);
     set((s) => ({
       sessions: patchSession(s.sessions, sessionId, (ses) => ({
         ...ses,
@@ -956,6 +1284,8 @@ function runSlash(
         turns: 0,
         updatedAt: Date.now(),
         status: "idle",
+        permission: null,
+        slashCommands: undefined,
       })),
     }));
     return true;

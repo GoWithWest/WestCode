@@ -60,12 +60,12 @@ export const PROVIDERS: Record<BuiltinProviderId, Provider> = {
     protocol: "ACP · Agent SDK",
     auth: "subscription",
     authLabel: "Claude Pro / Max",
-    models: ["Opus 4.8", "Opus 4.7", "Sonnet 5", "Sonnet 4.6", "Haiku 4.5"],
-    defaultModel: "Opus 4.7",
+    models: ["opus", "sonnet", "haiku"],
+    defaultModel: "sonnet",
     sessionStore: "~/.claude/projects",
-    how: "Spawns the local Claude Code CLI. Claude owns token lifecycle — WestCode never stores a key.",
+    how: "Embeds the Claude Code CLI you already logged into (`claude login`). WestCode never stores a key.",
     live: false,
-    connected: true,
+    connected: false,
     builtin: true,
   },
   codex: {
@@ -77,12 +77,12 @@ export const PROVIDERS: Record<BuiltinProviderId, Provider> = {
     protocol: "ACP · app-server",
     auth: "subscription",
     authLabel: "ChatGPT Plus / Pro",
-    models: ["GPT-5.4 Codex", "GPT-5.4", "GPT-5.4 Mini"],
-    defaultModel: "GPT-5.4 Codex",
+    models: ["gpt-5.4-codex", "gpt-5.4", "gpt-5.4-mini"],
+    defaultModel: "gpt-5.4-codex",
     sessionStore: "~/.codex",
-    how: "Signs in with ChatGPT OAuth through the Codex CLI. Usage draws from the subscription, not API credits.",
+    how: "Embeds the Codex CLI (`codex login` with ChatGPT). Usage draws from the subscription, not API credits.",
     live: false,
-    connected: true,
+    connected: false,
     builtin: true,
   },
   cursor: {
@@ -99,7 +99,7 @@ export const PROVIDERS: Record<BuiltinProviderId, Provider> = {
     sessionStore: "~/.cursor",
     how: "Connects to Cursor CLI in ACP mode (`agent acp`). Editor login is reused; no Cursor API key.",
     live: false,
-    connected: true,
+    connected: false,
     builtin: true,
   },
   grok: {
@@ -108,26 +108,20 @@ export const PROVIDERS: Record<BuiltinProviderId, Provider> = {
     short: "Grok",
     vendor: "xAI",
     binary: "grok",
-    protocol: "ACP · xAI",
-    auth: "api",
-    authLabel: "xAI",
-    models: ["Grok 4.5", "Grok 4"],
-    defaultModel: "Grok 4.5",
+    protocol: "ACP · stdio",
+    auth: "subscription",
+    authLabel: "SuperGrok / X Premium+",
+    models: ["grok-4.6", "grok-4.5"],
+    defaultModel: "grok-4.6",
     sessionStore: "~/.grok",
-    how: "Live in this preview via xAI. On a Mac, WestCode would spawn the Grok Build CLI the same way as the others.",
-    live: true,
-    connected: true,
+    how: "Embeds the Grok Build CLI (`grok login`). Auth stays in ~/.grok — WestCode never asks for an xAI API key.",
+    live: false,
+    connected: false,
     builtin: true,
-    endpoint: "https://api.x.ai/v1",
   },
 };
 
-export const PROVIDER_ORDER: BuiltinProviderId[] = [
-  "claude",
-  "codex",
-  "cursor",
-  "grok",
-];
+export const PROVIDER_ORDER: BuiltinProviderId[] = ["claude", "codex", "grok"];
 
 export const PROVIDERS_KEY = "helix-providers-v1";
 

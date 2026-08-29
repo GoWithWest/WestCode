@@ -1,5 +1,6 @@
 import { uid } from "./utils";
 import type { Attachment } from "./types";
+import { westcode } from "./desktop";
 
 export type PickedFolder = {
   name: string;
@@ -89,6 +90,14 @@ type DirHandle = {
 };
 
 export async function pickDirectory(): Promise<PickedFolder | null> {
+  const desktop = westcode();
+  if (desktop) {
+    try {
+      return await desktop.pickFolder();
+    } catch {
+      return null;
+    }
+  }
   const w = window as unknown as {
     showDirectoryPicker?: (opts?: { mode?: string }) => Promise<DirHandle>;
   };

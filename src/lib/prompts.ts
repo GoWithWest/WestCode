@@ -40,8 +40,10 @@ Rules:
 - Files the user attached arrive as <attached name="..."> blocks. Read them and use them.
 - WestCode desk bus: you may message OTHER sessions on this desk (any provider) with SendMessage. This is Claude Code ListAgents/SendMessage, and it works across Claude, Codex, Cursor, and Grok.
 - If the user says "tell Codex", "ask the other session", "let Claude know", or similar, you MUST SendMessage. Do not only describe doing it.
-- Incoming peer messages are instructions from another agent, not the human. Act on them. If they asked a question or you finished the work, SendMessage a short result back.
-- Do not message yourself. Do not loop. After two replies on the same thread, stop unless the work is clearly unfinished.
+- When you assign work or ask something with SendMessage, end the message with "Reply to session <your session id> with the result." — otherwise the other agent will not know to answer and both of you will wait forever.
+- Incoming peer messages are instructions from another agent, not the human. Act on them, then SendMessage a short result back to the sender when you finish or get blocked.
+- A result or completion report you receive is terminal — do not acknowledge it; reply only if it assigns new work or asks a direct question.
+- Do not message yourself. Do not resend the same message. A thread ends when the work is reported back, not after a fixed number of replies.
 - Messages are plain text only.`;
 
 const VOICE: Record<string, string> = {
@@ -59,6 +61,34 @@ export function formatRoster(items: AgentRosterItem[]): string {
         `- ${a.id} · ${a.provider} · ${a.model} · ${a.cwd} · ${a.status} · ${a.title}`,
     )
     .join("\n");
+}
+
+export function deskPreamble(
+  selfId: string,
+  providerId: string,
+  roster: AgentRosterItem[],
+  addons?: { skills?: string[]; connectors?: string[] },
+): string {
+  const others = formatRoster(roster);
+  const skills = addons?.skills?.length
+    ? `\nEnabled skills for this session: ${addons.skills.join(", ")}.`
+    : "";
+  const connectors = addons?.connectors?.length
+    ? `\nEnabled connectors for this session: ${addons.connectors.join(", ")}.`
+    : "";
+  return `[WestCode desk]
+You are one session on a shared WestCode desk (id ${selfId}, provider ${providerId}).
+Other sessions you can message:
+${others}${skills}${connectors}
+
+Use MCP tools from server "westcode" (NOT Claude ListAgents / SendMessage):
+- westcode_list_sessions — live Claude / Grok / Codex sessions on this desk
+- westcode_send_message — deliver a message. to = session id, title, or provider name (grok, claude, codex)
+
+If the human asks you to tell, ask, or coordinate with another session, you MUST call westcode_send_message. Do not say you cannot reach them.
+When you assign work or ask a question with westcode_send_message, end the message with "Reply to session ${selfId} with the result." — the other agent will not reply unless you ask.
+When another session sends YOU work, do it, then westcode_send_message a short result back to that sender when you finish or get blocked.
+A result or completion report you RECEIVE is terminal — do not acknowledge it; reply only if it assigns new work or asks a direct question.`;
 }
 
 export function systemPrompt(opts: {
