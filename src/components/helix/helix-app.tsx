@@ -42,8 +42,9 @@ export function HelixApp() {
       else if (action === "focus") {
         const id = state.activeId ?? state.sessions[0]?.id;
         if (id) state.setActive(id);
-      } else if (action === "split" && state.sessions.length >= 2) {
-        state.setSplit([state.sessions[0]!.id, state.sessions[1]!.id]);
+      } else if (action === "split") {
+        const live = state.sessions.filter((s) => !s.archivedAt);
+        if (live.length >= 2) state.setSplit([live[0]!.id, live[1]!.id]);
       }
     });
     return () => {
@@ -66,8 +67,10 @@ export function HelixApp() {
         view={view}
         onMosaic={() => setView("mosaic")}
         onSplit={() => {
-          if (sessions.length >= 2) {
-            useHelix.getState().setSplit([sessions[0]!.id, sessions[1]!.id]);
+          if (liveSessions.length >= 2) {
+            useHelix
+              .getState()
+              .setSplit([liveSessions[0]!.id, liveSessions[1]!.id]);
           }
         }}
         onNew={() => setNewOpen(true)}
