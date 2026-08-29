@@ -21,8 +21,6 @@ npm run app
 
 That starts the Vite desk on port 8080 and opens Electron. Connections probes PATH for the three binaries (including `~/.grok/bin` and Homebrew). Login opens Terminal so the CLI can complete its own browser OAuth.
 
-The Swift Xcode tree on this branch is archived, not the product UI.
-
 ## Web preview
 
 `npm run dev` still serves the helix UI in a browser. Sessions will not talk to CLIs there — spawning needs the desktop shell.
