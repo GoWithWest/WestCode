@@ -4,7 +4,8 @@ export type LayoutView =
   | "focus"
   | "split"
   | "providers"
-  | "library";
+  | "library"
+  | "agents";
 
 export type Attachment = {
   id: string;
@@ -83,8 +84,10 @@ export type Session = {
   slashCommands?: { cmd: string; args?: string; hint: string; kind: "builtin" | "skill" }[];
   permission?: PermissionPrompt | null;
   availableModels?: { id: string; label: string }[];
-  queued?: { text: string; incoming?: IncomingRef }[];
+  queued?: { text: string; incoming?: IncomingRef; msgId?: string }[];
   agentSessionId?: string;
+  /** Persona from the Agents menu ("You are @Cleo-Sam" assigns it). */
+  agentId?: string;
 };
 
 export type IncomingRef = {
@@ -102,6 +105,8 @@ export type AgentRosterItem = {
   cwd: string;
   model: string;
   status: SessionStatus;
+  /** Human agent name when the session runs a persona (e.g. "Cleo-Sam"). */
+  agentName?: string;
 };
 
 export const PROJECTS: Project[] = [

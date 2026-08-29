@@ -50,6 +50,17 @@ export type SessionEvent = {
   agentSessionId?: string;
 };
 
+export type GitStatus = {
+  repo: boolean;
+  branch?: string;
+  adds?: number;
+  dels?: number;
+  files?: number;
+  ahead?: number;
+  behind?: number;
+  remote?: string;
+};
+
 export type CliUpdate = {
   id: string;
   name: string;
@@ -72,6 +83,23 @@ type WestcodeBridge = {
     language: string;
     hint: string;
   } | null>;
+  pickFile: () => Promise<{
+    name: string;
+    path: string;
+    snippet: string;
+  } | null>;
+  gitStatus: (cwd: string) => Promise<GitStatus>;
+  apiPrompt: (payload: {
+    endpoint: string;
+    apiKey?: string;
+    providerId?: string;
+    model: string;
+    messages: { role: string; content: string }[];
+  }) => Promise<{ ok: boolean; text?: string; error?: string }>;
+  setSecret: (
+    id: string,
+    value: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   prompt: (payload: {
     sessionId: string;
     providerId: string;

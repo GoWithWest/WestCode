@@ -17,6 +17,14 @@ import {
   type Addon,
   type AddonKind,
 } from "./library";
+import {
+  AGENTS_KEY,
+  PRESET_AGENTS,
+  agentPreamble,
+  extractMentions,
+  personaAssignment,
+  type AgentProfile,
+} from "./agents";
 import { blocksToPlain, extractSendMessages } from "./parse-agent";
 import { deskPreamble, formatRoster } from "./prompts";
 import {
@@ -48,6 +56,56 @@ const ONBOARD_KEY = "helix-onboarding-v1";
 const FOLDERS_KEY = "helix-folders-v1";
 const DESK_KEY = "helix-desk-v1";
 const UPDATES_KEY = "helix-cli-updates-dismissed-v1";
+const COLORS_KEY = "helix-provider-colors-v1";
+
+type AgentsPersist = {
+  custom: AgentProfile[];
+  overrides: Record<string, Partial<AgentProfile>>;
+  removed: string[];
+};
+
+function mergeAgents(p: AgentsPersist): AgentProfile[] {
+  const removed = new Set(p.removed);
+  const presets = PRESET_AGENTS.filter((a) => !removed.has(a.id)).map((a) => ({
+    ...a,
+    ...(p.overrides[a.id] ?? {}),
+    id: a.id,
+    builtin: true,
+  }));
+  return [...presets, ...p.custom.filter((a) => !removed.has(a.id))];
+}
+
+async function migrateProviderKey(
+  get: () => HelixState,
+  set: (fn: (s: HelixState) => Partial<HelixState>) => void,
+  id: string,
+  apiKey: string,
+) {
+  const secretStore = westcode()?.setSecret;
+  if (!secretStore || !apiKey) return;
+  try {
+    const r = await secretStore(id, apiKey);
+    if (!r?.ok) return;
+    // Compare-and-strip: only blank the local copy if it is still the exact
+    // value that just landed in the vault — the user may have re-entered a
+    // new key while this write was in flight.
+    const list = get().customProviders.map((c) =>
+      c.id === id && c.apiKey === apiKey ? { ...c, apiKey: "" } : c,
+    );
+    persistProviders(list);
+    set(() => ({ customProviders: list }));
+  } catch {
+    /* keep the local key; retried on next launch */
+  }
+}
+
+function persistAgents(p: AgentsPersist) {
+  try {
+    localStorage.setItem(AGENTS_KEY, JSON.stringify(p));
+  } catch {
+    /* ignore quota */
+  }
+}
 const MAX_HOP = 6;
 const abortBySession = new Map<string, AbortController>();
 const hopBySession = new Map<string, number>();
@@ -66,6 +124,8 @@ export type SendOpts = {
   attachments?: Attachment[];
   incoming?: Incoming;
   replay?: boolean;
+  /** Transcript message id of the queued row a replay re-sends. */
+  replayOf?: string;
 };
 
 type CreateOpts = {
@@ -93,6 +153,9 @@ export type HelixState = {
   customAddons: Addon[];
   customProviders: CustomProvider[];
   recentFolders: RecentFolder[];
+  agents: AgentProfile[];
+  agentsPersist: AgentsPersist;
+  providerColors: Record<string, string>;
   cliStatus: CliProbe[];
   cliUpdates: CliUpdate[];
   updateBusy: string | null;
@@ -136,6 +199,14 @@ export type HelixState = {
     p: Omit<CustomProvider, "connected" | "id"> & { id?: string },
   ) => void;
   removeCustomProvider: (id: string) => void;
+  renameSession: (id: string, title: string) => void;
+  setSessionCwd: (id: string, cwd: string) => void;
+  setSessionAgent: (id: string, agentId: string | undefined) => void;
+  addAgent: (a: Omit<AgentProfile, "id" | "builtin"> & { id?: string }) => void;
+  updateAgent: (id: string, patch: Partial<AgentProfile>) => void;
+  removeAgent: (id: string) => void;
+  restorePresetAgents: () => void;
+  setProviderColor: (providerId: string, color: string) => void;
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -291,6 +362,7 @@ function rosterFor(
   sessions: Session[],
   selfId: string,
   custom: CustomProvider[],
+  agents: AgentProfile[] = [],
 ): AgentRosterItem[] {
   return sessions
     .filter((s) => s.id !== selfId)
@@ -302,6 +374,7 @@ function rosterFor(
       cwd: s.cwd,
       model: s.model,
       status: s.status,
+      agentName: agents.find((a) => a.id === s.agentId)?.name,
     }));
 }
 
@@ -545,6 +618,9 @@ export const useHelix = create<HelixState>((set, get) => ({
   customAddons: [],
   customProviders: [],
   recentFolders: [],
+  agents: PRESET_AGENTS,
+  agentsPersist: { custom: [], overrides: {}, removed: [] },
+  providerColors: {},
   cliStatus: [],
   cliUpdates: [],
   updateBusy: null,
@@ -569,6 +645,12 @@ export const useHelix = create<HelixState>((set, get) => ({
       {},
     );
     const prov = readJson<CustomProvider[]>(PROVIDERS_KEY, []);
+    const agentsPersist = readJson<AgentsPersist>(AGENTS_KEY, {
+      custom: [],
+      overrides: {},
+      removed: [],
+    });
+    const providerColors = readJson<Record<string, string>>(COLORS_KEY, {});
     const folders = readJson<RecentFolder[]>(FOLDERS_KEY, []);
     const desk = readJson<{
       sessions?: Session[];
@@ -586,6 +668,9 @@ export const useHelix = create<HelixState>((set, get) => ({
       enabledAddons: lib.enabled ?? DEFAULT_ENABLED,
       customAddons: Array.isArray(lib.custom) ? lib.custom : [],
       customProviders: Array.isArray(prov) ? prov : [],
+      agentsPersist,
+      agents: mergeAgents(agentsPersist),
+      providerColors,
       recentFolders: Array.isArray(folders) ? folders : [],
       ...(live.length
         ? {}
@@ -600,6 +685,13 @@ export const useHelix = create<HelixState>((set, get) => ({
     void get().refreshCli();
     void get().refreshLibrary();
     void get().refreshUpdates();
+    void (async () => {
+      for (const c of get().customProviders) {
+        if (c.apiKey) {
+          await migrateProviderKey(get, (fn) => set(fn), c.id, c.apiKey);
+        }
+      }
+    })();
   },
 
   refreshCli: async () => {
@@ -850,26 +942,182 @@ export const useHelix = create<HelixState>((set, get) => ({
     const list = [...get().customProviders.filter((c) => c.id !== id), next];
     persistProviders(list);
     set({ customProviders: list });
+    // Move the key into the OS-encrypted secret store; strip the local copy
+    // only after the store CONFIRMS the write, so a failed secret:set never
+    // leaves a provider with no key anywhere.
+    void migrateProviderKey(get, set, id, p.apiKey);
   },
 
   removeCustomProvider: (id) => {
+    void westcode()?.setSecret?.(id, "");
     const list = get().customProviders.filter((c) => c.id !== id);
     persistProviders(list);
     set({ customProviders: list });
   },
 
+  renameSession: (id, title) => {
+    const t = title.trim();
+    if (!t) return;
+    set((s) => ({
+      sessions: patchSession(s.sessions, id, (ses) => ({
+        ...ses,
+        title: t.slice(0, 80),
+        updatedAt: Date.now(),
+      })),
+    }));
+    persistDesk();
+  },
+
+  setSessionCwd: (id, cwd) => {
+    const path = cwd.trim();
+    if (!path) return;
+    // Stop any running turn cleanly BEFORE dropping the process — killing
+    // the agent under an in-flight send() would paint the turn as an error.
+    if (get().sessions.find((s) => s.id === id)?.status === "running") {
+      get().stop(id);
+    }
+    // The agent process is keyed on cwd; drop it so the next prompt spawns
+    // in the new directory (history is replayed by acp-host).
+    void westcode()?.stopSession(id);
+    set((s) => ({
+      sessions: patchSession(s.sessions, id, (ses) => ({
+        ...ses,
+        cwd: path,
+        agentSessionId: undefined,
+        updatedAt: Date.now(),
+        messages: [
+          ...ses.messages,
+          systemNote(`Working directory changed to ${path}.`),
+        ],
+      })),
+    }));
+    persistDesk();
+  },
+
+  setSessionAgent: (id, agentId) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, id, (ses) => ({
+        ...ses,
+        agentId,
+        updatedAt: Date.now(),
+      })),
+    }));
+    persistDesk();
+  },
+
+  addAgent: (a) => {
+    // Reserve preset and tombstoned ids too, so a custom "Reviewer / QA"
+    // cannot silently resurrect a deleted preset under the same id.
+    const taken = new Set([
+      ...get().agents.map((x) => x.id),
+      ...PRESET_AGENTS.map((x) => x.id),
+      ...get().agentsPersist.removed,
+    ]);
+    const id = a.id && !taken.has(a.id) ? a.id : slugId(a.name || "agent", taken);
+    const persist = get().agentsPersist;
+    const next: AgentsPersist = {
+      ...persist,
+      custom: [
+        ...persist.custom.filter((x) => x.id !== id),
+        { ...a, id, builtin: false },
+      ],
+    };
+    persistAgents(next);
+    set({ agentsPersist: next, agents: mergeAgents(next) });
+  },
+
+  updateAgent: (id, patch) => {
+    const persist = get().agentsPersist;
+    const isPreset = PRESET_AGENTS.some((a) => a.id === id);
+    const next: AgentsPersist = isPreset
+      ? {
+          ...persist,
+          overrides: {
+            ...persist.overrides,
+            [id]: { ...persist.overrides[id], ...patch, id, builtin: true },
+          },
+        }
+      : {
+          ...persist,
+          custom: persist.custom.map((a) =>
+            a.id === id ? { ...a, ...patch, id, builtin: false } : a,
+          ),
+        };
+    persistAgents(next);
+    set({ agentsPersist: next, agents: mergeAgents(next) });
+  },
+
+  removeAgent: (id) => {
+    const persist = get().agentsPersist;
+    const next: AgentsPersist = {
+      ...persist,
+      custom: persist.custom.filter((a) => a.id !== id),
+      removed: [...new Set([...persist.removed, id])],
+    };
+    persistAgents(next);
+    set((s) => ({
+      agentsPersist: next,
+      agents: mergeAgents(next),
+      // Sessions must not keep injecting a deleted persona's brief.
+      sessions: s.sessions.map((ses) =>
+        ses.agentId === id ? { ...ses, agentId: undefined } : ses,
+      ),
+    }));
+    persistDesk();
+  },
+
+  restorePresetAgents: () => {
+    const persist = get().agentsPersist;
+    const presetIds = new Set(PRESET_AGENTS.map((a) => a.id));
+    const next: AgentsPersist = {
+      ...persist,
+      removed: persist.removed.filter((r) => !presetIds.has(r)),
+    };
+    persistAgents(next);
+    set({ agentsPersist: next, agents: mergeAgents(next) });
+  },
+
+  setProviderColor: (providerId, color) => {
+    const colors = { ...get().providerColors };
+    if (color) colors[providerId] = color;
+    else delete colors[providerId];
+    try {
+      localStorage.setItem(COLORS_KEY, JSON.stringify(colors));
+    } catch {
+      /* ignore */
+    }
+    set({ providerColors: colors });
+  },
+
   stop: (sessionId) => {
     abortBySession.get(sessionId)?.abort();
     abortBySession.delete(sessionId);
+    // Fence the cancelled turn completely: drop the pending assistant id so
+    // stale stream events are ignored, and kill the agent process so its
+    // late done/error cannot land on the NEXT turn (the next prompt
+    // respawns and resumes via agentSessionId + history replay).
+    promptAsst.delete(sessionId);
     void westcode()?.cancel(sessionId);
+    void westcode()?.stopSession(sessionId);
+    const hadQueued = (get().sessions.find((s) => s.id === sessionId)?.queued ?? [])
+      .length;
     set((state) => ({
       sessions: patchSession(state.sessions, sessionId, (s) => ({
         ...s,
         status: "waiting",
+        permission: null,
         updatedAt: Date.now(),
-        messages: s.messages.map((m) =>
-          m.streaming ? { ...m, streaming: false } : m,
-        ),
+        // Stop discards pending work: queued rows are already visible in the
+        // transcript and must not auto-replay after some later send.
+        queued: [],
+        messages: [
+          ...s.messages.map((m) =>
+            m.streaming ? { ...m, streaming: false } : m,
+          ),
+          ...(hadQueued
+            ? [systemNote(`Stopped. ${hadQueued} queued message${hadQueued === 1 ? " was" : "s were"} discarded — resend what you still need.`)]
+            : []),
+        ],
       })),
     }));
   },
@@ -951,6 +1199,14 @@ export const useHelix = create<HelixState>((set, get) => ({
     const replay = Boolean(opts?.replay);
     const outgoing = replay ? trimmed : formatOutgoing(trimmed, attachments);
 
+    // Persona assignment happens when the human message is first ACCEPTED —
+    // including messages queued while a turn runs. The replay drain skips it
+    // (already assigned here) and incoming peer mail never assigns.
+    if (!opts?.incoming && !replay) {
+      const assigned = personaAssignment(trimmed, get().agents);
+      if (assigned) get().setSessionAgent(sessionId, assigned.id);
+    }
+
     if (session.status === "running" && !replay) {
       const hop = opts?.incoming?.hop ?? 0;
       const userMsg: ChatMessage = opts?.incoming
@@ -975,7 +1231,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         sessions: patchSession(s.sessions, sessionId, (ses) => ({
           ...ses,
           updatedAt: Date.now(),
-          queued: [...(ses.queued ?? []), { text: outgoing, incoming: opts?.incoming }].slice(0, 8),
+          queued: [...(ses.queued ?? []), { text: outgoing, incoming: opts?.incoming, msgId: userMsg.id }].slice(0, 8),
           messages: [...ses.messages, userMsg],
         })),
       }));
@@ -1039,6 +1295,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       get().sessions,
       sessionId,
       get().customProviders,
+      get().agents,
     );
     const bus = deskPreamble(sessionId, latest.providerId, roster, {
       skills: addonNames(
@@ -1056,14 +1313,36 @@ export const useHelix = create<HelixState>((set, get) => ({
         get().liveAddons,
       ),
     });
+    // Persona brief for this session, plus notes for other agents @mentioned
+    // in the message ("Get @Ivy-Ben to build X" → where to delegate).
+    const selfAgent = get().agents.find((a) => a.id === latest.agentId);
+    const persona = selfAgent ? `${agentPreamble(selfAgent)}\n` : "";
+    const mentioned = extractMentions(outgoing, get().agents).filter(
+      (m) => m.agent.id !== latest.agentId,
+    );
+    const mentionNotes = mentioned.length
+      ? `${mentioned
+          .map((m) => {
+            const target = roster.find(
+              (r) =>
+                r.agentName === m.agent.name ||
+                get().sessions.find((s) => s.id === r.id)?.agentId === m.agent.id,
+            );
+            return target
+              ? `[@${m.agent.name} — ${m.agent.role} — is running as session ${target.id}. Delegate that part with westcode_send_message to="${target.id}".]`
+              : `[@${m.agent.name} — ${m.agent.role}: ${m.agent.purpose} No session runs this agent yet — tell the user to start one from the Agents menu, or handle only the parts that fit YOUR role.]`;
+          })
+          .join("\n")}\n`
+      : "";
     const wantsReply =
       hop <= 1 || /reply to session|reply to me|message (me|us) back/i.test(outgoing);
     const incomingNote = wantsReply
       ? `Incoming work from another WestCode session. Act on it now. When you finish (or if you are blocked), you MUST call westcode_send_message with to="${opts?.incoming?.fromSessionId}" and a short result — the sender is waiting for your reply.`
       : `Incoming status report from another WestCode session. Read it. Do NOT reply unless it assigns you new work or asks a direct question — a completion report is terminal, and acknowledgment ping-pong wastes both sessions.`;
-    const promptText = opts?.incoming
-      ? `${bus}\n[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n${outgoing}`
-      : `${bus}\n${outgoing}`;
+    const preambleText = opts?.incoming
+      ? `${bus}\n${persona}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
+      : `${bus}\n${persona}${mentionNotes}`;
+    const promptText = `${preambleText}${outgoing}`;
 
     const api = westcode();
     if (!api) {
@@ -1093,14 +1372,88 @@ export const useHelix = create<HelixState>((set, get) => ({
 
     promptAsst.set(sessionId, asstId);
     try {
-      const history = latest.messages
+      const historyRaw = latest.messages
         .filter((m) => m.id !== asstId && (m.role === "user" || m.role === "assistant" || m.role === "agent"))
-        .slice(-16)
+        .slice(-16);
+      const history = historyRaw
         .map((m) => ({
           role: m.role,
           text: blocksToPlain(m.blocks).slice(0, 1500),
         }))
         .filter((m) => m.text.trim());
+
+      // API-only custom providers skip ACP: one OpenAI-compatible
+      // chat/completions call through the main process.
+      const customApi =
+        !provider.builtin && provider.auth === "api"
+          ? get().customProviders.find((c) => c.id === latest.providerId)
+          : undefined;
+      if (customApi) {
+        // `outgoing` is appended as the trailing user message, so drop this
+        // turn's copy from history (it was already added to session.messages
+        // — directly, or by id via the queue that replays it).
+        const apiRows = historyRaw.filter(
+          (m) => m.id !== userMsg?.id && m.id !== opts?.replayOf,
+        );
+        // Persisted queues from before msgId existed replay without an id —
+        // fall back to popping the trailing queued copy by text.
+        if (replay && !opts?.replayOf) {
+          const lastRow = apiRows[apiRows.length - 1];
+          if (
+            lastRow &&
+            lastRow.role !== "assistant" &&
+            blocksToPlain(lastRow.blocks).trim() === trimmed
+          ) {
+            apiRows.pop();
+          }
+        }
+        const res = await api.apiPrompt({
+          endpoint: customApi.endpoint,
+          apiKey: customApi.apiKey || undefined,
+          providerId: customApi.id,
+          model: latest.model || customApi.defaultModel,
+          messages: [
+            { role: "system", text: preambleText },
+            ...apiRows
+              .map((m) => ({
+                role: m.role === "assistant" ? "assistant" : "user",
+                text: blocksToPlain(m.blocks).slice(0, 1500),
+              }))
+              .filter((m) => m.text.trim()),
+            { role: "user", text: outgoing },
+          ].map((m) => ({ role: m.role, content: m.text })),
+        });
+        // Stop or a newer send may have superseded this turn while the HTTP
+        // call was in flight — discard the result instead of writing blocks
+        // or dispatching desk-bus work for a dead turn.
+        if (ac.signal.aborted || abortBySession.get(sessionId) !== ac) return;
+        if (!res.ok || !res.text) {
+          throw new Error(res.error || `${provider.name} failed`);
+        }
+        set((s) => ({
+          sessions: patchSession(s.sessions, sessionId, (ses) => ({
+            ...ses,
+            status: "waiting",
+            updatedAt: Date.now(),
+            messages: ses.messages.map((m) =>
+              m.id === asstId
+                ? {
+                    ...m,
+                    streaming: false,
+                    raw: res.text,
+                    blocks: [{ type: "text" as const, text: res.text! }],
+                  }
+                : m,
+            ),
+          })),
+        }));
+        const sent = extractSendMessages([{ type: "text", text: res.text }]);
+        for (const msg of sent) {
+          get().messageSession(sessionId, msg.to, msg.text, { echo: true });
+        }
+        return;
+      }
+
       const res = await api.prompt({
         sessionId,
         providerId: latest.providerId,
@@ -1112,6 +1465,9 @@ export const useHelix = create<HelixState>((set, get) => ({
         history,
         text: promptText,
       });
+      // Same supersede/abort rule as the HTTP branch: a stopped or replaced
+      // turn must not paint results or dispatch desk-bus work.
+      if (ac.signal.aborted || abortBySession.get(sessionId) !== ac) return;
       if (!res.ok) throw new Error(res.error || `${provider.name} failed`);
       set((s) => ({
         sessions: patchSession(s.sessions, sessionId, (ses) => ({
@@ -1133,6 +1489,9 @@ export const useHelix = create<HelixState>((set, get) => ({
       }
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
+      // A Stop (cancel surfaces as {ok:false}) or a newer turn owns the
+      // session now — do not flicker waiting→error over it.
+      if (ac.signal.aborted || abortBySession.get(sessionId) !== ac) return;
       set((s) => ({
         sessions: patchSession(s.sessions, sessionId, (ses) => ({
           ...ses,
@@ -1155,10 +1514,14 @@ export const useHelix = create<HelixState>((set, get) => ({
         })),
       }));
     } finally {
-      promptAsst.delete(sessionId);
-      abortBySession.delete(sessionId);
+      // A newer send() may own these maps now — only clean up (and drain the
+      // queue) when this turn is still the current one, or a superseded turn
+      // would wipe the live abort handle and double-drain queued messages.
+      const current = abortBySession.get(sessionId) === ac;
+      if (promptAsst.get(sessionId) === asstId) promptAsst.delete(sessionId);
+      if (current) abortBySession.delete(sessionId);
       const ses = get().sessions.find((x) => x.id === sessionId);
-      const next = ses?.queued?.[0];
+      const next = current ? ses?.queued?.[0] : undefined;
       if (next) {
         set((s) => ({
           sessions: patchSession(s.sessions, sessionId, (x) => ({
@@ -1170,6 +1533,7 @@ export const useHelix = create<HelixState>((set, get) => ({
           void get().send(sessionId, next.text, {
             incoming: next.incoming,
             replay: true,
+            replayOf: next.msgId,
           });
         });
       }

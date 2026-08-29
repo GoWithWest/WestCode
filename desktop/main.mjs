@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
@@ -112,6 +113,7 @@ function installMenu() {
         { type: "separator" },
         { label: "Connections", click: () => sendMenu("providers") },
         { label: "Library", click: () => sendMenu("library") },
+        { label: "Agents", click: () => sendMenu("agents") },
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },
@@ -320,6 +322,171 @@ ipcMain.handle("cli:logout", async (_e, providerId) => {
   return { ok: true };
 });
 
+ipcMain.handle("fs:pickFile", async () => {
+  const res = await dialog.showOpenDialog(win, {
+    properties: ["openFile"],
+    filters: [
+      { name: "Skills & configs", extensions: ["md", "json", "yaml", "yml", "toml", "txt"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  if (res.canceled || !res.filePaths[0]) return null;
+  const path = res.filePaths[0];
+  const name = path.split("/").filter(Boolean).pop() || path;
+  let snippet = "";
+  try {
+    const raw = await readFile(path, "utf8");
+    snippet = raw.replace(/^---[\s\S]*?---/, "").replace(/\s+/g, " ").trim().slice(0, 160);
+  } catch {
+    /* binary or unreadable — import by path only */
+  }
+  return { name, path, snippet };
+});
+
+function git(cwd, args) {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, { cwd, env: childEnv() });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.on("error", () => resolve(null));
+    child.on("exit", (code) => resolve(code === 0 ? out.trim() : null));
+  });
+}
+
+ipcMain.handle("git:status", async (_e, cwd) => {
+  const dir = cwd?.startsWith("~/") ? join(homedir(), cwd.slice(2)) : cwd;
+  const branch = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch == null) return { repo: false };
+  const numstat = await git(dir, ["diff", "--numstat", "HEAD"]);
+  let adds = 0;
+  let dels = 0;
+  let files = 0;
+  for (const line of (numstat || "").split("\n")) {
+    const m = /^(\d+|-)\s+(\d+|-)\s+/.exec(line);
+    if (!m) continue;
+    files += 1;
+    adds += m[1] === "-" ? 0 : Number(m[1]);
+    dels += m[2] === "-" ? 0 : Number(m[2]);
+  }
+  const untracked = await git(dir, ["ls-files", "--others", "--exclude-standard"]);
+  files += (untracked || "").split("\n").filter(Boolean).length;
+  const counts = await git(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+  const [behind, ahead] = (counts || "0\t0").split(/\s+/).map((n) => Number(n) || 0);
+  const remote = await git(dir, ["remote", "get-url", "origin"]);
+  return { repo: true, branch, adds, dels, files, ahead, behind, remote: remote || "" };
+});
+
+// Provider API keys live encrypted (Electron safeStorage → OS keychain key)
+// in ~/.westcode/secrets.json, never in renderer localStorage.
+const SECRETS_PATH = join(homedir(), ".westcode", "secrets.json");
+
+/** {ok:false} means the vault exists but is unreadable — never overwrite it. */
+async function readSecrets() {
+  try {
+    const raw = await readFile(SECRETS_PATH, "utf8");
+    return { ok: true, data: JSON.parse(raw) };
+  } catch (err) {
+    if (err?.code === "ENOENT") return { ok: true, data: {} };
+    return { ok: false, data: {} };
+  }
+}
+
+async function writeSecrets(secrets) {
+  const { writeFile: write, mkdir, rename } = await import("node:fs/promises");
+  await mkdir(dirname(SECRETS_PATH), { recursive: true });
+  const tmp = `${SECRETS_PATH}.${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
+  await write(tmp, JSON.stringify(secrets), { mode: 0o600 });
+  await rename(tmp, SECRETS_PATH);
+}
+
+// All vault mutations run on one queue: two overlapping read-modify-write
+// cycles would each read the same snapshot and the later rename would drop
+// the other's key.
+let vaultQueue = Promise.resolve();
+function withVault(fn) {
+  const run = vaultQueue.then(fn, fn);
+  vaultQueue = run.catch(() => {});
+  return run;
+}
+
+ipcMain.handle("secret:set", (_e, { id, value }) =>
+  withVault(async () => {
+    if (!id) return { ok: false, error: "id is required" };
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { ok: false, error: "OS encryption is unavailable." };
+    }
+    const vault = await readSecrets();
+    if (!vault.ok) {
+      return {
+        ok: false,
+        error: `The secret store at ${SECRETS_PATH} is unreadable. Fix or delete it, then retry.`,
+      };
+    }
+    const secrets = vault.data;
+    if (value) {
+      secrets[id] = safeStorage.encryptString(String(value)).toString("base64");
+    } else {
+      delete secrets[id];
+    }
+    try {
+      await writeSecrets(secrets);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    return { ok: true };
+  }),
+);
+
+async function secretFor(id) {
+  if (!id || !safeStorage.isEncryptionAvailable()) return "";
+  const vault = await readSecrets();
+  const raw = vault.data[id];
+  if (!raw) return "";
+  try {
+    return safeStorage.decryptString(Buffer.from(raw, "base64"));
+  } catch {
+    return "";
+  }
+}
+
+ipcMain.handle("api:prompt", async (_e, payload) => {
+  const { endpoint, model, messages, providerId } = payload || {};
+  // The encrypted store wins; a renderer-supplied key is honored only for
+  // providers whose key has not migrated into the vault yet.
+  const apiKey = (await secretFor(providerId)) || payload?.apiKey || "";
+  if (!endpoint || !model || !Array.isArray(messages)) {
+    return { ok: false, error: "endpoint, model, and messages are required." };
+  }
+  try {
+    const base = String(endpoint).replace(/\/+$/, "");
+    const url = /\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 120_000);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      body: JSON.stringify({ model, messages }),
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: data?.error?.message || `${res.status} ${res.statusText}`,
+      };
+    }
+    const text = data?.choices?.[0]?.message?.content ?? "";
+    if (!text) return { ok: false, error: "The endpoint returned no content." };
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle("fs:pickFolder", async () => {
   const res = await dialog.showOpenDialog(win, {
     properties: ["openDirectory", "createDirectory"],
@@ -342,7 +509,14 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
     text,
     history,
   } = payload;
-  const session = ensureSession(
+  // Suppress events from a session that was stopped or replaced — a late
+  // done/error from a cancelled turn must not land on the next turn's stream.
+  let session = null;
+  const emit = (event) => {
+    if (session && (session.stopped || getSession(sessionId) !== session)) return;
+    send(sessionId, event);
+  };
+  session = ensureSession(
     {
       sessionId,
       providerId,
@@ -352,14 +526,14 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
       permissionMode,
       agentSessionId,
     },
-    (event) => send(sessionId, event),
+    emit,
   );
   try {
     await session.prompt(text, history || []);
-    send(sessionId, { type: "done" });
+    emit({ type: "done" });
     return { ok: true };
   } catch (err) {
-    send(sessionId, { type: "error", message: err.message });
+    emit({ type: "error", message: err.message });
     return { ok: false, error: err.message };
   }
 });
