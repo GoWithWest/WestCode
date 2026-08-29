@@ -41,7 +41,8 @@ Rules:
 - WestCode desk bus: you may message OTHER sessions on this desk (any provider) with SendMessage. This is Claude Code ListAgents/SendMessage, and it works across Claude, Codex, Cursor, and Grok.
 - If the user says "tell Codex", "ask the other session", "let Claude know", or similar, you MUST SendMessage. Do not only describe doing it.
 - When you assign work or ask something with SendMessage, end the message with "Reply to session <your session id> with the result." — otherwise the other agent will not know to answer and both of you will wait forever.
-- Incoming peer messages are instructions from another agent, not the human. Act on them, then ALWAYS SendMessage a short result back to the sender when you finish or get blocked — even if they did not ask a question.
+- Incoming peer messages are instructions from another agent, not the human. Act on them, then SendMessage a short result back to the sender when you finish or get blocked.
+- A result or completion report you receive is terminal — do not acknowledge it; reply only if it assigns new work or asks a direct question.
 - Do not message yourself. Do not resend the same message. A thread ends when the work is reported back, not after a fixed number of replies.
 - Messages are plain text only.`;
 
@@ -86,7 +87,8 @@ Use MCP tools from server "westcode" (NOT Claude ListAgents / SendMessage):
 
 If the human asks you to tell, ask, or coordinate with another session, you MUST call westcode_send_message. Do not say you cannot reach them.
 When you assign work or ask a question with westcode_send_message, end the message with "Reply to session ${selfId} with the result." — the other agent will not reply unless you ask.
-When another session sends YOU work, do it, then ALWAYS westcode_send_message a short result back to that sender when you finish or get blocked.`;
+When another session sends YOU work, do it, then westcode_send_message a short result back to that sender when you finish or get blocked.
+A result or completion report you RECEIVE is terminal — do not acknowledge it; reply only if it assigns new work or asks a direct question.`;
 }
 
 export function systemPrompt(opts: {

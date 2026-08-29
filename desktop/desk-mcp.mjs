@@ -5,7 +5,7 @@
  * Reads the roster from disk (sandbox-safe) and writes send requests to an outbox.
  */
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -150,8 +150,20 @@ async function deliver(to, text) {
     }
     await sleep(50);
   }
+  // Tombstone the request so a late pickup cannot race a caller retry. If
+  // the unlink fails with ENOENT the desk already claimed it — the message
+  // is being delivered, so tell the agent not to resend.
+  let claimed = true;
+  try {
+    await unlink(reqPath);
+    claimed = false;
+  } catch {
+    /* already picked up */
+  }
   throw new Error(
-    "WestCode desk did not confirm delivery in time. The message may still arrive — do not resend it; check with westcode_list_sessions instead.",
+    claimed
+      ? "WestCode desk did not confirm delivery in time, but the message was picked up and is likely being delivered. Do not resend it; check with westcode_list_sessions instead."
+      : "WestCode desk did not pick the message up in time; it was withdrawn. You may retry once.",
   );
 }
 

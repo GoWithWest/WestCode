@@ -201,14 +201,25 @@ export async function listAddons(id) {
 
   async function collect(args, kind) {
     const r = await run(path, args, 8000);
-    const text = r.stdout || r.stderr;
-    if (!r.ok) return;
+    // Parse stdout even on a non-zero exit — `claude mcp list` exits 1 when
+    // one server fails its health check but still prints the full table.
+    const text = r.stdout.trim() ? r.stdout : r.stderr;
     if (/^usage:|unknown|unrecognized|invalid/i.test(text.trim())) return;
     for (const line of text.split("\n")) {
       const t = line.trim();
       if (!t || t.startsWith("#") || /^usage:/i.test(t) || /^no /i.test(t)) continue;
-      const name = t.replace(/^[-*\d.\s]+/, "").split(/\s{2,}|\t|:/)[0]?.trim();
-      if (name && name.length < 80 && !/^(list|add|remove|mcp|plugin|options?|commands?|flags?)$/i.test(name)) {
+      // Preamble/header/status noise, not addons.
+      if (/^(checking|fetching|loading|warning|error)\b/i.test(t)) continue;
+      if (/^name\s+(status|command)/i.test(t)) continue;
+      if (/^[-─═]+$/.test(t)) continue;
+      const name = t.replace(/^[-*\d.\s✓✗·]+/, "").split(/\s{2,}|\t|:/)[0]?.trim();
+      if (
+        name &&
+        name.length < 80 &&
+        !/^(list|add|remove|mcp|plugin|options?|commands?|flags?|name|status|connected|disconnected|failed|ok|health)$/i.test(
+          name,
+        )
+      ) {
         push({
           id: `${id}-${kind}-${name}`,
           kind,
