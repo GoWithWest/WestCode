@@ -20,6 +20,9 @@ on:
     # Weekly rebuild so releases pick up fresh dependencies.
     - cron: "0 6 * * 1"
 
+permissions:
+  contents: write
+
 jobs:
   check:
     runs-on: macos-latest
@@ -83,3 +86,14 @@ jobs:
             release/*.dmg
             release/*.zip
           if-no-files-found: error
+      - name: Publish GitHub release
+        if: env.RELEASE_READY == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY"               --title "WestCode $VERSION"               --notes "Signed and notarized macOS build (arm64). Built from $GITHUB_SHA."
+          fi
+          gh release upload "$TAG" release/*.dmg release/*.zip             --repo "$GITHUB_REPOSITORY" --clobber
