@@ -285,9 +285,16 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+let quitFlushed = false;
+app.on("before-quit", (event) => {
   stopAll();
   killAppServer();
+  if (!quitFlushed) {
+    // Let queued state/vault writes land before the process dies.
+    event.preventDefault();
+    quitFlushed = true;
+    Promise.allSettled([stateQueue, vaultQueue]).then(() => app.quit());
+  }
 });
 
 ipcMain.handle("cli:probe", () => probeAll());
@@ -385,12 +392,28 @@ let stateQueue = Promise.resolve();
 async function readStateFile() {
   try {
     return JSON.parse(await readFile(STATE_PATH, "utf8"));
-  } catch {
+  } catch (err) {
+    if (err?.code !== "ENOENT") {
+      // Corrupt file: keep the bytes for recovery instead of letting the
+      // next save overwrite them with an empty object.
+      try {
+        const { rename } = await import("node:fs/promises");
+        await rename(STATE_PATH, `${STATE_PATH}.corrupt-${Date.now()}`);
+      } catch {
+        /* ignore */
+      }
+    }
     return {};
   }
 }
 
-ipcMain.handle("state:load", () => readStateFile());
+// Load runs through the same queue as saves so it can never observe a
+// mid-rename snapshot.
+ipcMain.handle("state:load", () => {
+  const run = stateQueue.then(readStateFile);
+  stateQueue = run.catch(() => {});
+  return run;
+});
 
 ipcMain.handle("state:save", (_e, { key, value }) => {
   const run = stateQueue.then(async () => {

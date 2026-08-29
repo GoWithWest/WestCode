@@ -1,4 +1,4 @@
-import { Blocks, Plus, Settings2, Users } from "lucide-react";
+import { Blocks, Plus, Settings2, Users, X } from "lucide-react";
 import { useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,19 @@ export function Sidebar() {
             {sessions.map((ses) => {
               const active = ses.id === activeId && view === "focus";
               return (
-                <li key={ses.id}>
+                <li key={ses.id} className="group/row relative">
+                  <button
+                    type="button"
+                    aria-label={`Delete ${ses.title}`}
+                    onClick={() => {
+                      if (window.confirm(`Delete session "${ses.title}"?`)) {
+                        useHelix.getState().removeSession(ses.id);
+                      }
+                    }}
+                    className="absolute top-1.5 right-1.5 z-10 rounded p-0.5 text-subtle opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => setActive(ses.id)}

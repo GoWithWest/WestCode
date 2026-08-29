@@ -24,13 +24,13 @@ const TOOLS = [
   {
     name: "westcode_send_message",
     description:
-      "Send a message to another WestCode session on this desk. `to` can be a session id, title, or provider name (claude, grok, codex).",
+      "Send a message to another WestCode session on this desk. `to` can be a session id, title, provider name (claude, grok, codex), or an AGENT name from the desk roster (e.g. Oz, Quinn) — if no session runs that agent yet, WestCode starts one automatically and delivers the message to it.",
     inputSchema: {
       type: "object",
       properties: {
         to: {
           type: "string",
-          description: "Session id, title, or provider (claude / grok / codex)",
+          description: "Session id, title, provider (claude / grok / codex), or agent name (auto-starts a session for that agent when none exists)",
         },
         text: { type: "string", description: "Plain-text message to deliver" },
       },
@@ -106,7 +106,7 @@ function formatSessions(sessions) {
   return others
     .map(
       (s) =>
-        `- ${s.id} · ${s.provider} · ${s.title} · ${s.cwd} · ${s.model} · ${s.status}`,
+        `- ${s.id} · ${s.provider} · ${s.title} · ${s.cwd} · ${s.model} · ${s.status}${s.agentName ? ` · agent: ${s.agentName}` : ""}`,
     )
     .join("\n");
 }

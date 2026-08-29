@@ -83,7 +83,7 @@ ${others}${skills}${connectors}
 
 Use MCP tools from server "westcode" (NOT Claude ListAgents / SendMessage):
 - westcode_list_sessions — live Claude / Grok / Codex sessions on this desk
-- westcode_send_message — deliver a message. to = session id, title, or provider name (grok, claude, codex)
+- westcode_send_message — deliver a message. to = session id, title, provider name (grok, claude, codex), or an AGENT name from the desk (e.g. Oz, Quinn) — if no session runs that agent, WestCode starts one automatically and delivers your message to it
 
 If the human asks you to tell, ask, or coordinate with another session, you MUST call westcode_send_message. Do not say you cannot reach them.
 When you assign work or ask a question with westcode_send_message, end the message with "Reply to session ${selfId} with the result." — the other agent will not reply unless you ask.

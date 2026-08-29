@@ -103,6 +103,7 @@ function norm(s: string) {
 export function matchAgent(
   query: string,
   agents: AgentProfile[],
+  opts?: { minScore?: number },
 ): AgentProfile | undefined {
   const q = norm(query);
   if (!q) return undefined;
@@ -126,7 +127,7 @@ export function matchAgent(
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score);
   const top = scored[0];
-  if (!top) return undefined;
+  if (!top || top.score < (opts?.minScore ?? 0)) return undefined;
   // Ambiguous: another agent matches at the same strength.
   if (scored[1] && scored[1].score === top.score) return undefined;
   return top.a;
