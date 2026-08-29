@@ -66,12 +66,15 @@ const vite = alreadyUp
     });
 
 vite?.on("exit", (code) => {
-  if (code && code !== 0 && electron.exitCode == null) process.exit(code);
+  if (code && code !== 0 && electron?.exitCode == null) process.exit(code);
 });
 
 if (!alreadyUp) await waitForPort(8080);
 
-const electron = spawn(process.execPath, [electronBin, "."], {
+/** @type {import("node:child_process").ChildProcess} */
+let electron;
+
+electron = spawn(process.execPath, [electronBin, "."], {
   cwd: root,
   stdio: "inherit",
   env: {
@@ -83,12 +86,12 @@ const electron = spawn(process.execPath, [electronBin, "."], {
 
 function shutdown() {
   try {
-    electron.kill();
+    electron?.kill();
   } catch {
     /* ignore */
   }
   try {
-    vite.kill();
+    vite?.kill();
   } catch {
     /* ignore */
   }
@@ -105,7 +108,7 @@ process.on("SIGTERM", () => {
 
 electron.on("exit", (code) => {
   try {
-    vite.kill();
+    vite?.kill();
   } catch {
     /* ignore */
   }
