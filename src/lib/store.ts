@@ -22,6 +22,7 @@ import {
   PRESET_AGENTS,
   agentPreamble,
   extractMentions,
+  matchAgent,
   personaAssignment,
   type AgentProfile,
 } from "./agents";
@@ -71,7 +72,12 @@ function mergeAgents(p: AgentsPersist): AgentProfile[] {
     id: a.id,
     builtin: true,
   }));
-  return [...presets, ...p.custom.filter((a) => !removed.has(a.id))];
+  const custom = p.custom
+    .filter((a) => !removed.has(a.id))
+    .map((a) =>
+      a.avatar === "cleo-sam" ? { ...a, avatar: "lib-01" } : a,
+    );
+  return [...presets, ...custom];
 }
 
 async function migrateProviderKey(
@@ -133,6 +139,10 @@ type CreateOpts = {
   permissionMode?: string;
   cwd?: string;
   attachments?: Attachment[];
+  /** Persona to run in the new session (Agents menu id). */
+  agentId?: string;
+  /** Do not steal focus — used when the desk bus spawns a session. */
+  background?: boolean;
 };
 
 export type HelixState = {
@@ -164,8 +174,6 @@ export type HelixState = {
   setMobileNav: (v: "desk" | "sessions") => void;
   tick: () => void;
   restoreState: () => Promise<void>;
-  resetDemo: () => void;
-  finishCodexDemo: () => void;
   refreshCli: () => Promise<void>;
   refreshLibrary: () => Promise<void>;
   refreshUpdates: () => Promise<void>;
@@ -173,7 +181,7 @@ export type HelixState = {
   dismissCliUpdate: (id: string) => void;
   answerPermission: (sessionId: string, optionId: string) => void;
   rememberFolder: (folder: RecentFolder) => void;
-  createSession: (opts: CreateOpts) => void;
+  createSession: (opts: CreateOpts) => string;
   send: (sessionId: string, text: string, opts?: SendOpts) => Promise<void>;
   messageSession: (
     fromId: string,
@@ -193,6 +201,7 @@ export type HelixState = {
   ) => void;
   removeCustomProvider: (id: string) => void;
   renameSession: (id: string, title: string) => void;
+  removeSession: (id: string) => void;
   setSessionCwd: (id: string, cwd: string) => void;
   setSessionAgent: (id: string, agentId: string | undefined) => void;
   addAgent: (a: Omit<AgentProfile, "id" | "builtin"> & { id?: string }) => void;
@@ -269,6 +278,7 @@ function deskRows(
   sessions: Session[],
   custom: CustomProvider[],
 ) {
+  const agents = useHelix.getState().agents;
   return sessions.map((s) => ({
     id: s.id,
     title: s.title,
@@ -277,14 +287,24 @@ function deskRows(
     cwd: s.cwd,
     model: s.model,
     status: s.status,
+    agentName: agents.find((a) => a.id === s.agentId)?.name,
   }));
+}
+
+let persistTimer: number | null = null;
+function persistDeskDebounced() {
+  if (persistTimer != null) return;
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null;
+    persistDesk();
+  }, 800);
 }
 
 function bindDeskPersist() {
   if (deskBound || typeof window === "undefined") return;
   deskBound = true;
   const push = (s: HelixState) => {
-    persistDesk();
+    persistDeskDebounced();
     westcode()?.syncDesk?.(deskRows(s.sessions, s.customProviders));
   };
   push(useHelix.getState());
@@ -556,6 +576,17 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
   }
 }
 
+/**
+ * Providers acp-host can actually spawn (plus renderer-side API providers).
+ * Cursor is listed in the UI but has no spawn branch — auto-spawn falls back
+ * to the first hostable provider rather than creating a session that errors.
+ */
+function spawnableProviderId(providerId: string, state: HelixState): string {
+  if ((PROVIDER_ORDER as readonly string[]).includes(providerId)) return providerId;
+  if (state.customProviders.some((c) => c.id === providerId)) return providerId;
+  return PROVIDER_ORDER[0]!;
+}
+
 let eventsBound = false;
 function bindDesktopEvents() {
   const api = westcode();
@@ -580,16 +611,60 @@ function bindDesktopEvents() {
     }
   });
   api.onDeskDeliver?.((p) => {
-    const deliveredTo = useHelix
-      .getState()
-      .messageSession(p.from, p.to, p.text, { echo: false });
+    const state = useHelix.getState();
+    // Agent-name resolution runs FIRST: the prompts tell agents to address
+    // personas by name, and resolveTarget's title-substring scoring would
+    // otherwise steal that mail for any session whose title contains the
+    // name ("Ask Quinn later" must not swallow to="Quinn").
+    const agent = matchAgent(p.to, state.agents);
+    const sender = state.sessions.find((s) => s.id === p.from);
+    let deliveredTo: string | false = false;
+    let started = "";
+    if (agent) {
+      const existing = state.sessions.find(
+        (s) => s.agentId === agent.id && s.id !== p.from,
+      );
+      if (existing) {
+        deliveredTo = state.messageSession(p.from, existing.id, p.text, {
+          echo: false,
+        });
+      } else if (
+        sender &&
+        // Spawning a real agent process needs a confident match — an exact
+        // name/id/first-name/initials hit, not a 3-letter prefix typo.
+        matchAgent(p.to, state.agents, { minScore: 80 }) &&
+        // Do not spawn a session the hop limit will immediately orphan.
+        (hopBySession.get(p.from) ?? 0) < MAX_HOP
+      ) {
+        const spawnable = spawnableProviderId(sender.providerId, state);
+        const newId = state.createSession({
+          providerId: spawnable,
+          projectId: sender.projectId,
+          cwd: sender.cwd,
+          title: `${agent.name} — ${agent.role}`,
+          agentId: agent.id,
+          background: true,
+        });
+        started = ` (started a new ${agent.name} session)`;
+        // Deliver by the returned id — never back through the fuzzy
+        // resolver, which cannot see e.g. to="reviewer-qa" in the title.
+        deliveredTo = useHelix
+          .getState()
+          .messageSession(p.from, newId, p.text, { echo: false });
+      }
+    }
+    if (!deliveredTo) {
+      deliveredTo = state.messageSession(p.from, p.to, p.text, {
+        echo: false,
+      });
+    }
     api.deskDelivered?.({
       requestId: p.requestId,
       ok: Boolean(deliveredTo),
       error: deliveredTo
         ? undefined
-        : `No session matching “${p.to}”. Try westcode_list_sessions.`,
-      deliveredTo: deliveredTo || undefined,
+        : `No session or agent matching “${p.to}”. Try westcode_list_sessions, or use an agent name from the Agents menu.`,
+      deliveredTo: deliveredTo ? `${deliveredTo}${started}` : undefined,
     });
   });
 }
@@ -659,7 +734,13 @@ export const useHelix = create<HelixState>((set, get) => ({
       ? desk.sessions.map(sanitizeSession)
       : [];
     const live = get().sessions;
-    const sessions = live.length ? live : saved;
+    // Merge, never replace: a session the user created while stateLoad was
+    // in flight must not cause the saved desk to be skipped (and then
+    // overwritten by the next persist).
+    const sessions = [
+      ...live,
+      ...saved.filter((sv) => live.every((l) => l.id !== sv.id)),
+    ];
     set({
       enabledAddons: lib.enabled ?? DEFAULT_ENABLED,
       customAddons: Array.isArray(lib.custom) ? lib.custom : [],
@@ -668,14 +749,15 @@ export const useHelix = create<HelixState>((set, get) => ({
       agents: mergeAgents(agentsPersist),
       providerColors,
       recentFolders: Array.isArray(folders) ? folders : [],
-      ...(live.length
-        ? {}
-        : {
-            sessions,
-            activeId: desk.activeId ?? sessions[0]?.id ?? null,
-            splitIds: desk.splitIds ?? null,
-            view: desk.view ?? (sessions.length ? "focus" : "mosaic"),
-          }),
+      sessions,
+      activeId:
+        (live.length ? get().activeId : desk.activeId) ??
+        sessions[0]?.id ??
+        null,
+      splitIds: live.length ? get().splitIds : (desk.splitIds ?? null),
+      view: live.length
+        ? get().view
+        : (desk.view ?? (sessions.length ? "focus" : "mosaic")),
     });
     bindDeskPersist();
     void get().refreshCli();
@@ -783,18 +865,6 @@ export const useHelix = create<HelixState>((set, get) => ({
     void westcode()?.permission({ sessionId, rpcId, optionId });
   },
 
-  resetDemo: () => {
-    set({
-      sessions: [],
-      activeId: null,
-      splitIds: null,
-      view: "mosaic",
-    });
-    persistDesk();
-  },
-
-  finishCodexDemo: () => {},
-
   rememberFolder: (folder) => {
     const next = [
       folder,
@@ -814,6 +884,8 @@ export const useHelix = create<HelixState>((set, get) => ({
     permissionMode,
     cwd,
     attachments,
+    agentId,
+    background,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
     const project = projectById(projectId);
@@ -833,17 +905,23 @@ export const useHelix = create<HelixState>((set, get) => ({
       updatedAt: Date.now(),
       messages: [],
       turns: 0,
+      agentId,
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
-      activeId: session.id,
-      view: "focus",
-      newOpen: false,
-      mobileNav: "desk",
+      ...(background
+        ? {}
+        : {
+            activeId: session.id,
+            view: "focus" as const,
+            newOpen: false,
+            mobileNav: "desk" as const,
+          }),
     }));
     if (prompt?.trim() || attachments?.length) {
       void get().send(session.id, prompt ?? "", { attachments });
     }
+    return session.id;
   },
 
   setSessionModel: (sessionId, model) => {
@@ -931,6 +1009,24 @@ export const useHelix = create<HelixState>((set, get) => ({
     const list = get().customProviders.filter((c) => c.id !== id);
     persistProviders(list);
     set({ customProviders: list });
+  },
+
+  removeSession: (id) => {
+    void westcode()?.stopSession(id);
+    abortBySession.get(id)?.abort();
+    abortBySession.delete(id);
+    promptAsst.delete(id);
+    set((s) => ({
+      sessions: s.sessions.filter((ses) => ses.id !== id),
+      activeId: s.activeId === id ? null : s.activeId,
+      splitIds:
+        s.splitIds && (s.splitIds[0] === id || s.splitIds[1] === id)
+          ? null
+          : s.splitIds,
+      view:
+        s.activeId === id && s.view === "focus" ? ("mosaic" as const) : s.view,
+    }));
+    persistDesk();
   },
 
   renameSession: (id, title) => {
@@ -1304,7 +1400,7 @@ export const useHelix = create<HelixState>((set, get) => ({
             );
             return target
               ? `[@${m.agent.name} — ${m.agent.role} — is running as session ${target.id}. Delegate that part with westcode_send_message to="${target.id}".]`
-              : `[@${m.agent.name} — ${m.agent.role}: ${m.agent.purpose} No session runs this agent yet — tell the user to start one from the Agents menu, or handle only the parts that fit YOUR role.]`;
+              : `[@${m.agent.name} — ${m.agent.role}: ${m.agent.purpose} No session runs this agent yet — calling westcode_send_message with to="${m.agent.name}" will START one automatically and deliver your message. Delegate; do not do their work yourself.]`;
           })
           .join("\n")}\n`
       : "";
@@ -1347,7 +1443,15 @@ export const useHelix = create<HelixState>((set, get) => ({
     promptAsst.set(sessionId, asstId);
     try {
       const historyRaw = latest.messages
-        .filter((m) => m.id !== asstId && (m.role === "user" || m.role === "assistant" || m.role === "agent"))
+        .filter(
+          (m) =>
+            m.id !== asstId &&
+            // This turn's text travels in promptText; a copy in history makes
+            // acp-host's restored-history banner replay it on fresh spawns.
+            m.id !== userMsg?.id &&
+            m.id !== opts?.replayOf &&
+            (m.role === "user" || m.role === "assistant" || m.role === "agent"),
+        )
         .slice(-16);
       const history = historyRaw
         .map((m) => ({
@@ -1363,12 +1467,7 @@ export const useHelix = create<HelixState>((set, get) => ({
           ? get().customProviders.find((c) => c.id === latest.providerId)
           : undefined;
       if (customApi) {
-        // `outgoing` is appended as the trailing user message, so drop this
-        // turn's copy from history (it was already added to session.messages
-        // — directly, or by id via the queue that replays it).
-        const apiRows = historyRaw.filter(
-          (m) => m.id !== userMsg?.id && m.id !== opts?.replayOf,
-        );
+        const apiRows = [...historyRaw];
         // Persisted queues from before msgId existed replay without an id —
         // fall back to popping the trailing queued copy by text.
         if (replay && !opts?.replayOf) {

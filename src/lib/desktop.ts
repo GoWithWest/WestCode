@@ -133,6 +133,7 @@ type WestcodeBridge = {
     cwd: string;
     model: string;
     status: string;
+    agentName?: string;
   }[]) => void;
   onDeskDeliver: (
     fn: (p: {
