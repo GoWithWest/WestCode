@@ -70,7 +70,7 @@ export type AppSettings = {
   /** Folder prefilled in the New Session dialog. */
   defaultCwd: string;
   /**
-   * Delegated (desk-bus spawned) sessions run in "auto" so an orchestrator's
+   * Delegated (desk-bus spawned) sessions run in Bypass so an orchestrator's
    * hand-offs execute without a human approval per tool call. When off they
    * inherit the sender's permission mode instead.
    */
@@ -381,8 +381,13 @@ function slugId(name: string, taken: Set<string>) {
 // without this, unattended stalls (permission prompts, errors, finished
 // turns) are invisible.
 const notifiedPermission = new Set<string>();
+let notifyPermissionAsked = false;
 function notifyBackground(sessionId: string, title: string, body: string) {
   if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  if (Notification.permission === "default" && !notifyPermissionAsked) {
+    notifyPermissionAsked = true;
+    void Notification.requestPermission();
+  }
   const state = useHelix.getState();
   const focusedElsewhere =
     document.hidden || state.activeId !== sessionId || state.view === "mosaic";
@@ -459,7 +464,11 @@ function resolveTarget(
 ): Session | undefined {
   const q = query.trim().toLowerCase();
   if (!q) return undefined;
-  const others = sessions.filter((s) => s.id !== fromId);
+  // Exact-id targeting may reach an archived session; fuzzy matching and
+  // provider routing must not resurrect one.
+  const others = sessions.filter(
+    (s) => s.id !== fromId && (!s.archivedAt || s.id.toLowerCase() === q),
+  );
   const scored = others
     .map((s) => {
       const short = resolveProvider(s.providerId, custom).short.toLowerCase();
@@ -557,7 +566,11 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     const key = `${sessionId}:${ev.rpcId}`;
     if (!notifiedPermission.has(key)) {
       notifiedPermission.add(key);
-      if (notifiedPermission.size > 200) notifiedPermission.clear();
+      if (notifiedPermission.size > 200) {
+        for (const old of [...notifiedPermission].slice(0, 100)) {
+          notifiedPermission.delete(old);
+        }
+      }
       const ses = useHelix.getState().sessions.find((s) => s.id === sessionId);
       notifyBackground(
         sessionId,
@@ -698,7 +711,7 @@ function bindDesktopEvents() {
     let started = "";
     if (agent) {
       const existing = state.sessions.find(
-        (s) => s.agentId === agent.id && s.id !== p.from,
+        (s) => s.agentId === agent.id && s.id !== p.from && !s.archivedAt,
       );
       if (existing) {
         deliveredTo = state.messageSession(p.from, existing.id, p.text, {
@@ -979,14 +992,19 @@ export const useHelix = create<HelixState>((set, get) => ({
     const project = projectById(projectId);
     const path = cwd?.trim() || settings.defaultCwd || project.path;
     const folderName = path.split("/").filter(Boolean).pop() || "session";
+    // Model/effort defaults are only meaningful for the provider they were
+    // chosen for — a saved grok-4.6 must never seed a Claude session.
+    const scoped = settings.defaultProviderId === providerId;
     const session: Session = {
       id: uid("ses"),
       title: title?.trim() || folderName,
       providerId,
       projectId,
       cwd: path,
-      model: model ?? (settings.defaultModel || p.defaultModel),
-      effort: effort ?? (settings.defaultEffort || defaultEffortFor(providerId)),
+      model: model ?? ((scoped && settings.defaultModel) || p.defaultModel),
+      effort:
+        effort ??
+        ((scoped && settings.defaultEffort) || defaultEffortFor(providerId)),
       permissionMode:
         permissionMode || settings.defaultPermissionMode || DEFAULT_PERMISSION,
       status: "idle",
@@ -1101,14 +1119,30 @@ export const useHelix = create<HelixState>((set, get) => ({
   },
 
   archiveSession: (id, archived) => {
-    set((s) => ({
-      sessions: patchSession(s.sessions, id, (ses) => ({
+    set((s) => {
+      const sessions = patchSession(s.sessions, id, (ses) => ({
         ...ses,
         archivedAt: archived ? Date.now() : undefined,
         updatedAt: Date.now(),
-      })),
-      activeId: archived && s.activeId === id ? null : s.activeId,
-    }));
+      }));
+      const nextActive =
+        archived && s.activeId === id
+          ? (sessions.find((x) => !x.archivedAt)?.id ?? null)
+          : s.activeId;
+      const splitHit =
+        s.splitIds && (s.splitIds[0] === id || s.splitIds[1] === id);
+      return {
+        sessions,
+        activeId: nextActive,
+        splitIds: archived && splitHit ? null : s.splitIds,
+        view:
+          archived && s.activeId === id && s.view === "focus" && !nextActive
+            ? ("mosaic" as const)
+            : archived && splitHit && s.view === "split"
+              ? ("mosaic" as const)
+              : s.view,
+      };
+    });
     persistDesk();
   },
 
@@ -1628,6 +1662,7 @@ export const useHelix = create<HelixState>((set, get) => ({
             ),
           })),
         }));
+        notifyBackground(sessionId, `${latest.title} finished`, res.text);
         const sent = extractSendMessages([{ type: "text", text: res.text }]);
         for (const msg of sent) {
           get().messageSession(sessionId, msg.to, msg.text, { echo: true });

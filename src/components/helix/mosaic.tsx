@@ -3,7 +3,7 @@ import { useHelix } from "@/lib/store";
 import { SessionCard } from "./session-pane";
 
 export function Mosaic() {
-  const sessions = useHelix((s) => s.sessions);
+  const sessions = useHelix((s) => s.sessions).filter((x) => !x.archivedAt);
   const setActive = useHelix((s) => s.setActive);
   const setNewOpen = useHelix((s) => s.setNewOpen);
 

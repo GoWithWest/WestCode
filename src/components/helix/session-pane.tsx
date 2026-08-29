@@ -214,10 +214,13 @@ function ResumeButton({ session }: { session: Session }) {
           ? "codex"
           : null;
   if (!bin) return null;
-  const resume = session.agentSessionId
-    ? `${bin} --resume ${session.agentSessionId}`
-    : `${bin} --resume`;
-  const cmd = `cd ${session.cwd} && ${resume}`;
+  const resume =
+    bin === "codex"
+      ? `codex resume${session.agentSessionId ? ` ${session.agentSessionId}` : ""}`
+      : session.agentSessionId
+        ? `${bin} --resume ${session.agentSessionId}`
+        : `${bin} --resume`;
+  const cmd = `cd ${JSON.stringify(session.cwd)} && ${resume}`;
   return (
     <button
       type="button"

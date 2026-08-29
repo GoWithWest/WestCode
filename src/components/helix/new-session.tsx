@@ -27,13 +27,14 @@ export function NewSessionDialog() {
   const [projectId, setProjectId] = useState("scratch");
   const [cwd, setCwd] = useState(settings.defaultCwd);
   const [title, setTitle] = useState("");
+  const scoped = settings.defaultProviderId === initialProvider;
   const [model, setModel] = useState(
-    settings.defaultModel ||
+    (scoped && settings.defaultModel) ||
       list.find((p) => p.id === initialProvider)?.defaultModel ||
       "grok-4.6",
   );
   const [effort, setEffort] = useState(
-    settings.defaultEffort || defaultEffortFor(initialProvider),
+    (scoped && settings.defaultEffort) || defaultEffortFor(initialProvider),
   );
 
   // Re-seed from Settings each time the dialog opens.
@@ -46,9 +47,10 @@ export function NewSessionDialog() {
       "grok";
     setProviderId(id);
     const p = list.find((x) => x.id === id);
-    setModel(settings.defaultModel || p?.defaultModel || "");
-    setEffort(settings.defaultEffort || defaultEffortFor(id));
-    if (!cwd.trim() && settings.defaultCwd) setCwd(settings.defaultCwd);
+    const match = settings.defaultProviderId === id;
+    setModel((match && settings.defaultModel) || p?.defaultModel || "");
+    setEffort((match && settings.defaultEffort) || defaultEffortFor(id));
+    if (settings.defaultCwd) setCwd(settings.defaultCwd);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 

@@ -52,12 +52,13 @@ export function HelixApp() {
     };
   }, [tick, restoreState]);
 
+  const liveSessions = sessions.filter((s) => !s.archivedAt);
   const active =
-    sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+    sessions.find((s) => s.id === activeId) ?? liveSessions[0] ?? null;
   const left =
-    sessions.find((s) => s.id === splitIds?.[0]) ?? sessions[0] ?? null;
+    sessions.find((s) => s.id === splitIds?.[0]) ?? liveSessions[0] ?? null;
   const right =
-    sessions.find((s) => s.id === splitIds?.[1]) ?? sessions[1] ?? null;
+    sessions.find((s) => s.id === splitIds?.[1]) ?? liveSessions[1] ?? null;
 
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden bg-window text-foreground">
