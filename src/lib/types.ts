@@ -89,6 +89,8 @@ export type Session = {
   agentSessionId?: string;
   /** Persona from the Agents menu ("You are @Oz" assigns it). */
   agentId?: string;
+  /** Hidden from the default sidebar list; restorable. */
+  archivedAt?: number;
 };
 
 export type IncomingRef = {

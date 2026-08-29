@@ -136,11 +136,29 @@ export function SettingsView() {
             />
             <span className="text-xs leading-relaxed text-muted-foreground">
               <span className="font-medium text-foreground">
-                Delegated sessions run without approval prompts.
+                Delegated sessions skip approval prompts (Bypass).
               </span>{" "}
               When an orchestrator hands work to another agent, the spawned
-              session runs in Auto so it can execute tools immediately. Turn
+              session runs in Bypass so every tool executes immediately. Turn
               off to make it inherit the sender's permission mode instead.
+            </span>
+          </label>
+        </section>
+
+        <section className="mt-4 rounded-lg border border-border bg-surface p-4">
+          <h3 className="text-sm font-medium">Transcript</h3>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={settings.transcriptCompact}
+              onChange={(e) => update({ transcriptCompact: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">
+                Compact transcripts.
+              </span>{" "}
+              Tighter message layout in every session view, not just split.
             </span>
           </label>
         </section>
