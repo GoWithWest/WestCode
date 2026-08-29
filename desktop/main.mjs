@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -261,6 +261,17 @@ app.whenReady().then(async () => {
     return { ok: true, deliveredTo: delivered.deliveredTo };
   });
   installMenu();
+  // Quick entry: summon WestCode and open the New Session dialog from
+  // anywhere (mirrors the desktop-assistant global-hotkey pattern).
+  globalShortcut.register("CommandOrControl+Shift+Space", () => {
+    if (!win || win.isDestroyed()) {
+      void createWindow();
+      return;
+    }
+    win.show();
+    win.focus();
+    sendMenu("new");
+  });
   void createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
@@ -287,6 +298,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  globalShortcut.unregisterAll();
   stopAll();
   killAppServer();
 });
