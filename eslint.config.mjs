@@ -11,6 +11,7 @@ export default tseslint.config(
     ignores: [
       "dist/**",
       "release/**",
+      "**/._*",
       ".output/**",
       ".vercel/**",
       ".nitro/**",
