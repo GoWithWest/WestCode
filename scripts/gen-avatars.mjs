@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * Generate the flat "animation-style" SVG avatar set into public/avatars/.
+ * Generate the flat library SVG avatars (lib-01..lib-12) into public/avatars/.
  * Deterministic: same input → same file, so re-running never churns git.
- * Used as the built-in avatar library; raster art can replace individual
- * files later without touching the app (same filenames win).
+ *
+ * Roster portraits (avery, beck, sable, quinn, lennox, oz, cleo-sam) are
+ * hand-authored raster-in-SVG files. Do not write those filenames here —
+ * same path would clobber the photoreal art.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -72,20 +74,6 @@ function avatar({ bg, skin, hair, shirt, style, glasses, mouthKind, headset }) {
 </svg>\n`;
 }
 
-const NAMED = {
-  "petra-axel": { bg: BG[0], skin: SKIN[0], hair: HAIR[1], shirt: SHIRT[0], style: "bun", glasses: true, mouthKind: "smile" },
-  "ivy-ben": { bg: BG[2], skin: SKIN[2], hair: HAIR[0], shirt: SHIRT[1], style: "short", glasses: false, mouthKind: "smile" },
-  "billie-wren": { bg: BG[3], skin: SKIN[1], hair: HAIR[6], shirt: SHIRT[4], style: "bun", glasses: false, mouthKind: "open" },
-  "rhea-quinn": { bg: BG[4], skin: SKIN[3], hair: HAIR[7], shirt: SHIRT[2], style: "long", glasses: true, mouthKind: "smile" },
-  "rita-dean": { bg: BG[5], skin: SKIN[4], hair: HAIR[0], shirt: SHIRT[3], style: "curly", glasses: true, mouthKind: "smile" },
-  "olive-rex": { bg: BG[1], skin: SKIN[5], hair: HAIR[2], shirt: SHIRT[5], style: "swoop", glasses: false, mouthKind: "open", headset: true },
-  "cleo-sam": { bg: BG[7], skin: SKIN[2], hair: HAIR[5], shirt: SHIRT[0], style: "short", glasses: false, mouthKind: "smile" },
-};
-
-for (const [id, cfg] of Object.entries(NAMED)) {
-  writeFileSync(join(out, `${id}.svg`), avatar(cfg));
-}
-
 const styles = Object.keys(HAIRSTYLES);
 for (let i = 0; i < 12; i++) {
   const cfg = {
@@ -101,4 +89,4 @@ for (let i = 0; i < 12; i++) {
   writeFileSync(join(out, `lib-${String(i + 1).padStart(2, "0")}.svg`), avatar(cfg));
 }
 
-console.log(`Wrote ${Object.keys(NAMED).length + 12} avatars to ${out}`);
+console.log(`Wrote 12 library avatars to ${out} (roster portraits left untouched)`);
