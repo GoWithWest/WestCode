@@ -31,10 +31,9 @@ Login opens Terminal so each CLI completes its own browser OAuth — WestCode ne
 npm install
 npm run app        # Vite dev server on :8080 + Electron shell
 npm run dev        # web preview only (no CLI spawning in a browser)
-npm test           # node --test suites
 npm run dist       # signed DMG/ZIP into release/ (Developer ID cert required)
 ```
 
-CI (`.github/workflows/build.yml`) typechecks, lints, tests, then builds a **signed + notarized + stapled** DMG/ZIP on every push to main and publishes it to GitHub Releases (requires the `MAC_CERT_P12`/`APPLE_API_*` repo secrets; unsigned dev artifact otherwise).
+CI (`.github/workflows/build.yml`) typechecks, lints, then builds a **signed + notarized + stapled** DMG/ZIP on every push to main and publishes it to GitHub Releases (requires the `MAC_CERT_P12`/`APPLE_API_*` repo secrets; unsigned dev artifact otherwise).
 
 Note: building from a folder synced by iCloud/cloud file providers breaks codesign (`com.apple.provenance` stamping) — `npm run dist` therefore packages via `/tmp/westcode-release` and copies the DMG/ZIP back.
