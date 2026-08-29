@@ -122,14 +122,22 @@ export function extractSendMessages(blocks: Block[]) {
     .filter((s) => s.to && s.text);
   if (fromTools.length) return fromTools;
 
+  // A westcode_* tool block means the message already went out over the MCP
+  // desk bus. Parsing the surrounding narration ("I sent it with
+  // westcode_send_message to=grok …") would deliver the same task twice.
+  const deliveredViaMcp = blocks.some(
+    (b) => b.type === "tool" && /^westcode_send_message$/i.test(b.name),
+  );
+  if (deliveredViaMcp) return [];
+
   const plain = blocksToPlain(blocks);
   const out: { to: string; text: string }[] = [];
   const xml =
     /<tool\s+name="SendMessage"\s+to="([^"]+)">([\s\S]*?)<\/tool>/gi;
   const fence =
-    /westcode_send_message\s+(?:to[=:\s]+)([^\s\n]+)[\s\n]+([\s\S]+?)(?=\nwestcode_send_message|\s*$)/gi;
+    /^\s*westcode_send_message\s+(?:to[=:\s]+)([^\s\n]+)[\s\n]+([\s\S]+?)(?=\nwestcode_send_message|\s*$)/gim;
   const legacy =
-    /SendMessage\s+(?:to[=:\s"]+)([a-z0-9._-]+)["']?\s*\n+([\s\S]+?)(?=\nSendMessage\s+to|\s*$)/gi;
+    /^\s*SendMessage\s+(?:to[=:\s"]+)([a-z0-9._-]+)["']?\s*\n+([\s\S]+?)(?=\nSendMessage\s+to|\s*$)/gim;
   let m: RegExpExecArray | null;
   for (const re of [xml, fence, legacy]) {
     re.lastIndex = 0;
