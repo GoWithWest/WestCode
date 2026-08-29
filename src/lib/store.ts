@@ -75,6 +75,8 @@ export type AppSettings = {
    * inherit the sender's permission mode instead.
    */
   delegatedAuto: boolean;
+  /** Render transcripts in the tighter compact layout everywhere. */
+  transcriptCompact: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -84,6 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultPermissionMode: DEFAULT_PERMISSION,
   defaultCwd: "",
   delegatedAuto: true,
+  transcriptCompact: false,
 };
 
 type AgentsPersist = {
@@ -231,6 +234,7 @@ export type HelixState = {
   removeCustomProvider: (id: string) => void;
   renameSession: (id: string, title: string) => void;
   removeSession: (id: string) => void;
+  archiveSession: (id: string, archived: boolean) => void;
   setSessionCwd: (id: string, cwd: string) => void;
   setSessionAgent: (id: string, agentId: string | undefined) => void;
   addAgent: (a: Omit<AgentProfile, "id" | "builtin"> & { id?: string }) => void;
@@ -371,6 +375,23 @@ function slugId(name: string, taken: Set<string>) {
   let i = 2;
   while (taken.has(`${base}-${i}`)) i += 1;
   return `${base}-${i}`;
+}
+
+// One OS notification per event for sessions the user is not looking at —
+// without this, unattended stalls (permission prompts, errors, finished
+// turns) are invisible.
+const notifiedPermission = new Set<string>();
+function notifyBackground(sessionId: string, title: string, body: string) {
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  const state = useHelix.getState();
+  const focusedElsewhere =
+    document.hidden || state.activeId !== sessionId || state.view === "mosaic";
+  if (!focusedElsewhere) return;
+  try {
+    new Notification(title, { body: body.slice(0, 160), silent: false });
+  } catch {
+    /* notifications unavailable */
+  }
 }
 
 function systemNote(text: string): ChatMessage {
@@ -533,6 +554,17 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       permission: { rpcId: ev.rpcId!, tool: ev.tool || "tool", options: ev.options || [] },
       updatedAt: Date.now(),
     }));
+    const key = `${sessionId}:${ev.rpcId}`;
+    if (!notifiedPermission.has(key)) {
+      notifiedPermission.add(key);
+      if (notifiedPermission.size > 200) notifiedPermission.clear();
+      const ses = useHelix.getState().sessions.find((s) => s.id === sessionId);
+      notifyBackground(
+        sessionId,
+        `${ses?.title ?? "Session"} needs approval`,
+        `Wants to run ${ev.tool || "a tool"}.`,
+      );
+    }
     return;
   }
   if (ev.type === "thought" && ev.text) {
@@ -685,10 +717,11 @@ function bindDesktopEvents() {
           title: `${agent.name} — ${agent.role}`,
           agentId: agent.id,
           background: true,
-          // Delegated work must not stall on approval prompts: run in auto
-          // (setting, default on) or inherit whatever the sender runs in.
+          // Delegated work must not stall on approval prompts: Bypass skips
+          // them entirely (acp-host maps it to bypassPermissions /
+          // --always-approve); off = inherit whatever the sender runs in.
           permissionMode: state.settings.delegatedAuto
-            ? "auto"
+            ? "bypass"
             : sender.permissionMode,
         });
         started = ` (started a new ${agent.name} session)`;
@@ -1065,6 +1098,18 @@ export const useHelix = create<HelixState>((set, get) => ({
     const list = get().customProviders.filter((c) => c.id !== id);
     persistProviders(list);
     set({ customProviders: list });
+  },
+
+  archiveSession: (id, archived) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, id, (ses) => ({
+        ...ses,
+        archivedAt: archived ? Date.now() : undefined,
+        updatedAt: Date.now(),
+      })),
+      activeId: archived && s.activeId === id ? null : s.activeId,
+    }));
+    persistDesk();
   },
 
   removeSession: (id) => {
@@ -1615,6 +1660,13 @@ export const useHelix = create<HelixState>((set, get) => ({
           ),
         })),
       }));
+      notifyBackground(
+        sessionId,
+        `${latest.title} finished`,
+        blocksToPlain(
+          get().sessions.find((x) => x.id === sessionId)?.messages.find((m) => m.id === asstId)?.blocks ?? [],
+        ) || "Turn complete.",
+      );
       const asst = get()
         .sessions.find((x) => x.id === sessionId)
         ?.messages.find((m) => m.id === asstId);
@@ -1649,6 +1701,11 @@ export const useHelix = create<HelixState>((set, get) => ({
           ),
         })),
       }));
+      notifyBackground(
+        sessionId,
+        `${latest.title} hit an error`,
+        (err as Error).message,
+      );
     } finally {
       // A newer send() may own these maps now — only clean up (and drain the
       // queue) when this turn is still the current one, or a superseded turn

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Blocks, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { Archive, ArchiveRestore, Blocks, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
 import { useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -16,15 +16,18 @@ export function Sidebar() {
   const setNewOpen = useHelix((s) => s.setNewOpen);
   const providers = useAllProviders();
   const [query, setQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const q = query.trim().toLowerCase();
+  const pool = sessions.filter((s) => showArchived || !s.archivedAt);
+  const archivedCount = sessions.filter((s) => s.archivedAt).length;
   const visible = q
-    ? sessions.filter(
+    ? pool.filter(
         (s) =>
           s.title.toLowerCase().includes(q) ||
           s.providerId.toLowerCase().includes(q) ||
           s.cwd.toLowerCase().includes(q),
       )
-    : sessions;
+    : pool;
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-surface md:w-60">
@@ -63,6 +66,20 @@ export function Sidebar() {
                 <li key={ses.id} className="group/row relative">
                   <button
                     type="button"
+                    aria-label={ses.archivedAt ? `Restore ${ses.title}` : `Archive ${ses.title}`}
+                    onClick={() =>
+                      useHelix.getState().archiveSession(ses.id, !ses.archivedAt)
+                    }
+                    className="absolute top-1.5 right-6 z-10 rounded p-0.5 text-subtle opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-foreground"
+                  >
+                    {ses.archivedAt ? (
+                      <ArchiveRestore className="size-3" />
+                    ) : (
+                      <Archive className="size-3" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
                     aria-label={`Delete ${ses.title}`}
                     onClick={() => {
                       if (window.confirm(`Delete session "${ses.title}"?`)) {
@@ -98,6 +115,17 @@ export function Sidebar() {
             })}
           </ul>
         )}
+        {archivedCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowArchived((v) => !v)}
+            className="mt-1 w-full px-2.5 py-1 text-left text-2xs text-subtle hover:text-foreground"
+          >
+            {showArchived
+              ? "Hide archived"
+              : `${archivedCount} archived — show`}
+          </button>
+        ) : null}
       </nav>
       <div className="border-t border-border p-2">
         <p className="px-2 pb-1.5 text-2xs font-medium tracking-wide text-subtle uppercase">

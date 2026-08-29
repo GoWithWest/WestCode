@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Folder, GitBranch, Pencil } from "lucide-react";
+import { Download, Folder, GitBranch, Pencil, Terminal } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -19,6 +19,7 @@ export function SessionPane({
   compact?: boolean;
 }) {
   const setActive = useHelix((s) => s.setActive);
+  const compactPref = useHelix((s) => s.settings.transcriptCompact);
   const provider = useResolvedProvider(session.providerId);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -42,6 +43,7 @@ export function SessionPane({
             <CwdPicker session={session} />
             <GitChip session={session} />
             <ExportButton session={session} />
+            <ResumeButton session={session} />
           </div>
         </div>
       </header>
@@ -58,7 +60,7 @@ export function SessionPane({
             effort={effortLabel(session.providerId, session.effort)}
           />
         ) : (
-          <MessageList messages={session.messages} compact={compact} />
+          <MessageList messages={session.messages} compact={compact || compactPref} />
         )}
       </div>
 
@@ -197,6 +199,38 @@ function ExportButton({ session }: { session: Session }) {
     >
       <Download className="size-3" />
       Export
+    </button>
+  );
+}
+
+function ResumeButton({ session }: { session: Session }) {
+  const [copied, setCopied] = useState(false);
+  const bin =
+    session.providerId === "grok"
+      ? "grok"
+      : session.providerId === "claude"
+        ? "claude"
+        : session.providerId === "codex"
+          ? "codex"
+          : null;
+  if (!bin) return null;
+  const resume = session.agentSessionId
+    ? `${bin} --resume ${session.agentSessionId}`
+    : `${bin} --resume`;
+  const cmd = `cd ${session.cwd} && ${resume}`;
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard.writeText(cmd);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      }}
+      className="inline-flex items-center gap-1 hover:text-foreground"
+      title={`Copy: ${cmd}`}
+    >
+      <Terminal className="size-3" />
+      {copied ? "Copied" : "Terminal"}
     </button>
   );
 }
