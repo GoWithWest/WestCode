@@ -7,12 +7,12 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const AVATAR_LIBRARY = [
-  "petra-axel",
-  "ivy-ben",
-  "billie-wren",
-  "rhea-quinn",
-  "rita-dean",
-  "olive-rex",
+  "avery",
+  "beck",
+  "sable",
+  "quinn",
+  "lennox",
+  "oz",
   "cleo-sam",
   ...Array.from({ length: 12 }, (_, i) => `lib-${String(i + 1).padStart(2, "0")}`),
 ];
@@ -36,9 +36,9 @@ export function AgentsView() {
             <h2 className="text-lg font-medium tracking-tight">Agents</h2>
             <p className="mt-1 max-w-lg text-sm leading-relaxed text-muted-foreground">
               Personas for your sessions. Say{" "}
-              <span className="font-mono text-xs">You are @Cleo-Sam</span> in a
+              <span className="font-mono text-xs">You are @Oz</span> in a
               session to assign one, or tag teammates like{" "}
-              <span className="font-mono text-xs">@Ivy-Ben</span> to delegate
+              <span className="font-mono text-xs">@Beck</span> to delegate
               work across the desk.
             </p>
           </div>
@@ -64,7 +64,7 @@ export function AgentsView() {
               <img
                 src={`/avatars/${a.avatar}.svg`}
                 alt=""
-                className="size-14 shrink-0 rounded-full border border-border"
+                className="size-14 shrink-0 rounded-full border border-border object-cover"
               />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-2">
@@ -179,13 +179,13 @@ function AgentDialog({
                   avatar === id ? "border-accent" : "border-transparent",
                 )}
               >
-                <img src={`/avatars/${id}.svg`} alt="" className="size-9 rounded-full" />
+                <img src={`/avatars/${id}.svg`} alt="" className="size-9 rounded-full object-cover" />
               </button>
             ))}
           </div>
 
-          <Field label="Name" value={name} onChange={setName} placeholder="Dana-Elizabeth" />
-          <Field label="Role" value={role} onChange={setRole} placeholder="Data Engineer" />
+          <Field label="Name" value={name} onChange={setName} placeholder="Avery" />
+          <Field label="Role" value={role} onChange={setRole} placeholder="Architect" />
           <Field
             label="Purpose"
             value={purpose}
