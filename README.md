@@ -22,7 +22,7 @@ Login opens Terminal so each CLI completes its own browser OAuth — WestCode ne
 
 - **Sessions** for any provider, in mosaic, focus, or split view. Rename them, switch their working directory, and watch the live **git chip** (branch, +/− lines, ahead/behind, PR link).
 - **Desk bus**: sessions message each other across providers (`/msg`, or just ask an agent to "tell Codex…"). Assignments carry an explicit reply-to contract so agents report back instead of waiting on each other.
-- **Agents**: preset personas (Petra-Axel the Planner/Architect, Ivy-Ben, Billie-Wren, Rhea-Quinn, Rita-Dean, Olive-Rex, Cleo-Sam the Chief of Staff) with avatars — editable, deletable, or make your own. Say `You are @Cleo-Sam` in a session to assign one; tag `@Ivy-Ben` to delegate.
+- **Agents**: preset personas (Avery the Architect, Beck the Builder, Sable the Swarm, Quinn the QA, Lennox the Lore, Oz the Orchestrator) with avatars — editable, deletable, or make your own. Say `You are @Oz` in a session to assign one; tag `@Beck` to delegate.
 - **Library**: skills, plugins, and MCP connectors read live from each CLI (`~/.claude`, `~/.grok`, `~/.codex`), filterable by provider and kind; import from a repo or a local file.
 
 ## Develop

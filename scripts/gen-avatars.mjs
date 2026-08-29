@@ -3,7 +3,7 @@
  * Generate the flat library SVG avatars (lib-01..lib-12) into public/avatars/.
  * Deterministic: same input → same file, so re-running never churns git.
  *
- * Roster portraits (avery, beck, sable, quinn, lennox, oz, cleo-sam) are
+ * Roster portraits (avery, beck, sable, quinn, lennox, oz) are
  * hand-authored raster-in-SVG files. Do not write those filenames here —
  * same path would clobber the photoreal art.
  */
