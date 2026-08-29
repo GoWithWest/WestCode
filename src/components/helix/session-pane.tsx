@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
-import { Folder } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Folder, GitBranch, Pencil } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
+import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { lastSnippet } from "@/lib/parse-agent";
@@ -30,27 +31,18 @@ export function SessionPane({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-window">
       <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <button
-          type="button"
-          onClick={() => setActive(session.id)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-        >
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h2 className="truncate text-sm font-medium tracking-tight">
-                {session.title}
-              </h2>
-              <StatusLabel status={session.status} />
-            </div>
-            <div className="mt-0.5 flex items-center gap-2 text-2xs text-muted-foreground">
-              <ProviderChip id={session.providerId} />
-              <span className="inline-flex items-center gap-1 truncate">
-                <Folder className="size-3" />
-                {session.cwd}
-              </span>
-            </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <SessionTitle session={session} onFocus={() => setActive(session.id)} />
+            <StatusLabel status={session.status} />
           </div>
-        </button>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-2xs text-muted-foreground">
+            <ProviderChip id={session.providerId} />
+            <AgentBadge session={session} />
+            <CwdPicker session={session} />
+            <GitChip session={session} />
+          </div>
+        </div>
       </header>
 
       <div
@@ -109,6 +101,166 @@ export function SessionPane({
 
       <Composer key={session.id} session={session} />
     </section>
+  );
+}
+
+function SessionTitle({
+  session,
+  onFocus,
+}: {
+  session: Session;
+  onFocus: () => void;
+}) {
+  const rename = useHelix((s) => s.renameSession);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(session.title);
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          rename(session.id, draft);
+          setEditing(false);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            rename(session.id, draft);
+            setEditing(false);
+          }
+          if (e.key === "Escape") setEditing(false);
+        }}
+        className="h-6 min-w-0 flex-1 rounded-md border border-border bg-window px-1.5 text-sm font-medium outline-none focus:ring-1 focus:ring-ring"
+      />
+    );
+  }
+  return (
+    <span className="group/title flex min-w-0 items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onFocus}
+        onDoubleClick={() => {
+          setDraft(session.title);
+          setEditing(true);
+        }}
+        className="truncate text-left text-sm font-medium tracking-tight"
+        title="Double-click to rename"
+      >
+        {session.title}
+      </button>
+      <button
+        type="button"
+        aria-label="Rename session"
+        onClick={() => {
+          setDraft(session.title);
+          setEditing(true);
+        }}
+        className="text-subtle opacity-0 transition-opacity group-hover/title:opacity-100 hover:text-foreground"
+      >
+        <Pencil className="size-3" />
+      </button>
+    </span>
+  );
+}
+
+function AgentBadge({ session }: { session: Session }) {
+  const agents = useHelix((s) => s.agents);
+  const agent = agents.find((a) => a.id === session.agentId);
+  if (!agent) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs font-medium">
+      <img
+        src={`/avatars/${agent.avatar}.svg`}
+        alt=""
+        className="size-3.5 rounded-full"
+      />
+      {agent.name}
+    </span>
+  );
+}
+
+function CwdPicker({ session }: { session: Session }) {
+  const setCwd = useHelix((s) => s.setSessionCwd);
+  const api = westcode();
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        if (!api?.pickFolder) return;
+        const folder = await api.pickFolder();
+        if (folder) setCwd(session.id, folder.path);
+      }}
+      className="inline-flex min-w-0 items-center gap-1 truncate hover:text-foreground"
+      title={api?.pickFolder ? "Change working directory" : session.cwd}
+    >
+      <Folder className="size-3 shrink-0" />
+      <span className="truncate">{session.cwd}</span>
+    </button>
+  );
+}
+
+function GitChip({ session }: { session: Session }) {
+  const [git, setGit] = useState<GitStatus | null>(null);
+  const api = westcode();
+  const status = session.status;
+  const cwd = session.cwd;
+
+  useEffect(() => {
+    if (!api?.gitStatus) return;
+    let dead = false;
+    const refresh = () => {
+      api
+        .gitStatus(cwd)
+        .then((g) => {
+          if (!dead) setGit(g);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 20_000);
+    return () => {
+      dead = true;
+      window.clearInterval(timer);
+    };
+    // re-poll when a turn finishes so fresh edits show up quickly
+  }, [api, cwd, status]);
+
+  if (!git?.repo) return null;
+  // Normalize every GitHub remote shape (https, git@:, ssh://git@,
+  // ssh.github.com, org-scoped scp) to https://github.com/owner/repo.
+  const gh = /(?:^|@|\/\/)(?:ssh\.)?github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?$/.exec(
+    git.remote ?? "",
+  );
+  const compare = gh
+    ? `https://github.com/${gh[1]}/compare/${encodeURIComponent(git.branch ?? "")}?expand=1`
+    : null;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs">
+      <GitBranch className="size-3" />
+      <span className="max-w-28 truncate font-medium">{git.branch}</span>
+      {git.files ? (
+        <span className="tabular-nums">
+          <span className="text-claude">+{git.adds}</span>{" "}
+          <span className="text-danger">−{git.dels}</span>
+        </span>
+      ) : (
+        <span className="text-subtle">clean</span>
+      )}
+      {git.ahead ? <span className="text-subtle">↑{git.ahead}</span> : null}
+      {git.behind ? <span className="text-subtle">↓{git.behind}</span> : null}
+      {compare && (git.ahead || git.files) ? (
+        <a
+          href={compare}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-accent hover:underline"
+        >
+          PR
+        </a>
+      ) : null}
+    </span>
   );
 }
 

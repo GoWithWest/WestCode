@@ -6,6 +6,7 @@ import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { HelixMark } from "./mark";
+import { AgentsView } from "./agents-view";
 import { LibraryView } from "./library-view";
 import { Mosaic } from "./mosaic";
 import { NewSessionDialog } from "./new-session";
@@ -36,6 +37,7 @@ export function HelixApp() {
       if (action === "new") state.setNewOpen(true);
       else if (action === "mosaic") state.setView("mosaic");
       else if (action === "library") state.setView("library");
+      else if (action === "agents") state.setView("agents");
       else if (action === "providers") state.setView("providers");
       else if (action === "focus") {
         const id = state.activeId ?? state.sessions[0]?.id;
@@ -93,6 +95,7 @@ export function HelixApp() {
           {view === "mosaic" ? <Mosaic /> : null}
           {view === "providers" ? <ProvidersView /> : null}
           {view === "library" ? <LibraryView /> : null}
+          {view === "agents" ? <AgentsView /> : null}
           {view === "focus" && active ? <SessionPane session={active} /> : null}
           {view === "split" && left && right ? (
             <Group orientation="horizontal" className="h-full min-h-0 flex-1">

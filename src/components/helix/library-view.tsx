@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Plus, Trash2 } from "lucide-react";
+import { FileUp, Plus, Trash2 } from "lucide-react";
 import { LIBRARY, type Addon, type AddonKind } from "@/lib/library";
 import { PROVIDER_ORDER } from "@/lib/providers";
+import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -296,14 +297,35 @@ function ImportDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-background/70" />
-        <Dialog.Content className="fixed inset-x-4 top-1/2 z-50 mx-auto max-h-[min(90dvh,40rem)] w-auto max-w-md -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-window focus:outline-none">
+        <Dialog.Content className="scrollbar-none fixed inset-x-4 top-1/2 z-50 mx-auto max-h-[min(90dvh,40rem)] w-auto max-w-md -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-window focus:outline-none">
           <Dialog.Title className="text-lg font-medium tracking-tight">
             Import
           </Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted-foreground">
             Add a skill, plugin, or MCP connector from a repo you trust — or a
-            local SKILL.md.
+            local file (SKILL.md, config, manifest).
           </Dialog.Description>
+
+          {westcode()?.pickFile ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3"
+              onClick={async () => {
+                const f = await westcode()!.pickFile();
+                if (!f) return;
+                setName(
+                  f.name.replace(/\.(md|json|ya?ml|toml|txt)$/i, "").replace(/[-_]/g, " "),
+                );
+                setSource("Local file");
+                setInstall(f.path);
+                if (f.snippet) setSummary(f.snippet);
+              }}
+            >
+              <FileUp className="size-3.5" />
+              Import a file…
+            </Button>
+          ) : null}
 
           <div className="mt-4 flex gap-1.5">
             {TABS.map((t) => (
