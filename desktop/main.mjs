@@ -394,36 +394,48 @@ async function readSecrets() {
 async function writeSecrets(secrets) {
   const { writeFile: write, mkdir, rename } = await import("node:fs/promises");
   await mkdir(dirname(SECRETS_PATH), { recursive: true });
-  const tmp = `${SECRETS_PATH}.tmp`;
+  const tmp = `${SECRETS_PATH}.${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
   await write(tmp, JSON.stringify(secrets), { mode: 0o600 });
   await rename(tmp, SECRETS_PATH);
 }
 
-ipcMain.handle("secret:set", async (_e, { id, value }) => {
-  if (!id) return { ok: false, error: "id is required" };
-  if (!safeStorage.isEncryptionAvailable()) {
-    return { ok: false, error: "OS encryption is unavailable." };
-  }
-  const vault = await readSecrets();
-  if (!vault.ok) {
-    return {
-      ok: false,
-      error: `The secret store at ${SECRETS_PATH} is unreadable. Fix or delete it, then retry.`,
-    };
-  }
-  const secrets = vault.data;
-  if (value) {
-    secrets[id] = safeStorage.encryptString(String(value)).toString("base64");
-  } else {
-    delete secrets[id];
-  }
-  try {
-    await writeSecrets(secrets);
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-  return { ok: true };
-});
+// All vault mutations run on one queue: two overlapping read-modify-write
+// cycles would each read the same snapshot and the later rename would drop
+// the other's key.
+let vaultQueue = Promise.resolve();
+function withVault(fn) {
+  const run = vaultQueue.then(fn, fn);
+  vaultQueue = run.catch(() => {});
+  return run;
+}
+
+ipcMain.handle("secret:set", (_e, { id, value }) =>
+  withVault(async () => {
+    if (!id) return { ok: false, error: "id is required" };
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { ok: false, error: "OS encryption is unavailable." };
+    }
+    const vault = await readSecrets();
+    if (!vault.ok) {
+      return {
+        ok: false,
+        error: `The secret store at ${SECRETS_PATH} is unreadable. Fix or delete it, then retry.`,
+      };
+    }
+    const secrets = vault.data;
+    if (value) {
+      secrets[id] = safeStorage.encryptString(String(value)).toString("base64");
+    } else {
+      delete secrets[id];
+    }
+    try {
+      await writeSecrets(secrets);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    return { ok: true };
+  }),
+);
 
 async function secretFor(id) {
   if (!id || !safeStorage.isEncryptionAvailable()) return "";
@@ -497,7 +509,14 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
     text,
     history,
   } = payload;
-  const session = ensureSession(
+  // Suppress events from a session that was stopped or replaced — a late
+  // done/error from a cancelled turn must not land on the next turn's stream.
+  let session = null;
+  const emit = (event) => {
+    if (session && (session.stopped || getSession(sessionId) !== session)) return;
+    send(sessionId, event);
+  };
+  session = ensureSession(
     {
       sessionId,
       providerId,
@@ -507,14 +526,14 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
       permissionMode,
       agentSessionId,
     },
-    (event) => send(sessionId, event),
+    emit,
   );
   try {
     await session.prompt(text, history || []);
-    send(sessionId, { type: "done" });
+    emit({ type: "done" });
     return { ok: true };
   } catch (err) {
-    send(sessionId, { type: "error", message: err.message });
+    emit({ type: "error", message: err.message });
     return { ok: false, error: err.message };
   }
 });
