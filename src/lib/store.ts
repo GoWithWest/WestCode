@@ -179,6 +179,7 @@ export type HelixState = {
   addAgent: (a: Omit<AgentProfile, "id" | "builtin"> & { id?: string }) => void;
   updateAgent: (id: string, patch: Partial<AgentProfile>) => void;
   removeAgent: (id: string) => void;
+  restorePresetAgents: () => void;
   setProviderColor: (providerId: string, color: string) => void;
 };
 
@@ -893,6 +894,10 @@ export const useHelix = create<HelixState>((set, get) => ({
   addCustomProvider: (p) => {
     const taken = new Set(get().customProviders.map((c) => c.id));
     const id = p.id && !taken.has(p.id) ? p.id : slugId(p.name, taken);
+    // On desktop the key goes to the OS-encrypted secret store, never to
+    // localStorage; the browser preview keeps the local fallback.
+    const secretStore = westcode()?.setSecret;
+    if (secretStore && p.apiKey) void secretStore(id, p.apiKey);
     const next: CustomProvider = {
       id,
       name: p.name,
@@ -900,7 +905,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       auth: p.auth,
       authLabel: p.authLabel,
       endpoint: p.endpoint,
-      apiKey: p.apiKey,
+      apiKey: secretStore ? "" : p.apiKey,
       models: p.models.length ? p.models : ["default"],
       defaultModel: p.defaultModel || p.models[0] || "default",
       connected: true,
@@ -911,6 +916,7 @@ export const useHelix = create<HelixState>((set, get) => ({
   },
 
   removeCustomProvider: (id) => {
+    void westcode()?.setSecret?.(id, "");
     const list = get().customProviders.filter((c) => c.id !== id);
     persistProviders(list);
     set({ customProviders: list });
@@ -962,7 +968,13 @@ export const useHelix = create<HelixState>((set, get) => ({
   },
 
   addAgent: (a) => {
-    const taken = new Set(get().agents.map((x) => x.id));
+    // Reserve preset and tombstoned ids too, so a custom "Reviewer / QA"
+    // cannot silently resurrect a deleted preset under the same id.
+    const taken = new Set([
+      ...get().agents.map((x) => x.id),
+      ...PRESET_AGENTS.map((x) => x.id),
+      ...get().agentsPersist.removed,
+    ]);
     const id = a.id && !taken.has(a.id) ? a.id : slugId(a.name || "agent", taken);
     const persist = get().agentsPersist;
     const next: AgentsPersist = {
@@ -971,7 +983,6 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...persist.custom.filter((x) => x.id !== id),
         { ...a, id, builtin: false },
       ],
-      removed: persist.removed.filter((r) => r !== id),
     };
     persistAgents(next);
     set({ agentsPersist: next, agents: mergeAgents(next) });
@@ -1004,6 +1015,25 @@ export const useHelix = create<HelixState>((set, get) => ({
       ...persist,
       custom: persist.custom.filter((a) => a.id !== id),
       removed: [...new Set([...persist.removed, id])],
+    };
+    persistAgents(next);
+    set((s) => ({
+      agentsPersist: next,
+      agents: mergeAgents(next),
+      // Sessions must not keep injecting a deleted persona's brief.
+      sessions: s.sessions.map((ses) =>
+        ses.agentId === id ? { ...ses, agentId: undefined } : ses,
+      ),
+    }));
+    persistDesk();
+  },
+
+  restorePresetAgents: () => {
+    const persist = get().agentsPersist;
+    const presetIds = new Set(PRESET_AGENTS.map((a) => a.id));
+    const next: AgentsPersist = {
+      ...persist,
+      removed: persist.removed.filter((r) => !presetIds.has(r)),
     };
     persistAgents(next);
     set({ agentsPersist: next, agents: mergeAgents(next) });
@@ -1114,6 +1144,14 @@ export const useHelix = create<HelixState>((set, get) => ({
     const replay = Boolean(opts?.replay);
     const outgoing = replay ? trimmed : formatOutgoing(trimmed, attachments);
 
+    // Persona assignment happens when the human message is first ACCEPTED —
+    // including messages queued while a turn runs. The replay drain skips it
+    // (already assigned here) and incoming peer mail never assigns.
+    if (!opts?.incoming && !replay) {
+      const assigned = personaAssignment(trimmed, get().agents);
+      if (assigned) get().setSessionAgent(sessionId, assigned.id);
+    }
+
     if (session.status === "running" && !replay) {
       const hop = opts?.incoming?.hop ?? 0;
       const userMsg: ChatMessage = opts?.incoming
@@ -1194,13 +1232,6 @@ export const useHelix = create<HelixState>((set, get) => ({
           : [...ses.messages, asstMsg],
       })),
     }));
-
-    // Persona: "You are @Cleo-Sam" in a human message assigns that agent
-    // profile to this session for every turn that follows.
-    if (!opts?.incoming && !replay) {
-      const assigned = personaAssignment(trimmed, get().agents);
-      if (assigned) get().setSessionAgent(sessionId, assigned.id);
-    }
 
     const latest = get().sessions.find((s) => s.id === sessionId);
     if (!latest) return;
@@ -1286,9 +1317,10 @@ export const useHelix = create<HelixState>((set, get) => ({
 
     promptAsst.set(sessionId, asstId);
     try {
-      const history = latest.messages
+      const historyRaw = latest.messages
         .filter((m) => m.id !== asstId && (m.role === "user" || m.role === "assistant" || m.role === "agent"))
-        .slice(-16)
+        .slice(-16);
+      const history = historyRaw
         .map((m) => ({
           role: m.role,
           text: blocksToPlain(m.blocks).slice(0, 1500),
@@ -1302,19 +1334,39 @@ export const useHelix = create<HelixState>((set, get) => ({
           ? get().customProviders.find((c) => c.id === latest.providerId)
           : undefined;
       if (customApi) {
+        // `outgoing` is appended as the trailing user message, so drop this
+        // turn's copy from history (it was already added to session.messages
+        // — directly, or when the message was queued).
+        const apiRows = historyRaw.filter((m) => m.id !== userMsg?.id);
+        const lastRow = apiRows[apiRows.length - 1];
+        if (
+          replay &&
+          lastRow &&
+          lastRow.role !== "assistant" &&
+          blocksToPlain(lastRow.blocks).trim() === trimmed
+        ) {
+          apiRows.pop();
+        }
         const res = await api.apiPrompt({
           endpoint: customApi.endpoint,
-          apiKey: customApi.apiKey,
+          apiKey: customApi.apiKey || undefined,
+          providerId: customApi.id,
           model: latest.model || customApi.defaultModel,
           messages: [
             { role: "system", text: preambleText },
-            ...history.map((h) => ({
-              role: h.role === "assistant" ? "assistant" : "user",
-              text: h.text,
-            })),
+            ...apiRows
+              .map((m) => ({
+                role: m.role === "assistant" ? "assistant" : "user",
+                text: blocksToPlain(m.blocks).slice(0, 1500),
+              }))
+              .filter((m) => m.text.trim()),
             { role: "user", text: outgoing },
           ].map((m) => ({ role: m.role, content: m.text })),
         });
+        // Stop or a newer send may have superseded this turn while the HTTP
+        // call was in flight — discard the result instead of writing blocks
+        // or dispatching desk-bus work for a dead turn.
+        if (ac.signal.aborted || abortBySession.get(sessionId) !== ac) return;
         if (!res.ok || !res.text) {
           throw new Error(res.error || `${provider.name} failed`);
         }
@@ -1396,10 +1448,14 @@ export const useHelix = create<HelixState>((set, get) => ({
         })),
       }));
     } finally {
-      promptAsst.delete(sessionId);
-      abortBySession.delete(sessionId);
+      // A newer send() may own these maps now — only clean up (and drain the
+      // queue) when this turn is still the current one, or a superseded turn
+      // would wipe the live abort handle and double-drain queued messages.
+      const current = abortBySession.get(sessionId) === ac;
+      if (promptAsst.get(sessionId) === asstId) promptAsst.delete(sessionId);
+      if (current) abortBySession.delete(sessionId);
       const ses = get().sessions.find((x) => x.id === sessionId);
-      const next = ses?.queued?.[0];
+      const next = current ? ses?.queued?.[0] : undefined;
       if (next) {
         set((s) => ({
           sessions: patchSession(s.sessions, sessionId, (x) => ({

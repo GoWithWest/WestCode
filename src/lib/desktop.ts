@@ -92,9 +92,14 @@ type WestcodeBridge = {
   apiPrompt: (payload: {
     endpoint: string;
     apiKey?: string;
+    providerId?: string;
     model: string;
     messages: { role: string; content: string }[];
   }) => Promise<{ ok: boolean; text?: string; error?: string }>;
+  setSecret: (
+    id: string,
+    value: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   prompt: (payload: {
     sessionId: string;
     providerId: string;
