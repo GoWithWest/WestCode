@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- electron-builder hooks are CommonJS */
 const { execFileSync } = require("node:child_process");
 const { renameSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
