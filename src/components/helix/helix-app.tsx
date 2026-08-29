@@ -10,7 +10,6 @@ import { AgentsView } from "./agents-view";
 import { LibraryView } from "./library-view";
 import { Mosaic } from "./mosaic";
 import { NewSessionDialog } from "./new-session";
-import { Onboarding } from "./onboarding";
 import { ProvidersView } from "./providers-view";
 import { SessionPane } from "./session-pane";
 import { Sidebar } from "./sidebar";
@@ -21,16 +20,15 @@ export function HelixApp() {
   const sessions = useHelix((s) => s.sessions);
   const activeId = useHelix((s) => s.activeId);
   const splitIds = useHelix((s) => s.splitIds);
-  const onboarding = useHelix((s) => s.onboarding);
   const mobileNav = useHelix((s) => s.mobileNav);
   const setView = useHelix((s) => s.setView);
   const setNewOpen = useHelix((s) => s.setNewOpen);
   const setMobileNav = useHelix((s) => s.setMobileNav);
   const tick = useHelix((s) => s.tick);
-  const restoreOnboarding = useHelix((s) => s.restoreOnboarding);
+  const restoreState = useHelix((s) => s.restoreState);
 
   useEffect(() => {
-    restoreOnboarding();
+    void restoreState();
     const id = window.setInterval(tick, 15_000);
     const offMenu = westcode()?.onMenu?.((action) => {
       const state = useHelix.getState();
@@ -50,7 +48,7 @@ export function HelixApp() {
       window.clearInterval(id);
       offMenu?.();
     };
-  }, [tick, restoreOnboarding]);
+  }, [tick, restoreState]);
 
   const active =
     sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
@@ -118,7 +116,6 @@ export function HelixApp() {
       </div>
 
       <NewSessionDialog />
-      {onboarding ? <Onboarding /> : null}
     </div>
   );
 }

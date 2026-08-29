@@ -100,6 +100,11 @@ type WestcodeBridge = {
     id: string,
     value: string,
   ) => Promise<{ ok: boolean; error?: string }>;
+  stateLoad: () => Promise<Record<string, unknown>>;
+  stateSave: (
+    key: string,
+    value: unknown,
+  ) => Promise<{ ok: boolean; error?: string }>;
   prompt: (payload: {
     sessionId: string;
     providerId: string;

@@ -52,7 +52,6 @@ import type {
 import { projectById } from "./types";
 import { uid } from "./utils";
 
-const ONBOARD_KEY = "helix-onboarding-v1";
 const FOLDERS_KEY = "helix-folders-v1";
 const DESK_KEY = "helix-desk-v1";
 const UPDATES_KEY = "helix-cli-updates-dismissed-v1";
@@ -100,11 +99,7 @@ async function migrateProviderKey(
 }
 
 function persistAgents(p: AgentsPersist) {
-  try {
-    localStorage.setItem(AGENTS_KEY, JSON.stringify(p));
-  } catch {
-    /* ignore quota */
-  }
+  saveState(AGENTS_KEY, p);
 }
 const MAX_HOP = 6;
 const abortBySession = new Map<string, AbortController>();
@@ -145,7 +140,6 @@ export type HelixState = {
   activeId: string | null;
   splitIds: [string, string] | null;
   view: LayoutView;
-  onboarding: boolean;
   mobileNav: "desk" | "sessions";
   clock: number;
   newOpen: boolean;
@@ -169,8 +163,7 @@ export type HelixState = {
   setNewOpen: (open: boolean) => void;
   setMobileNav: (v: "desk" | "sessions") => void;
   tick: () => void;
-  restoreOnboarding: () => void;
-  dismissOnboarding: () => void;
+  restoreState: () => Promise<void>;
   resetDemo: () => void;
   finishCodexDemo: () => void;
   refreshCli: () => Promise<void>;
@@ -209,7 +202,14 @@ export type HelixState = {
   setProviderColor: (providerId: string, color: string) => void;
 };
 
+// Desktop state lives in ~/.westcode/state.json (loaded once at startup) so
+// it survives app replacement; localStorage is only the browser fallback —
+// the packaged app's origin includes a random port, so its localStorage is
+// empty on every launch.
+let fileState: Record<string, unknown> | null = null;
+
 function readJson<T>(key: string, fallback: T): T {
+  if (fileState && key in fileState) return fileState[key] as T;
   if (typeof window === "undefined") return fallback;
   try {
     const raw = localStorage.getItem(key);
@@ -219,28 +219,26 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function persistLibrary(enabled: string[], custom: Addon[]) {
+function saveState(key: string, value: unknown) {
+  if (fileState) fileState[key] = value;
+  void westcode()?.stateSave?.(key, value);
   try {
-    localStorage.setItem(LIBRARY_KEY, JSON.stringify({ enabled, custom }));
+    localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    /* ignore quota */
+    /* quota */
   }
+}
+
+function persistLibrary(enabled: string[], custom: Addon[]) {
+  saveState(LIBRARY_KEY, { enabled, custom });
 }
 
 function persistProviders(list: CustomProvider[]) {
-  try {
-    localStorage.setItem(PROVIDERS_KEY, JSON.stringify(list));
-  } catch {
-    /* ignore quota */
-  }
+  saveState(PROVIDERS_KEY, list);
 }
 
 function persistFolders(list: RecentFolder[]) {
-  try {
-    localStorage.setItem(FOLDERS_KEY, JSON.stringify(list));
-  } catch {
-    /* ignore quota */
-  }
+  saveState(FOLDERS_KEY, list);
 }
 
 function sanitizeSession(s: Session): Session {
@@ -257,20 +255,13 @@ function sanitizeSession(s: Session): Session {
 
 function persistDesk() {
   if (typeof window === "undefined") return;
-  try {
-    const { sessions, activeId, splitIds, view } = useHelix.getState();
-    localStorage.setItem(
-      DESK_KEY,
-      JSON.stringify({
-        sessions: sessions.map(sanitizeSession),
-        activeId,
-        splitIds,
-        view,
-      }),
-    );
-  } catch {
-    /* quota */
-  }
+  const { sessions, activeId, splitIds, view } = useHelix.getState();
+  saveState(DESK_KEY, {
+    sessions: sessions.map(sanitizeSession),
+    activeId,
+    splitIds,
+    view,
+  });
 }
 
 let deskBound = false;
@@ -610,7 +601,6 @@ export const useHelix = create<HelixState>((set, get) => ({
   activeId: null,
   splitIds: null,
   view: "mosaic",
-  onboarding: true,
   mobileNav: "desk",
   clock: Date.now(),
   newOpen: false,
@@ -636,10 +626,17 @@ export const useHelix = create<HelixState>((set, get) => ({
   setMobileNav: (mobileNav) => set({ mobileNav }),
   tick: () => set({ clock: Date.now() }),
 
-  restoreOnboarding: () => {
+  restoreState: async () => {
     if (typeof window === "undefined") return;
     bindDesktopEvents();
-    const seen = localStorage.getItem(ONBOARD_KEY);
+    const api = westcode();
+    if (api?.stateLoad) {
+      try {
+        fileState = await api.stateLoad();
+      } catch {
+        fileState = {};
+      }
+    }
     const lib = readJson<{ enabled?: string[]; custom?: Addon[] }>(
       LIBRARY_KEY,
       {},
@@ -664,7 +661,6 @@ export const useHelix = create<HelixState>((set, get) => ({
     const live = get().sessions;
     const sessions = live.length ? live : saved;
     set({
-      onboarding: seen !== "1",
       enabledAddons: lib.enabled ?? DEFAULT_ENABLED,
       customAddons: Array.isArray(lib.custom) ? lib.custom : [],
       customProviders: Array.isArray(prov) ? prov : [],
@@ -747,16 +743,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     const u = get().cliUpdates.find((x) => x.id === id);
     if (u) {
       const dismissed = readJson<string[]>(UPDATES_KEY, []);
-      try {
-        localStorage.setItem(
-          UPDATES_KEY,
-          JSON.stringify(
-            [...dismissed, `${u.id}@${u.latest}`].slice(-12),
-          ),
-        );
-      } catch {
-        /* ignore */
-      }
+      saveState(UPDATES_KEY, [...dismissed, `${u.id}@${u.latest}`].slice(-12));
     }
     set((s) => ({ cliUpdates: s.cliUpdates.filter((x) => x.id !== id) }));
   },
@@ -794,15 +781,6 @@ export const useHelix = create<HelixState>((set, get) => ({
     }));
     if (rpcId == null) return;
     void westcode()?.permission({ sessionId, rpcId, optionId });
-  },
-
-  dismissOnboarding: () => {
-    try {
-      localStorage.setItem(ONBOARD_KEY, "1");
-    } catch {
-      /* ignore */
-    }
-    set({ onboarding: false });
   },
 
   resetDemo: () => {
@@ -1081,11 +1059,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     const colors = { ...get().providerColors };
     if (color) colors[providerId] = color;
     else delete colors[providerId];
-    try {
-      localStorage.setItem(COLORS_KEY, JSON.stringify(colors));
-    } catch {
-      /* ignore */
-    }
+    saveState(COLORS_KEY, colors);
     set({ providerColors: colors });
   },
 

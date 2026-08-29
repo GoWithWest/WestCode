@@ -376,6 +376,37 @@ ipcMain.handle("git:status", async (_e, cwd) => {
   return { repo: true, branch, adds, dels, files, ahead, behind, remote: remote || "" };
 });
 
+// App state (sessions, library, agents, providers, colors…) persists in
+// ~/.westcode/state.json so it survives app replacement — the packaged
+// renderer's localStorage is origin-keyed to a random port and does not.
+const STATE_PATH = join(homedir(), ".westcode", "state.json");
+let stateQueue = Promise.resolve();
+
+async function readStateFile() {
+  try {
+    return JSON.parse(await readFile(STATE_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+ipcMain.handle("state:load", () => readStateFile());
+
+ipcMain.handle("state:save", (_e, { key, value }) => {
+  const run = stateQueue.then(async () => {
+    const { writeFile: write, mkdir, rename } = await import("node:fs/promises");
+    const state = await readStateFile();
+    state[key] = value;
+    await mkdir(dirname(STATE_PATH), { recursive: true });
+    const tmp = `${STATE_PATH}.${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
+    await write(tmp, JSON.stringify(state), "utf8");
+    await rename(tmp, STATE_PATH);
+    return { ok: true };
+  });
+  stateQueue = run.catch(() => {});
+  return run.catch((err) => ({ ok: false, error: err.message }));
+});
+
 // Provider API keys live encrypted (Electron safeStorage → OS keychain key)
 // in ~/.westcode/secrets.json, never in renderer localStorage.
 const SECRETS_PATH = join(homedir(), ".westcode", "secrets.json");
