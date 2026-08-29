@@ -115,7 +115,9 @@ function norm(s: string) {
 
 /**
  * Resolve an @mention to an agent. "Dana-Elizabeth" matches Dana, DanaE,
- * Dana-E, dana-elizabeth, the id, or a unique role word.
+ * Dana-E, dana-elizabeth, or the id. A query that fits more than one agent
+ * resolves to nothing — mis-delegating to the wrong live session is worse
+ * than asking the user to be specific.
  */
 export function matchAgent(
   query: string,
@@ -133,28 +135,36 @@ export function matchAgent(
         parts.length > 1 ? first + parts[parts.length - 1]![0] : first;
       let score = 0;
       if (q === name || q === norm(a.id)) score = 100;
-      else if (q === first || q === firstPlusInitial || q === initials) score = 90;
+      else if (q === first || q === firstPlusInitial) score = 90;
+      else if (q.length >= 2 && q === initials) score = 70;
       else if (parts.includes(q)) score = 80;
-      else if (name.startsWith(q) || first.startsWith(q)) score = 60;
-      else if (norm(a.role).includes(q)) score = 40;
+      else if (q.length >= 3 && (name.startsWith(q) || first.startsWith(q)))
+        score = 60;
       return { a, score };
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score);
-  return scored[0]?.a;
+  const top = scored[0];
+  if (!top) return undefined;
+  // Ambiguous: another agent matches at the same strength.
+  if (scored[1] && scored[1].score === top.score) return undefined;
+  return top.a;
 }
 
-/** All @mentions in a text, resolved against the agent list. */
+/**
+ * All @mentions in a text, resolved against the agent list. An @ preceded by
+ * a word/./- character is part of an email or path, not a mention.
+ */
 export function extractMentions(text: string, agents: AgentProfile[]) {
   const out: { raw: string; agent: AgentProfile }[] = [];
   const seen = new Set<string>();
-  const re = /@([A-Za-z][\w-]*)/g;
+  const re = /(^|[^\w.-])@([A-Za-z][\w-]*)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
-    const agent = matchAgent(m[1]!, agents);
+    const agent = matchAgent(m[2]!, agents);
     if (agent && !seen.has(agent.id)) {
       seen.add(agent.id);
-      out.push({ raw: m[0], agent });
+      out.push({ raw: `@${m[2]}`, agent });
     }
   }
   return out;

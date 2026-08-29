@@ -228,10 +228,14 @@ function GitChip({ session }: { session: Session }) {
   }, [api, cwd, status]);
 
   if (!git?.repo) return null;
-  const compare =
-    git.remote && /github\.com/.test(git.remote)
-      ? `${git.remote.replace(/^git@github\.com:/, "https://github.com/").replace(/\.git$/, "")}/compare/${encodeURIComponent(git.branch ?? "")}?expand=1`
-      : null;
+  // Normalize every GitHub remote shape (https, git@:, ssh://git@,
+  // ssh.github.com, org-scoped scp) to https://github.com/owner/repo.
+  const gh = /(?:^|@|\/\/)(?:ssh\.)?github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?$/.exec(
+    git.remote ?? "",
+  );
+  const compare = gh
+    ? `https://github.com/${gh[1]}/compare/${encodeURIComponent(git.branch ?? "")}?expand=1`
+    : null;
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs">
       <GitBranch className="size-3" />

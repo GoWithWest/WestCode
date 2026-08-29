@@ -1,7 +1,7 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Pencil, Plus, Trash2 } from "lucide-react";
-import type { AgentProfile } from "@/lib/agents";
+import { PRESET_AGENTS, type AgentProfile } from "@/lib/agents";
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -20,8 +20,13 @@ const AVATAR_LIBRARY = [
 export function AgentsView() {
   const agents = useHelix((s) => s.agents);
   const remove = useHelix((s) => s.removeAgent);
+  const removedIds = useHelix((s) => s.agentsPersist.removed);
+  const restorePresets = useHelix((s) => s.restorePresetAgents);
   const [editing, setEditing] = useState<AgentProfile | null>(null);
   const [creating, setCreating] = useState(false);
+  const hiddenPresets = removedIds.filter((id) =>
+    PRESET_AGENTS.some((p) => p.id === id),
+  ).length;
 
   return (
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5 md:p-8">
@@ -37,10 +42,17 @@ export function AgentsView() {
               work across the desk.
             </p>
           </div>
-          <Button size="sm" onClick={() => setCreating(true)}>
-            <Plus className="size-3.5" />
-            New agent
-          </Button>
+          <div className="flex items-center gap-2">
+            {hiddenPresets > 0 ? (
+              <Button size="sm" variant="ghost" onClick={restorePresets}>
+                Restore presets ({hiddenPresets})
+              </Button>
+            ) : null}
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <Plus className="size-3.5" />
+              New agent
+            </Button>
+          </div>
         </div>
 
         <ul className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -73,7 +85,15 @@ export function AgentsView() {
                       size="icon"
                       variant="ghost"
                       aria-label={`Delete ${a.name}`}
-                      onClick={() => remove(a.id)}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Delete ${a.name}? Sessions using this agent lose the persona.`,
+                          )
+                        ) {
+                          remove(a.id);
+                        }
+                      }}
                     >
                       <Trash2 className="size-3.5 text-muted-foreground" />
                     </Button>

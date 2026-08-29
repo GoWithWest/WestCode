@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("westcode", {
   pickFile: () => ipcRenderer.invoke("fs:pickFile"),
   gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
   apiPrompt: (payload) => ipcRenderer.invoke("api:prompt", payload),
+  setSecret: (id, value) => ipcRenderer.invoke("secret:set", { id, value }),
   prompt: (payload) => ipcRenderer.invoke("session:prompt", payload),
   cancel: (sessionId) => ipcRenderer.invoke("session:cancel", sessionId),
   stopSession: (sessionId) => ipcRenderer.invoke("session:stop", sessionId),
