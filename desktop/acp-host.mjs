@@ -572,8 +572,13 @@ function mapUpdate(params) {
       type: "tool",
       toolId: u.toolCallId || u.tool_call_id || u.id,
       // toolName first: dedupe logic (extractSendMessages) must recognize the
-      // raw tool id; a prettified title is only a display fallback.
-      name: u.toolName || u.title || u.kind || "Tool",
+      // raw tool id; a prettified title is only a display fallback. An update
+      // patch with no name fields sends "" so the renderer keeps the recorded
+      // name instead of overwriting it with a generic one.
+      name:
+        u.toolName ||
+        u.title ||
+        (kind === "tool_call" ? u.kind || "Tool" : ""),
       path: u.locations?.[0]?.path || raw.path,
       command: raw.command,
       content,
