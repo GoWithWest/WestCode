@@ -203,11 +203,26 @@ class AcpSession {
         this.unsandboxed = true;
         this.dead = false;
         this.stopped = false;
+        try {
+          this.proc?.kill();
+        } catch {
+          /* already gone */
+        }
         this.proc = null;
         this.buf = Buffer.alloc(0);
         this.stderr = "";
         this.pending.clear();
-        return await this._boot();
+        try {
+          return await this._boot();
+        } catch (retryErr) {
+          this.dead = true;
+          try {
+            this.proc?.kill();
+          } catch {
+            /* already gone */
+          }
+          throw retryErr;
+        }
       }
       // A failed boot (spawn error, missing folder, initialize timeout)
       // must not leave a half-alive session that ensureSession would
