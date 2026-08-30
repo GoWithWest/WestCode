@@ -48,6 +48,29 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Compute release version
+        run: |
+          # Patch-bump above the latest v* tag; a higher manual version in
+          # package.json wins; a rerun on an already-tagged commit reuses
+          # that tag instead of minting a new one.
+          git fetch --tags --quiet
+          EXISTING=$(git tag -l 'v*' --points-at "$GITHUB_SHA" | sort -V | tail -1)
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1 | sed 's/^v//')
+          BASE=$(node -p "require('./package.json').version")
+          if [ -n "$EXISTING" ]; then
+            NEXT="${EXISTING#v}"
+          else
+            NEXT=$(LATEST="$LATEST" BASE="$BASE" node -e "
+              const norm = (v) => String(v || '0.0.0').split('-')[0].split('.').map((n) => Number(n) || 0);
+              const bump = (v) => { const p = norm(v); p[2] += 1; return p.join('.'); };
+              const cmp = (a, b) => { const x = norm(a), y = norm(b); for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] - y[i]; } return 0; };
+              const candidate = bump(process.env.LATEST);
+              console.log(cmp(process.env.BASE, candidate) > 0 ? norm(process.env.BASE).join('.') : candidate);
+            ")
+          fi
+          npm version "$NEXT" --no-git-tag-version --allow-same-version
+          echo "RELEASE_VERSION=$NEXT" >> "$GITHUB_ENV"
+          echo "Version for this build: $NEXT (latest tag: ${LATEST:-none}, package.json: $BASE, tag at SHA: ${EXISTING:-none})"
       - name: Build signed + notarized app
         if: env.RELEASE_READY == 'true'
         env:
@@ -90,9 +113,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="v$VERSION"
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY"               --title "WestCode $VERSION"               --notes "Signed and notarized macOS build (arm64). Built from $GITHUB_SHA."
+          TAG="v$RELEASE_VERSION"
+          echo "Releasing $TAG"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/*.dmg release/*.zip --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "WestCode $RELEASE_VERSION" --latest --notes "Signed and notarized macOS build (arm64). Built from $GITHUB_SHA." release/*.dmg release/*.zip
           fi
-          gh release upload "$TAG" release/*.dmg release/*.zip             --repo "$GITHUB_REPOSITORY" --clobber

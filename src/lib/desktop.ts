@@ -79,6 +79,18 @@ type WestcodeBridge = {
     name: string;
     source?: string;
   }) => Promise<{ ok: boolean; output: string }>;
+  registrySearch: (q: string) => Promise<{
+    ok: boolean;
+    output?: string;
+    servers: {
+      name: string;
+      title: string;
+      description: string;
+      remote: string;
+      npmPkg: string;
+      repo: string;
+    }[];
+  }>;
   addonMcpAdd: (payload: {
     providerId: string;
     name: string;
