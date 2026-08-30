@@ -210,8 +210,8 @@ export const LIBRARY: Addon[] = [
     source: "Slack",
     repo: "modelcontextprotocol/servers",
     summary: "Channels, threads, search.",
-    providers: ["claude", "cursor"],
-    install: "npx -y @modelcontextprotocol/server-slack",
+    providers: ["claude", "codex", "cursor", "grok"],
+    install: "https://mcp.slack.com/mcp",
   },
   {
     id: "mcp-postgres",
@@ -221,7 +221,8 @@ export const LIBRARY: Addon[] = [
     repo: "modelcontextprotocol/servers",
     summary: "Read-only SQL against a database URL.",
     providers: ["claude", "codex", "cursor", "grok"],
-    install: "npx -y @modelcontextprotocol/server-postgres",
+    install:
+      "npx -y @modelcontextprotocol/server-postgres <postgresql://USER:PASSWORD@HOST:5432/DB>",
   },
   {
     id: "mcp-sentry",
@@ -261,7 +262,7 @@ export const LIBRARY: Addon[] = [
     repo: "microsoft/playwright-mcp",
     summary: "Drive a real browser from the agent.",
     providers: ["claude", "codex", "cursor", "grok"],
-    install: "npx @playwright/mcp",
+    install: "npx -y @playwright/mcp@latest",
   },
   {
     id: "mcp-filesystem",
@@ -271,7 +272,8 @@ export const LIBRARY: Addon[] = [
     repo: "modelcontextprotocol/servers",
     summary: "Scoped file tools outside the project cwd.",
     providers: ["claude", "codex", "cursor", "grok"],
-    install: "MCP · stdio filesystem",
+    install:
+      "npx -y @modelcontextprotocol/server-filesystem </absolute/folder-to-expose>",
   },
 ];
 

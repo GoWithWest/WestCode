@@ -209,6 +209,16 @@ class AcpSession {
         this.pending.clear();
         return await this._boot();
       }
+      // A failed boot (spawn error, missing folder, initialize timeout)
+      // must not leave a half-alive session that ensureSession would
+      // reuse — mark it dead and reap the child so the next prompt
+      // spawns fresh.
+      this.dead = true;
+      try {
+        this.proc?.kill();
+      } catch {
+        /* already gone */
+      }
       throw err;
     }
   }

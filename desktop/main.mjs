@@ -444,25 +444,29 @@ ipcMain.handle("addon:mcp-add", async (_e, payload) => {
 // Search the official MCP registry (registry.modelcontextprotocol.io) for
 // installable servers — remotes (http) and npm packages (stdio via npx).
 ipcMain.handle("registry:search", async (_e, { q }) => {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 10_000);
   try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 10_000);
     const res = await fetch(
       `https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(String(q || ""))}&limit=40`,
       { signal: ac.signal },
     );
-    clearTimeout(timer);
     if (!res.ok) return { ok: false, output: `${res.status} ${res.statusText}`, servers: [] };
     const data = await res.json();
     const byName = new Map();
     for (const item of data.servers || []) {
       const s = item.server || {};
+      if (!s.name) continue;
       const meta = item._meta?.["io.modelcontextprotocol.registry/official"];
-      if (meta && meta.isLatest === false) continue;
+      const isLatest = !meta || meta.isLatest !== false;
       const remote = (s.remotes || []).find((r) => r.url)?.url || "";
       const npmPkg = (s.packages || []).find((p) => p.registryType === "npm")?.identifier || "";
       if (!remote && !npmPkg) continue;
-      if (byName.has(s.name)) continue;
+      // Prefer the latest version of a server, but keep an older row when
+      // it is the only installable one (some official entries mark every
+      // usable row isLatest: false).
+      const existing = byName.get(s.name);
+      if (existing && (existing.isLatest || !isLatest)) continue;
       byName.set(s.name, {
         name: s.name,
         title: s.title || s.name,
@@ -470,11 +474,17 @@ ipcMain.handle("registry:search", async (_e, { q }) => {
         remote,
         npmPkg,
         repo: s.repository?.url || "",
+        isLatest,
       });
     }
-    return { ok: true, servers: [...byName.values()].slice(0, 25) };
+    const servers = [...byName.values()]
+      .slice(0, 25)
+      .map(({ isLatest: _latest, ...rest }) => rest);
+    return { ok: true, servers };
   } catch (err) {
     return { ok: false, output: err.message, servers: [] };
+  } finally {
+    clearTimeout(timer);
   }
 });
 
