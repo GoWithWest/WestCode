@@ -10,6 +10,7 @@ import { ProviderDot, useAllProviders } from "./provider";
 
 export function NewSessionDialog() {
   const open = useHelix((s) => s.newOpen);
+  const pinnedProviderId = useHelix((s) => s.newProviderId);
   const setNewOpen = useHelix((s) => s.setNewOpen);
   const createSession = useHelix((s) => s.createSession);
   const rememberFolder = useHelix((s) => s.rememberFolder);
@@ -41,6 +42,7 @@ export function NewSessionDialog() {
   useEffect(() => {
     if (!open) return;
     const id =
+      (pinnedProviderId && list.find((p) => p.id === pinnedProviderId)?.id) ||
       (settings.defaultProviderId &&
         list.find((p) => p.id === settings.defaultProviderId)?.id) ||
       list[0]?.id ||

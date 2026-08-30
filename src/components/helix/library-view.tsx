@@ -732,7 +732,7 @@ function AddConnectorDialog({
             </Button>
           </div>
           {regResults.length ? (
-            <ul className="scrollbar-thin mt-2 max-h-44 space-y-1.5 overflow-y-auto">
+            <ul className="scrollbar-thin mt-2 max-h-72 space-y-1.5 overflow-y-auto">
               {regResults.map((srv) => (
                 <li
                   key={srv.name}
