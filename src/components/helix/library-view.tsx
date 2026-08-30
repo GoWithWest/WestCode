@@ -675,15 +675,20 @@ function ImportDialog({
     );
   }
 
-  function submit() {
+  async function submit() {
     const n = name.trim();
     if (!n) return;
     // A picked local file for a skill is INSTALLED into the chosen
-    // providers' skills folders, not just cataloged.
+    // providers' skills folders, not just cataloged. Await it: a failed
+    // write must show its error and keep the dialog open.
     if (pickedPath && kind === "skill" && westcode()?.installSkillFile) {
-      void westcode()!
-        .installSkillFile(pickedPath, n, providers.filter((p) => p !== "*"))
-        .then((r) => setInstallNote(r.output));
+      const r = await westcode()!.installSkillFile(
+        pickedPath,
+        n,
+        providers.filter((p) => p !== "*"),
+      );
+      setInstallNote(r.output);
+      if (!r.ok) return;
     }
     importAddon({
       kind,
@@ -811,8 +816,10 @@ function ImportDialog({
 
           {pickedPath && kind === "skill" ? (
             <p className="mt-3 text-2xs text-muted-foreground">
-              This file will be installed to the selected providers' skills
-              folders (~/.claude/skills, ~/.grok/skills, …).
+              This SKILL.md will be installed to the selected providers'
+              skills folders (~/.claude/skills, ~/.grok/skills, …). Skills
+              with extra files (references/, scripts/) need their whole
+              folder copied manually.
             </p>
           ) : null}
           {installNote ? (
@@ -822,7 +829,7 @@ function ImportDialog({
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={submit} disabled={!name.trim()}>
+            <Button onClick={() => void submit()} disabled={!name.trim()}>
               {pickedPath && kind === "skill" ? "Install & add" : "Add to library"}
             </Button>
           </div>

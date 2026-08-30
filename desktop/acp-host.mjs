@@ -463,8 +463,14 @@ class AcpSession {
     const method = msg.method;
     const params = msg.params || {};
     if (method === "session/request_permission") {
-      const toolBlob = `${params.toolCall?.title || ""} ${params.toolCall?.kind || ""}`.toLowerCase();
-      const editShaped = /edit|write|create|patch|apply|save|mkdir|append/.test(toolBlob);
+      const kind = String(params.toolCall?.kind || "").toLowerCase();
+      // ACP declares the tool kind — trust it first; the title regex is only
+      // a fallback for adapters that omit kind.
+      const editShaped = kind
+        ? kind === "edit"
+        : /edit|write|patch|apply|save/.test(
+            String(params.toolCall?.title || "").toLowerCase(),
+          );
       // bypass auto-approves everything; auto only auto-approves edit-shaped
       // tools (its UI label is "accept edits") and surfaces the rest.
       if (

@@ -401,7 +401,8 @@ ipcMain.handle("addon:mcp-add", async (_e, payload) => {
   if (isUrl && providerId !== "codex") {
     args.push("--transport", String(transport || "http"));
   }
-  if (isUrl && providerId === "claude" && payload.header) {
+  if (isUrl && payload?.header && providerId !== "codex") {
+    // claude and grok both document --header for authenticated HTTP servers
     args.push("--header", String(payload.header));
   }
   for (const [k, v] of Object.entries(env || {})) args.push("-e", `${k}=${v}`);

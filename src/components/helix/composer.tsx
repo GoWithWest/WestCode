@@ -368,7 +368,7 @@ export function Composer({ session }: { session: Session }) {
                               type="button"
                               onClick={() => {
                                 setValue((v) =>
-                                  `${v}${v && !v.endsWith(" ") ? " " : ""}/msg ${p.id}  `,
+                                  v.trim() ? `/msg ${p.id} ${v}` : `/msg ${p.id} `,
                                 );
                                 setMenu(false);
                                 setPeersOpen(false);
