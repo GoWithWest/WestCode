@@ -72,6 +72,21 @@ type WestcodeBridge = {
   desktop: true;
   probe: () => Promise<CliProbe[]>;
   library: (providerId: string) => Promise<LiveAddon[]>;
+  addonAction: (payload: {
+    providerId: string;
+    kind: string;
+    action: string;
+    name: string;
+    source?: string;
+  }) => Promise<{ ok: boolean; output: string }>;
+  addonMcpAdd: (payload: {
+    providerId: string;
+    name: string;
+    commandOrUrl: string;
+    args?: string[];
+    transport?: string;
+    env?: Record<string, string>;
+  }) => Promise<{ ok: boolean; output: string }>;
   updates: () => Promise<CliUpdate[]>;
   updateCli: (providerId: string) => Promise<{ ok: boolean; output: string }>;
   installCli: (providerId: string) => Promise<{ ok: boolean; output: string }>;

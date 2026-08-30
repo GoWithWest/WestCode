@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { FileUp, Plus, Trash2 } from "lucide-react";
+import { FileUp, Plus, Settings2, Trash2 } from "lucide-react";
 import { LIBRARY, type Addon, type AddonKind } from "@/lib/library";
 import { PROVIDER_ORDER } from "@/lib/providers";
 import { westcode } from "@/lib/desktop";
@@ -16,9 +16,7 @@ const TABS: { id: AddonKind; label: string }[] = [
 ];
 
 export function LibraryView() {
-  const enabled = useHelix((s) => s.enabledAddons);
   const custom = useHelix((s) => s.customAddons);
-  const toggle = useHelix((s) => s.toggleAddon);
   const remove = useHelix((s) => s.removeAddon);
   const live = useHelix((s) => s.liveAddons);
   const libraryStatus = useHelix((s) => s.libraryStatus);
@@ -26,6 +24,8 @@ export function LibraryView() {
   const [tab, setTab] = useState<AddonKind>("skill");
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [connectorOpen, setConnectorOpen] = useState(false);
+  const [configAddon, setConfigAddon] = useState<Addon | null>(null);
   const [filter, setFilter] = useState<string>("all");
 
   useEffect(() => {
@@ -67,7 +67,13 @@ export function LibraryView() {
       ];
       if (!cur.summary && a.summary) cur.summary = a.summary;
     }
-    const merged = [...byKey.values()];
+    const liveKeys = new Set(
+      fromCli.map((a) => `${a.kind}:${a.name.toLowerCase()}`),
+    );
+    const merged = [...byKey.values()].map((a) => ({
+      ...a,
+      installed: liveKeys.has(`${a.kind}:${a.name.toLowerCase()}`),
+    }));
     const all = merged.filter((a) => a.kind === tab);
     const scoped =
       filter === "all"
@@ -88,7 +94,7 @@ export function LibraryView() {
     );
   }, [tab, query, custom, live, filter]);
 
-  const enabledCount = items.filter((a) => enabled.includes(a.id)).length;
+  const installedCount = items.filter((a) => a.installed).length;
 
   return (
     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5 md:p-8">
@@ -102,10 +108,20 @@ export function LibraryView() {
               installed; WestCode does not keep a separate catalog.
             </p>
           </div>
-          <Button size="sm" onClick={() => setImportOpen(true)}>
-            <Plus className="size-3.5" />
-            Import
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConnectorOpen(true)}
+            >
+              <Plus className="size-3.5" />
+              Add connector
+            </Button>
+            <Button size="sm" onClick={() => setImportOpen(true)}>
+              <Plus className="size-3.5" />
+              Import
+            </Button>
+          </div>
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-1.5">
@@ -149,7 +165,7 @@ export function LibraryView() {
           />
         </div>
         <p className="mt-2 text-2xs text-subtle">
-          {enabledCount} enabled · {items.length} in this list
+          {installedCount} installed · {items.length} in this list
         </p>
 
         <ul className="mt-4 space-y-2">
@@ -164,35 +180,42 @@ export function LibraryView() {
               <AddonCard
                 key={a.id}
                 addon={a}
-                on={enabled.includes(a.id)}
-                onToggle={() => toggle(a.id)}
-                onRemove={a.custom ? () => remove(a.id) : undefined}
+                onConfigure={() => setConfigAddon(a)}
+                onRemoveCustom={a.custom ? () => remove(a.id) : undefined}
               />
             ))
           )}
         </ul>
       </div>
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
+      <AddConnectorDialog
+        open={connectorOpen}
+        onOpenChange={setConnectorOpen}
+      />
+      {configAddon ? (
+        <AddonConfigDialog
+          addon={configAddon}
+          onClose={() => setConfigAddon(null)}
+        />
+      ) : null}
     </div>
   );
 }
 
 function AddonCard({
   addon,
-  on,
-  onToggle,
-  onRemove,
+  onConfigure,
+  onRemoveCustom,
 }: {
-  addon: Addon;
-  on: boolean;
-  onToggle: () => void;
-  onRemove?: () => void;
+  addon: Addon & { installed?: boolean };
+  onConfigure: () => void;
+  onRemoveCustom?: () => void;
 }) {
   return (
     <li
       className={cn(
         "rounded-lg border bg-surface p-4",
-        on ? "border-border-strong" : "border-border",
+        addon.installed ? "border-border-strong" : "border-border",
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -228,19 +251,30 @@ function AddonCard({
           <p className="mt-2 font-mono text-2xs text-subtle">{addon.install}</p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
-          <Button
-            size="sm"
-            variant={on ? "subtle" : "outline"}
-            onClick={onToggle}
-          >
-            {on ? "Enabled" : "Enable"}
+          <div className="flex items-center gap-1">
+            {addon.installed ? (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-medium">
+                Installed
+              </span>
+            ) : null}
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={`Configure ${addon.name}`}
+              onClick={onConfigure}
+            >
+              <Settings2 className="size-3.5 text-muted-foreground" />
+            </Button>
+          </div>
+          <Button size="sm" variant="outline" onClick={onConfigure}>
+            {addon.installed ? "Manage" : "Install"}
           </Button>
-          {onRemove ? (
+          {onRemoveCustom ? (
             <Button
               size="icon"
               variant="ghost"
               aria-label="Remove"
-              onClick={onRemove}
+              onClick={onRemoveCustom}
             >
               <Trash2 className="size-3.5 text-muted-foreground" />
             </Button>
@@ -248,6 +282,310 @@ function AddonCard({
         </div>
       </div>
     </li>
+  );
+}
+
+const INSTALLABLE_PROVIDERS = ["claude", "grok", "codex"] as const;
+
+function actionProviders(addon: Addon): string[] {
+  const declared = (addon.providers ?? []).filter((p) =>
+    (INSTALLABLE_PROVIDERS as readonly string[]).includes(p),
+  );
+  return declared.length ? declared : [...INSTALLABLE_PROVIDERS];
+}
+
+/**
+ * Per-provider management sheet: install/remove/enable/disable/auth run the
+ * provider CLI's documented procedure through the addon IPC; output shows
+ * verbatim so failures are actionable.
+ */
+function AddonConfigDialog({
+  addon,
+  onClose,
+}: {
+  addon: Addon & { installed?: boolean };
+  onClose: () => void;
+}) {
+  const refreshLibrary = useHelix((s) => s.refreshLibrary);
+  const api = westcode();
+  const provs = actionProviders(addon);
+  const [providerId, setProviderId] = useState(provs[0] ?? "claude");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [output, setOutput] = useState("");
+
+  const pluginTarget = /\/?plugin install\s+(\S+)/.exec(addon.install ?? "")?.[1];
+  const npxCmd = /^npx\s+(.+)$/.exec((addon.install ?? "").trim())?.[1];
+
+  async function run(action: string, opts?: { source?: string }) {
+    if (!api?.addonAction) return;
+    setBusy(action);
+    setOutput("");
+    try {
+      if (action === "install" && addon.kind === "connector" && npxCmd) {
+        const parts = npxCmd.split(/\s+/);
+        const res = await api.addonMcpAdd({
+          providerId,
+          name: addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-"),
+          commandOrUrl: "npx",
+          args: parts,
+        });
+        setOutput(res.output || (res.ok ? "Added." : "Failed."));
+      } else if (action === "install" && pluginTarget) {
+        // The marketplace half of name@marketplace must exist first — the
+        // documented flow on both CLIs. addon.repo names its source repo.
+        if (addon.repo && pluginTarget.includes("@")) {
+          await api.addonAction({
+            providerId,
+            kind: "marketplace",
+            action: "add",
+            name: pluginTarget.split("@")[1]!,
+            source: addon.repo,
+          });
+        }
+        const res = await api.addonAction({
+          providerId,
+          kind: "plugin",
+          action: "install",
+          name: addon.name,
+          source: pluginTarget,
+        });
+        setOutput(res.output || (res.ok ? "Installed." : "Failed."));
+      } else if (action === "install") {
+        setOutput(
+          `No automated installer for this entry. Run in Terminal:\n${addon.install || "(no install command listed)"}`,
+        );
+      } else {
+        const res = await api.addonAction({
+          providerId,
+          kind: addon.kind,
+          action,
+          name: addon.name,
+          source: opts?.source,
+        });
+        setOutput(res.output || (res.ok ? "Done." : "Failed."));
+      }
+      void refreshLibrary();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const canEnable =
+    providerId === "grok" || (providerId === "claude" && addon.kind === "plugin");
+  const canAuth = providerId === "claude" && addon.kind === "connector";
+  const canDoctor = providerId === "grok" && addon.kind === "connector";
+  const removableKind = addon.kind !== "skill";
+
+  return (
+    <Dialog.Root open onOpenChange={(v) => !v && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-background/70" />
+        <Dialog.Content className="scrollbar-none fixed inset-x-4 top-1/2 z-50 mx-auto max-h-[min(90dvh,40rem)] w-auto max-w-md -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-window focus:outline-none">
+          <Dialog.Title className="text-lg font-medium tracking-tight">
+            {addon.name}
+          </Dialog.Title>
+          <Dialog.Description className="mt-1 text-xs text-muted-foreground">
+            {addon.kind} · {addon.source}
+            {addon.repo ? ` · ${addon.repo}` : ""}
+          </Dialog.Description>
+
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
+              Provider
+            </span>
+            <select
+              value={providerId}
+              onChange={(e) => setProviderId(e.target.value)}
+              className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none"
+            >
+              {provs.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {!addon.installed ? (
+              <Button size="sm" disabled={!!busy} onClick={() => void run("install")}>
+                {busy === "install" ? "Installing…" : "Install"}
+              </Button>
+            ) : null}
+            {addon.installed && removableKind ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!!busy}
+                onClick={() => void run("remove")}
+              >
+                {busy === "remove" ? "Removing…" : "Remove"}
+              </Button>
+            ) : null}
+            {canEnable ? (
+              <>
+                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("enable")}>
+                  Enable
+                </Button>
+                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("disable")}>
+                  Disable
+                </Button>
+              </>
+            ) : null}
+            {canAuth ? (
+              <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("login")}>
+                Authenticate
+              </Button>
+            ) : null}
+            {canDoctor ? (
+              <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("doctor")}>
+                Doctor
+              </Button>
+            ) : null}
+          </div>
+
+          {addon.kind === "skill" && addon.installed ? (
+            <p className="mt-3 text-2xs leading-relaxed text-muted-foreground">
+              Skills are files — this one lives in the provider's skills
+              folder (or ships inside a plugin). Remove it there.
+            </p>
+          ) : null}
+
+          {addon.install ? (
+            <p className="mt-3 font-mono text-2xs break-all text-subtle">
+              {addon.install}
+            </p>
+          ) : null}
+
+          {output ? (
+            <pre className="scrollbar-thin mt-3 max-h-40 overflow-auto rounded-md bg-window p-2 font-mono text-2xs whitespace-pre-wrap">
+              {output}
+            </pre>
+          ) : null}
+
+          <div className="mt-4 flex justify-end">
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/** `mcp add` for any provider — the one procedure both CLIs document. */
+function AddConnectorDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const refreshLibrary = useHelix((s) => s.refreshLibrary);
+  const api = westcode();
+  const [providerId, setProviderId] = useState("claude");
+  const [name, setName] = useState("");
+  const [target, setTarget] = useState("");
+  const [envText, setEnvText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [output, setOutput] = useState("");
+
+  async function submit() {
+    if (!api?.addonMcpAdd || !name.trim() || !target.trim()) return;
+    setBusy(true);
+    setOutput("");
+    try {
+      const isUrl = /^https?:\/\//.test(target.trim());
+      const parts = target.trim().split(/\s+/);
+      const env: Record<string, string> = {};
+      for (const line of envText.split("\n")) {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line.trim());
+        if (m) env[m[1]!] = m[2]!;
+      }
+      const res = await api.addonMcpAdd({
+        providerId,
+        name: name.trim(),
+        commandOrUrl: isUrl ? target.trim() : parts[0]!,
+        args: isUrl ? [] : parts.slice(1),
+        transport: isUrl ? "http" : "stdio",
+        env,
+      });
+      setOutput(res.output || (res.ok ? "Connector added." : "Failed."));
+      if (res.ok) void refreshLibrary();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-background/70" />
+        <Dialog.Content className="scrollbar-none fixed inset-x-4 top-1/2 z-50 mx-auto max-h-[min(90dvh,38rem)] w-auto max-w-md -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-window focus:outline-none">
+          <Dialog.Title className="text-lg font-medium tracking-tight">
+            Add MCP connector
+          </Dialog.Title>
+          <Dialog.Description className="mt-1 text-xs text-muted-foreground">
+            A command (stdio) or an http(s) URL. WestCode runs the provider's
+            own `mcp add` — remote servers that need OAuth finish sign-in via
+            Authenticate on the connector afterwards.
+          </Dialog.Description>
+
+          <div className="mt-4 flex gap-1.5">
+            {INSTALLABLE_PROVIDERS.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setProviderId(p)}
+                className={cn(
+                  "h-8 rounded-md px-3 text-xs font-medium",
+                  providerId === p
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+
+          <Field label="Name" value={name} onChange={setName} placeholder="playwright" />
+          <Field
+            label="Command or URL"
+            value={target}
+            onChange={setTarget}
+            placeholder="npx -y @playwright/mcp@latest   ·   https://mcp.notion.com/mcp"
+          />
+          <label className="mt-3 block">
+            <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
+              Env (KEY=value per line)
+            </span>
+            <textarea
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+              rows={2}
+              className="mt-1.5 w-full resize-none rounded-md border border-border bg-window px-3 py-2 font-mono text-xs outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
+            />
+          </label>
+
+          {output ? (
+            <pre className="scrollbar-thin mt-3 max-h-32 overflow-auto rounded-md bg-window p-2 font-mono text-2xs whitespace-pre-wrap">
+              {output}
+            </pre>
+          ) : null}
+
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+            <Button onClick={() => void submit()} disabled={busy || !name.trim() || !target.trim()}>
+              {busy ? "Adding…" : "Add connector"}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

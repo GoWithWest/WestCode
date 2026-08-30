@@ -324,6 +324,94 @@ app.on("will-quit", (event) => {
   }, 100);
 });
 
+// Run a whitelisted addon-management action through the provider's own CLI.
+// The command matrix mirrors each CLI's documented procedure — never a raw
+// shell string from the renderer.
+const ADDON_ACTIONS = {
+  grok: {
+    "connector:remove": (n) => ["mcp", "remove", n],
+    "connector:enable": (n) => ["mcp", "enable", n],
+    "connector:disable": (n) => ["mcp", "disable", n],
+    "connector:doctor": (n) => ["mcp", "doctor", n],
+    "plugin:install": (n, src) => ["plugin", "install", src || n, "--trust"],
+    "plugin:remove": (n) => ["plugin", "uninstall", n],
+    "plugin:enable": (n) => ["plugin", "enable", n],
+    "plugin:disable": (n) => ["plugin", "disable", n],
+    "marketplace:add": (n, src) => ["plugin", "marketplace", "add", src || n],
+  },
+  claude: {
+    "connector:remove": (n) => ["mcp", "remove", n],
+    // OAuth for remote servers: documented `claude mcp login <name>` (v2.1.186+)
+    "connector:login": (n) => ["mcp", "login", n],
+    "connector:logout": (n) => ["mcp", "logout", n],
+    "plugin:install": (n, src) => ["plugin", "install", src || n, "--yes"],
+    "plugin:remove": (n) => ["plugin", "uninstall", n],
+    "plugin:enable": (n) => ["plugin", "enable", n],
+    "plugin:disable": (n) => ["plugin", "disable", n],
+    "marketplace:add": (n, src) => ["plugin", "marketplace", "add", src || n],
+  },
+  codex: {
+    "connector:remove": (n) => ["mcp", "remove", n],
+  },
+};
+
+ipcMain.handle("addon:action", async (_e, payload) => {
+  const { providerId, kind, action, name, source } = payload || {};
+  const spec = PROVIDERS[providerId];
+  const make = ADDON_ACTIONS[providerId]?.[`${kind}:${action}`];
+  if (!spec || !make) {
+    return { ok: false, output: `${providerId} has no ${kind} ${action} command.` };
+  }
+  const bin = which(spec.binary);
+  if (!bin) return { ok: false, output: `${spec.name} is not installed.` };
+  const args = make(String(name || ""), source ? String(source) : undefined);
+  return new Promise((resolve) => {
+    const child = spawn(bin, args, { env: childEnv(), timeout: 120_000 });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.stderr.on("data", (c) => (out += c));
+    child.on("error", (err) => resolve({ ok: false, output: err.message }));
+    child.on("exit", (code) =>
+      resolve({ ok: code === 0, output: out.slice(-3000) }),
+    );
+  });
+});
+
+// Add an MCP connector through the provider's CLI (documented `mcp add` shape).
+ipcMain.handle("addon:mcp-add", async (_e, payload) => {
+  const { providerId, name, commandOrUrl, args: extraArgs, transport, env } = payload || {};
+  const spec = PROVIDERS[providerId];
+  if (!spec || !name || !commandOrUrl) {
+    return { ok: false, output: "provider, name, and command/url are required." };
+  }
+  const bin = which(spec.binary);
+  if (!bin) return { ok: false, output: `${spec.name} is not installed.` };
+  const args = ["mcp", "add"];
+  if (transport && transport !== "stdio") args.push("--transport", String(transport));
+  for (const [k, v] of Object.entries(env || {})) args.push("-e", `${k}=${v}`);
+  args.push(String(name));
+  const isUrl = /^https?:\/\//.test(String(commandOrUrl));
+  if (isUrl) {
+    args.push(String(commandOrUrl));
+  } else if (providerId === "grok") {
+    args.push(String(commandOrUrl));
+    if (Array.isArray(extraArgs) && extraArgs.length) args.push("--", ...extraArgs.map(String));
+  } else {
+    // claude/codex: `mcp add <name> -- <command> [args...]`
+    args.push("--", String(commandOrUrl), ...(Array.isArray(extraArgs) ? extraArgs.map(String) : []));
+  }
+  return new Promise((resolve) => {
+    const child = spawn(bin, args, { env: childEnv(), timeout: 60_000 });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.stderr.on("data", (c) => (out += c));
+    child.on("error", (err) => resolve({ ok: false, output: err.message }));
+    child.on("exit", (code) =>
+      resolve({ ok: code === 0, output: out.slice(-3000) }),
+    );
+  });
+});
+
 ipcMain.handle("cli:probe", () => probeAll());
 ipcMain.handle("cli:library", (_e, providerId) => listAddons(providerId));
 ipcMain.handle("cli:updates", async () => checkUpdates(await probeAll()));
