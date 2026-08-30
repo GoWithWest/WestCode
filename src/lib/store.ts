@@ -333,7 +333,7 @@ function deskRows(
   custom: CustomProvider[],
 ) {
   const agents = useHelix.getState().agents;
-  return sessions.map((s) => ({
+  return sessions.filter((s) => !s.archivedAt).map((s) => ({
     id: s.id,
     title: s.title,
     providerId: s.providerId,
@@ -746,7 +746,12 @@ function bindDesktopEvents() {
     let started = "";
     if (agent) {
       const existing = state.sessions.find(
-        (s) => s.agentId === agent.id && s.id !== p.from && !s.archivedAt,
+        (s) =>
+          s.agentId === agent.id &&
+          s.id !== p.from &&
+          !s.archivedAt &&
+          // A pin like quinn@claude must not deliver to Quinn-on-Grok.
+          (!pinnedProvider || s.providerId === pinnedProvider),
       );
       if (existing) {
         deliveredTo = state.messageSession(p.from, existing.id, p.text, {
@@ -1343,53 +1348,47 @@ export const useHelix = create<HelixState>((set, get) => ({
 
   runScheduledTask: (to, prompt, name) => {
     const state = get();
-    // Same routing as the desk bus: confident agent match, else provider,
-    // else the default provider. Always a background session; the schedule
-    // runs unattended, so Bypass.
+    // Same provider resolution as the desk bus (custom API providers
+    // included). Each task owns a DEDICATED session ("<name> — scheduled")
+    // so an interval prompt never lands in a session the user is using.
     const agent = matchAgent(to, state.agents, { minScore: 80 });
-    let sessionId: string | null = null;
-    if (agent) {
-      const existing = state.sessions.find(
-        (s) => s.agentId === agent.id && !s.archivedAt,
-      );
-      sessionId =
-        existing?.id ??
-        state.createSession({
-          providerId: spawnableProviderId(
-            agent.providerId || state.settings.defaultProviderId || PROVIDER_ORDER[0]!,
-            state,
-          ),
-          projectId: "scratch",
-          cwd: state.settings.defaultCwd || "~",
-          title: `${agent.name} — ${agent.role}`,
-          agentId: agent.id,
-          background: true,
-          model: agent.model || undefined,
-          effort: agent.effort || undefined,
-          permissionMode: agent.permissionMode || "bypass",
-        });
-    } else {
+    const title = `${name} — scheduled`;
+    const dedicated = state.sessions.find(
+      (s) => s.title === title && !s.archivedAt,
+    );
+    let sessionId: string | null = dedicated?.id ?? null;
+    if (!sessionId) {
       const provQuery = to.trim().toLowerCase();
-      const prov = (PROVIDER_ORDER as readonly string[]).includes(provQuery)
-        ? provQuery
-        : state.settings.defaultProviderId || PROVIDER_ORDER[0]!;
-      const existing = state.sessions.find(
-        (s) => s.providerId === prov && !s.archivedAt && !s.agentId,
-      );
-      sessionId =
-        existing?.id ??
-        state.createSession({
-          providerId: prov,
-          projectId: "scratch",
-          cwd: state.settings.defaultCwd || "~",
-          title: `${name} — scheduled`,
-          background: true,
-          permissionMode: "bypass",
-        });
+      const customHit = state.customProviders.find(
+        (c) =>
+          c.id.toLowerCase() === provQuery || c.name.toLowerCase() === provQuery,
+      )?.id;
+      const prov = agent
+        ? spawnableProviderId(
+            agent.providerId ||
+              state.settings.defaultProviderId ||
+              PROVIDER_ORDER[0]!,
+            state,
+          )
+        : (PROVIDER_ORDER as readonly string[]).includes(provQuery)
+          ? provQuery
+          : (customHit ??
+            state.settings.defaultProviderId ??
+            PROVIDER_ORDER[0]!);
+      sessionId = state.createSession({
+        providerId: prov,
+        projectId: "scratch",
+        cwd: state.settings.defaultCwd || "~",
+        title,
+        agentId: agent?.id,
+        background: true,
+        model: agent?.model || undefined,
+        effort: agent?.effort || undefined,
+        permissionMode: agent?.permissionMode || "bypass",
+      });
     }
     if (sessionId) {
-      void get().send(sessionId, `[Scheduled task: ${name}]
-${prompt}`);
+      void get().send(sessionId, `[Scheduled task: ${name}]\n${prompt}`);
     }
   },
 
@@ -1660,21 +1659,20 @@ ${prompt}`);
       get().customProviders,
       get().agents,
     );
+    // The preamble lists what the CLI actually has installed (live probe),
+    // not a UI toggle — installed is active on these CLIs.
+    const liveFor = (kind: AddonKind) => [
+      ...new Set(
+        get()
+          .liveAddons.filter(
+            (a) => a.kind === kind && a.providers.includes(latest.providerId),
+          )
+          .map((a) => a.name),
+      ),
+    ].slice(0, 12);
     const bus = deskPreamble(sessionId, latest.providerId, roster, {
-      skills: addonNames(
-        get().enabledAddons,
-        get().customAddons,
-        "skill",
-        latest.providerId,
-        get().liveAddons,
-      ),
-      connectors: addonNames(
-        get().enabledAddons,
-        get().customAddons,
-        "connector",
-        latest.providerId,
-        get().liveAddons,
-      ),
+      skills: liveFor("skill"),
+      connectors: liveFor("connector"),
     });
     // Persona brief for this session, plus notes for other agents @mentioned
     // in the message ("Get @Ivy-Ben to build X" → where to delegate).
@@ -2020,6 +2018,12 @@ function runSlash(
 
   if (cmd === "clear") {
     void westcode()?.stopSession(sessionId);
+    set((st) => ({
+      sessions: patchSession(st.sessions, sessionId, (ses) => ({
+        ...ses,
+        agentSessionId: undefined,
+      })),
+    }));
     set((s) => ({
       sessions: patchSession(s.sessions, sessionId, (ses) => ({
         ...ses,

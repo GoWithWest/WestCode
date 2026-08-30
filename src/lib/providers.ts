@@ -63,7 +63,7 @@ export const PROVIDERS: Record<BuiltinProviderId, Provider> = {
     models: ["opus", "sonnet", "haiku"],
     defaultModel: "sonnet",
     sessionStore: "~/.claude/projects",
-    how: "Embeds the Claude Code CLI you already logged into (`claude login`). WestCode never stores a key.",
+    how: "Embeds the Claude Code CLI you already logged into (`claude auth login`). WestCode never stores a key.",
     live: false,
     connected: false,
     builtin: true,
@@ -172,7 +172,7 @@ export function customToProvider(c: CustomProvider): Provider {
     sessionStore: "~/.westcode/providers",
     how:
       c.auth === "api"
-        ? `Calls ${c.endpoint || "a custom endpoint"} with a key saved in this browser.`
+        ? `Calls ${c.endpoint || "a custom endpoint"} with a key stored encrypted on this Mac.`
         : "Subscription login on the host CLI.",
     live: false,
     connected: c.connected,

@@ -353,6 +353,8 @@ const ADDON_ACTIONS = {
   },
   codex: {
     "connector:remove": (n) => ["mcp", "remove", n],
+    "connector:login": (n) => ["mcp", "login", n],
+    "connector:logout": (n) => ["mcp", "logout", n],
   },
 };
 
@@ -367,7 +369,7 @@ ipcMain.handle("addon:action", async (_e, payload) => {
   if (!bin) return { ok: false, output: `${spec.name} is not installed.` };
   const args = make(String(name || ""), source ? String(source) : undefined);
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { env: childEnv(), timeout: 120_000 });
+    const child = spawn(bin, args, { env: childEnv(), cwd: homedir(), timeout: 120_000 });
     let out = "";
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (out += c));
@@ -389,8 +391,18 @@ ipcMain.handle("addon:mcp-add", async (_e, payload) => {
   if (!bin) return { ok: false, output: `${spec.name} is not installed.` };
   const isUrl = /^https?:\/\//.test(String(commandOrUrl));
   const args = ["mcp", "add"];
+  if (providerId === "claude") {
+    // Claude defaults to LOCAL scope keyed to the spawning cwd — which here
+    // is the app process, not a project. User scope is the app-level truth.
+    args.push("--scope", "user");
+  } else if (providerId === "grok") {
+    args.push("--scope", "user");
+  }
   if (isUrl && providerId !== "codex") {
     args.push("--transport", String(transport || "http"));
+  }
+  if (isUrl && providerId === "claude" && payload.header) {
+    args.push("--header", String(payload.header));
   }
   for (const [k, v] of Object.entries(env || {})) args.push("-e", `${k}=${v}`);
   args.push(String(name));
@@ -408,7 +420,7 @@ ipcMain.handle("addon:mcp-add", async (_e, payload) => {
     args.push("--", String(commandOrUrl), ...(Array.isArray(extraArgs) ? extraArgs.map(String) : []));
   }
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { env: childEnv(), timeout: 60_000 });
+    const child = spawn(bin, args, { env: childEnv(), cwd: homedir(), timeout: 60_000 });
     let out = "";
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (out += c));
@@ -714,6 +726,34 @@ ipcMain.handle("api:prompt", async (_e, payload) => {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+// Copy a local SKILL.md (or skill folder file) into each provider's skills
+// directory so the import genuinely installs, not just catalogs.
+ipcMain.handle("skill:install-file", async (_e, { path, name, providers }) => {
+  const { readFile: read, writeFile: write, mkdir } = await import("node:fs/promises");
+  let content;
+  try {
+    content = await read(String(path), "utf8");
+  } catch (err) {
+    return { ok: false, output: `Could not read ${path}: ${err.message}` };
+  }
+  const slug = String(name || "skill").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  const dirs = { claude: ".claude", grok: ".grok", codex: ".codex" };
+  const done = [];
+  for (const p of Array.isArray(providers) ? providers : []) {
+    const base = dirs[p];
+    if (!base) continue;
+    const dest = join(homedir(), base, "skills", slug);
+    try {
+      await mkdir(dest, { recursive: true });
+      await write(join(dest, "SKILL.md"), content, "utf8");
+      done.push(`${p}: ${dest}/SKILL.md`);
+    } catch (err) {
+      done.push(`${p}: FAILED ${err.message}`);
+    }
+  }
+  return { ok: done.some((d) => !d.includes("FAILED")), output: done.join("\n") };
 });
 
 ipcMain.handle("fs:saveText", async (_e, { defaultName, content }) => {

@@ -87,8 +87,7 @@ Use MCP tools from server "westcode" (NOT Claude ListAgents / SendMessage):
 
 If the human asks you to tell, ask, or coordinate with another session, you MUST call westcode_send_message. Do not say you cannot reach them.
 When you assign work or ask a question with westcode_send_message, end the message with "Reply to session ${selfId} with the result." — the other agent will not reply unless you ask.
-When another session sends YOU work, do it, then westcode_send_message a short result back to that sender when you finish or get blocked.
-A result or completion report you RECEIVE is terminal — do not acknowledge it; reply only if it assigns new work or asks a direct question.`;
+Each incoming desk message carries its own reply instruction — follow that one. Never acknowledge a completion report.`;
 }
 
 export function systemPrompt(opts: {

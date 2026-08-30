@@ -106,6 +106,8 @@ export function AgentsView() {
                 <p className="mt-1.5 font-mono text-2xs text-subtle">
                   @{a.name} · @{a.name.split(/[-\s]/)[0]}
                   {a.providerId ? ` · runs on ${a.providerId}` : ""}
+                  {a.model ? ` · ${a.model}` : ""}
+                  {a.effort ? ` · ${a.effort}` : ""}
                   {a.permissionMode ? ` · ${a.permissionMode}` : ""}
                 </p>
               </div>
@@ -231,7 +233,7 @@ function AgentDialog({
               }}
               className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none"
             >
-              <option value="">Provider: follow desk</option>
+              <option value="">Provider: use context (sender / desk default)</option>
               {PROVIDER_ORDER.map((id) => (
                 <option key={id} value={id}>
                   Provider: {id}

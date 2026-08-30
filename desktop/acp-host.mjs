@@ -463,7 +463,14 @@ class AcpSession {
     const method = msg.method;
     const params = msg.params || {};
     if (method === "session/request_permission") {
-      if (this.permissionMode === "bypass" || this.permissionMode === "auto") {
+      const toolBlob = `${params.toolCall?.title || ""} ${params.toolCall?.kind || ""}`.toLowerCase();
+      const editShaped = /edit|write|create|patch|apply|save|mkdir|append/.test(toolBlob);
+      // bypass auto-approves everything; auto only auto-approves edit-shaped
+      // tools (its UI label is "accept edits") and surfaces the rest.
+      if (
+        this.permissionMode === "bypass" ||
+        (this.permissionMode === "auto" && editShaped)
+      ) {
         this.reply(msg.id, {
           outcome: {
             outcome: "selected",
@@ -616,10 +623,14 @@ function pickAllowOption(options) {
   const list = Array.isArray(options) ? options : [];
   const blob = (o) =>
     `${o.optionId || ""} ${o.option_id || ""} ${o.kind || ""} ${o.name || ""}`.toLowerCase();
+  // Prefer allow-ONCE: an auto-answer must never persist an "always allow"
+  // rule into the CLI's own permission store.
+  const once = list.find(
+    (o) => /allow/.test(blob(o)) && !/always|reject|deny/.test(blob(o)),
+  );
+  if (once) return once.optionId || once.option_id || "allow-once";
   const always = list.find((o) => /always|allow_always|allow-always/.test(blob(o)));
   if (always) return always.optionId || always.option_id || "allow-always";
-  const allow = list.find((o) => /allow/.test(blob(o)) && !/reject|deny/.test(blob(o)));
-  if (allow) return allow.optionId || allow.option_id || "allow-once";
   return list[0]?.optionId || list[0]?.option_id || "allow-once";
 }
 
@@ -647,9 +658,11 @@ export function ensureSession(opts, emit) {
     existing.providerId === opts.providerId &&
     existing.cwd === cwd &&
     existing.model === opts.model &&
-    existing.effort === opts.effort
+    existing.effort === opts.effort &&
+    // Permission flags are spawn-time (--always-approve, env) — a mode
+    // change must respawn, or Bypass→Ask would leave approvals wide open.
+    (existing.permissionMode || "ask") === (opts.permissionMode || "ask")
   ) {
-    existing.permissionMode = opts.permissionMode || existing.permissionMode;
     return existing;
   }
   if (existing) existing.stop();

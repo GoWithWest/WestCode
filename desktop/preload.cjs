@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("westcode", {
   pickFolder: () => ipcRenderer.invoke("fs:pickFolder"),
   pickFile: () => ipcRenderer.invoke("fs:pickFile"),
   saveText: (defaultName, content) => ipcRenderer.invoke("fs:saveText", { defaultName, content }),
+  installSkillFile: (path, name, providers) => ipcRenderer.invoke("skill:install-file", { path, name, providers }),
   gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
   apiPrompt: (payload) => ipcRenderer.invoke("api:prompt", payload),
   setSecret: (id, value) => ipcRenderer.invoke("secret:set", { id, value }),
