@@ -702,10 +702,18 @@ function bindDesktopEvents() {
     // personas by name, and resolveTarget's title-substring scoring would
     // otherwise steal that mail for any session whose title contains the
     // name ("Ask Quinn later" must not swallow to="Quinn").
+    // "quinn@claude" pins the agent to a provider for this spawn; a bare
+    // provider name ("claude") starts a plain session with no persona.
+    const [toName, toProviderRaw] = p.to.split("@", 2);
+    const pinnedProvider =
+      toProviderRaw &&
+      (PROVIDER_ORDER as readonly string[]).includes(toProviderRaw.trim().toLowerCase())
+        ? toProviderRaw.trim().toLowerCase()
+        : undefined;
     // A confident match only — an exact name/id/first-name/initials hit,
     // not a 3-letter prefix typo. Weak queries fall through to the fuzzy
     // session resolver instead of entering the agent branch at all.
-    const agent = matchAgent(p.to, state.agents, { minScore: 80 });
+    const agent = matchAgent(toName ?? p.to, state.agents, { minScore: 80 });
     const sender = state.sessions.find((s) => s.id === p.from);
     let deliveredTo: string | false = false;
     let started = "";
@@ -722,7 +730,13 @@ function bindDesktopEvents() {
         // Do not spawn a session the hop limit will immediately orphan.
         (hopBySession.get(p.from) ?? 0) < MAX_HOP
       ) {
-        const spawnable = spawnableProviderId(sender.providerId, state);
+        // Runtime priority: explicit @provider pin > the agent's own config
+        // > the sender's provider. Model/effort/permissions come from the
+        // agent's config when set.
+        const spawnable = spawnableProviderId(
+          pinnedProvider || agent.providerId || sender.providerId,
+          state,
+        );
         const newId = state.createSession({
           providerId: spawnable,
           projectId: sender.projectId,
@@ -730,12 +744,14 @@ function bindDesktopEvents() {
           title: `${agent.name} — ${agent.role}`,
           agentId: agent.id,
           background: true,
+          model: agent.model || undefined,
+          effort: agent.effort || undefined,
           // Delegated work must not stall on approval prompts: Bypass skips
           // them entirely (acp-host maps it to bypassPermissions /
           // --always-approve); off = inherit whatever the sender runs in.
-          permissionMode: state.settings.delegatedAuto
-            ? "bypass"
-            : sender.permissionMode,
+          permissionMode:
+            agent.permissionMode ||
+            (state.settings.delegatedAuto ? "bypass" : sender.permissionMode),
         });
         started = ` (started a new ${agent.name} session)`;
         // Deliver by the returned id — never back through the fuzzy
@@ -752,6 +768,36 @@ function bindDesktopEvents() {
       deliveredTo = state.messageSession(p.from, p.to, p.text, {
         echo: false,
       });
+    }
+    // A bare provider name with no live session on that provider starts a
+    // PLAIN session there (no persona) — "ask @claude to ping me back" must
+    // not dead-end on an empty desk, and must not adopt an agent profile the
+    // user did not name.
+    if (!agent && !deliveredTo && sender) {
+      const provQuery = p.to.trim().toLowerCase();
+      const prov = (PROVIDER_ORDER as readonly string[]).includes(provQuery)
+        ? provQuery
+        : state.customProviders.find(
+              (c) =>
+                c.id.toLowerCase() === provQuery ||
+                c.name.toLowerCase() === provQuery,
+            )?.id;
+      if (prov && (hopBySession.get(p.from) ?? 0) < MAX_HOP) {
+        const newId = state.createSession({
+          providerId: prov,
+          projectId: sender.projectId,
+          cwd: sender.cwd,
+          title: `${resolveProvider(prov, state.customProviders).short} — desk`,
+          background: true,
+          permissionMode: state.settings.delegatedAuto
+            ? "bypass"
+            : sender.permissionMode,
+        });
+        started = ` (started a new ${resolveProvider(prov, state.customProviders).short} session)`;
+        deliveredTo = useHelix
+          .getState()
+          .messageSession(p.from, newId, p.text, { echo: false });
+      }
     }
     api.deskDelivered?.({
       requestId: p.requestId,

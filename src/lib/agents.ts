@@ -14,6 +14,11 @@ export type AgentProfile = {
   brief: string;
   avatar: string;
   builtin?: boolean;
+  /** Runtime the agent's sessions use ("" / undefined = follow the desk). */
+  providerId?: string;
+  model?: string;
+  effort?: string;
+  permissionMode?: string;
 };
 
 export const AGENTS_KEY = "helix-agents-v2";

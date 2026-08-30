@@ -2,6 +2,8 @@ import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { PRESET_AGENTS, type AgentProfile } from "@/lib/agents";
+import { PERMISSION_MODES, defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
+import { PROVIDER_ORDER } from "@/lib/providers";
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -103,6 +105,8 @@ export function AgentsView() {
                 </p>
                 <p className="mt-1.5 font-mono text-2xs text-subtle">
                   @{a.name} · @{a.name.split(/[-\s]/)[0]}
+                  {a.providerId ? ` · runs on ${a.providerId}` : ""}
+                  {a.permissionMode ? ` · ${a.permissionMode}` : ""}
                 </p>
               </div>
             </li>
@@ -135,6 +139,12 @@ function AgentDialog({
   const [purpose, setPurpose] = useState(agent?.purpose ?? "");
   const [brief, setBrief] = useState(agent?.brief ?? "");
   const [avatar, setAvatar] = useState(agent?.avatar ?? "lib-01");
+  const [providerId, setProviderId] = useState(agent?.providerId ?? "");
+  const [model, setModel] = useState(agent?.model ?? "");
+  const [effort, setEffort] = useState(agent?.effort ?? "");
+  const [permissionMode, setPermissionMode] = useState(
+    agent?.permissionMode ?? "",
+  );
 
   function submit() {
     const n = name.trim();
@@ -145,6 +155,10 @@ function AgentDialog({
       purpose: purpose.trim(),
       brief: brief.trim() || purpose.trim() || `You are ${n}.`,
       avatar,
+      providerId: providerId || undefined,
+      model: model || undefined,
+      effort: effort || undefined,
+      permissionMode: permissionMode || undefined,
     };
     if (agent) updateAgent(agent.id, payload);
     else addAgent(payload);
@@ -203,6 +217,70 @@ function AgentDialog({
               className="mt-1.5 w-full resize-none rounded-md border border-border bg-window px-3 py-2 text-sm outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
             />
           </label>
+
+          <p className="mt-4 text-2xs font-medium tracking-wide text-subtle uppercase">
+            Runtime
+          </p>
+          <div className="mt-1.5 grid grid-cols-2 gap-2">
+            <select
+              value={providerId}
+              onChange={(e) => {
+                setProviderId(e.target.value);
+                setModel("");
+                setEffort(e.target.value ? defaultEffortFor(e.target.value) : "");
+              }}
+              className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none"
+            >
+              <option value="">Provider: follow desk</option>
+              {PROVIDER_ORDER.map((id) => (
+                <option key={id} value={id}>
+                  Provider: {id}
+                </option>
+              ))}
+            </select>
+            <select
+              value={permissionMode}
+              onChange={(e) => setPermissionMode(e.target.value)}
+              className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none"
+            >
+              <option value="">Permissions: delegation default</option>
+              {PERMISSION_MODES.map((m) => (
+                <option key={m.id} value={m.id}>
+                  Permissions: {m.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={!providerId}
+              className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none disabled:opacity-50"
+            >
+              <option value="">Model: provider default</option>
+              {providerId
+                ? modelsFor(providerId, []).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      Model: {m.label}
+                    </option>
+                  ))
+                : null}
+            </select>
+            <select
+              value={effort}
+              onChange={(e) => setEffort(e.target.value)}
+              disabled={!providerId}
+              className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none disabled:opacity-50"
+            >
+              <option value="">Effort: provider default</option>
+              {providerId
+                ? effortsFor(providerId).map((x) => (
+                    <option key={x.id} value={x.id}>
+                      Effort: {x.label}
+                    </option>
+                  ))
+                : null}
+            </select>
+          </div>
 
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>

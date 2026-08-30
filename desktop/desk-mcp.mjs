@@ -24,13 +24,13 @@ const TOOLS = [
   {
     name: "westcode_send_message",
     description:
-      "Send a message to another WestCode session on this desk. `to` can be a session id, title, provider name (claude, grok, codex), or an AGENT name from the desk roster (e.g. Oz, Quinn) — if no session runs that agent yet, WestCode starts one automatically and delivers the message to it.",
+      "Send a message to another WestCode session on this desk. `to` can be a session id, title, provider name (claude, grok, codex), an AGENT name (e.g. Oz, Quinn), or agent@provider (e.g. quinn@claude) to pin the provider. If nothing matches, WestCode starts the right session automatically (agent session with its configured runtime, or a plain provider session) and delivers the message.",
     inputSchema: {
       type: "object",
       properties: {
         to: {
           type: "string",
-          description: "Session id, title, provider (claude / grok / codex), or agent name (auto-starts a session for that agent when none exists)",
+          description: "Session id, title, provider (claude / grok / codex), agent name, or agent@provider — auto-starts the session when none exists",
         },
         text: { type: "string", description: "Plain-text message to deliver" },
       },
