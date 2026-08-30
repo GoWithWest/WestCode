@@ -432,6 +432,43 @@ ipcMain.handle("addon:mcp-add", async (_e, payload) => {
   });
 });
 
+// Search the official MCP registry (registry.modelcontextprotocol.io) for
+// installable servers — remotes (http) and npm packages (stdio via npx).
+ipcMain.handle("registry:search", async (_e, { q }) => {
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10_000);
+    const res = await fetch(
+      `https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(String(q || ""))}&limit=40`,
+      { signal: ac.signal },
+    );
+    clearTimeout(timer);
+    if (!res.ok) return { ok: false, output: `${res.status} ${res.statusText}`, servers: [] };
+    const data = await res.json();
+    const byName = new Map();
+    for (const item of data.servers || []) {
+      const s = item.server || {};
+      const meta = item._meta?.["io.modelcontextprotocol.registry/official"];
+      if (meta && meta.isLatest === false) continue;
+      const remote = (s.remotes || []).find((r) => r.url)?.url || "";
+      const npmPkg = (s.packages || []).find((p) => p.registryType === "npm")?.identifier || "";
+      if (!remote && !npmPkg) continue;
+      if (byName.has(s.name)) continue;
+      byName.set(s.name, {
+        name: s.name,
+        title: s.title || s.name,
+        description: String(s.description || "").slice(0, 200),
+        remote,
+        npmPkg,
+        repo: s.repository?.url || "",
+      });
+    }
+    return { ok: true, servers: [...byName.values()].slice(0, 25) };
+  } catch (err) {
+    return { ok: false, output: err.message, servers: [] };
+  }
+});
+
 ipcMain.handle("cli:probe", () => probeAll());
 ipcMain.handle("cli:library", (_e, providerId) => listAddons(providerId));
 ipcMain.handle("cli:updates", async () => checkUpdates(await probeAll()));
