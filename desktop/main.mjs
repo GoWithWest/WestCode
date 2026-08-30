@@ -261,6 +261,7 @@ app.whenReady().then(async () => {
     return { ok: true, deliveredTo: delivered.deliveredTo };
   });
   installMenu();
+  startScheduler();
   // Quick entry: summon WestCode and open the New Session dialog from
   // anywhere (mirrors the desktop-assistant global-hotkey pattern).
   const hotkeyOk = globalShortcut.register("CommandOrControl+Shift+Space", () => {
@@ -524,6 +525,56 @@ async function readStateFile() {
 
 // Load runs through the same queue as saves so it can never observe a
 // mid-rename snapshot.
+// ---- Scheduled tasks: main owns the clock so schedules survive renderer
+// reloads; firing is delegated to the renderer (it owns sessions/desk).
+let scheduleTimer = null;
+function startScheduler() {
+  if (scheduleTimer) return;
+  scheduleTimer = setInterval(async () => {
+    try {
+      const state = await readStateFile();
+      const tasks = Array.isArray(state["helix-schedules-v1"])
+        ? state["helix-schedules-v1"]
+        : [];
+      const now = Date.now();
+      for (const t of tasks) {
+        if (!t || !t.enabled || !t.prompt) continue;
+        const every = Number(t.everyMinutes) > 0 ? Number(t.everyMinutes) * 60_000 : 0;
+        if (!every) continue;
+        const last = Number(t.lastRun) || 0;
+        if (now - last >= every) {
+          win?.webContents.send("schedule:fire", {
+            id: t.id,
+            to: t.to || "",
+            prompt: t.prompt,
+            name: t.name || "Scheduled task",
+          });
+        }
+      }
+    } catch {
+      /* next tick */
+    }
+  }, 30_000);
+  scheduleTimer.unref?.();
+}
+
+ipcMain.handle("app:login-item", (_e, { enabled }) => {
+  app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
+  return { ok: true };
+});
+
+ipcMain.handle("editor:open", (_e, { cwd }) => {
+  for (const ed of ["cursor", "code", "zed"]) {
+    const bin = which(ed);
+    if (bin) {
+      const child = spawn(bin, [cwd], { env: childEnv(), detached: true, stdio: "ignore" });
+      child.unref();
+      return { ok: true, editor: ed };
+    }
+  }
+  return { ok: false, output: "No editor CLI found (tried cursor, code, zed)." };
+});
+
 ipcMain.handle("state:load", () => {
   const run = stateQueue.then(readStateFile);
   stateQueue = run.catch(() => {});

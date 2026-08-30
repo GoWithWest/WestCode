@@ -30,6 +30,13 @@ contextBridge.exposeInMainWorld("westcode", {
   apiPrompt: (payload) => ipcRenderer.invoke("api:prompt", payload),
   setSecret: (id, value) => ipcRenderer.invoke("secret:set", { id, value }),
   stateLoad: () => ipcRenderer.invoke("state:load"),
+  setLoginItem: (enabled) => ipcRenderer.invoke("app:login-item", { enabled }),
+  openEditor: (cwd) => ipcRenderer.invoke("editor:open", { cwd }),
+  onScheduleFire: (fn) => {
+    const handler = (_e, data) => fn(data);
+    ipcRenderer.on("schedule:fire", handler);
+    return () => ipcRenderer.removeListener("schedule:fire", handler);
+  },
   stateSave: (key, value) => ipcRenderer.invoke("state:save", { key, value }),
   prompt: (payload) => ipcRenderer.invoke("session:prompt", payload),
   cancel: (sessionId) => ipcRenderer.invoke("session:cancel", sessionId),
