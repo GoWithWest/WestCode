@@ -198,11 +198,11 @@ class AcpSession {
       if (
         this.providerId === "grok" &&
         !this.unsandboxed &&
+        !this.stopped &&
         /sandbox/i.test(err.message)
       ) {
         this.unsandboxed = true;
         this.dead = false;
-        this.stopped = false;
         try {
           this.proc?.kill();
         } catch {
@@ -254,18 +254,28 @@ class AcpSession {
       env: spec.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    this.proc.on("error", (err) => {
+    // Handlers are scoped to THIS spawn — a late event from a replaced
+    // child (e.g. the pre-retry process finally exiting after kill())
+    // must not poison the current one's state or pendings.
+    const proc = this.proc;
+    proc.on("error", (err) => {
+      if (this.proc !== proc) return;
       this.dead = true;
       const wrapped = new Error(`Agent failed to start: ${err.message}`);
       for (const [, p] of this.pending) p.reject(wrapped);
       this.pending.clear();
       if (!this.stopped) this.emit({ type: "error", message: wrapped.message });
     });
-    this.proc.stdout.on("data", (chunk) => this._onStdout(chunk));
-    this.proc.stderr.on("data", (chunk) => {
+    proc.stdout.on("data", (chunk) => {
+      if (this.proc !== proc) return;
+      this._onStdout(chunk);
+    });
+    proc.stderr.on("data", (chunk) => {
+      if (this.proc !== proc) return;
       this.stderr = (this.stderr + chunk.toString("utf8")).slice(-12_000);
     });
-    this.proc.on("exit", (code, signal) => {
+    proc.on("exit", (code, signal) => {
+      if (this.proc !== proc) return;
       this.dead = true;
       const err = new Error(
         `Agent exited (${code ?? signal ?? "?"}). ${this.stderr.trim()}`.trim(),
