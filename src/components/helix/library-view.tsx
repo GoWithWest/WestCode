@@ -319,7 +319,10 @@ function AddonConfigDialog({
       cliStatus.filter((c) => c.found).map((c) => c.id),
     );
     const declared = actionProviders(addon).filter((p) => found.has(p));
-    return declared.length ? declared : [providerId];
+    if (declared.length) return declared;
+    // The catalog's provider list is advisory — MCP servers work on any
+    // CLI, so fall back to every CLI that is actually installed.
+    return [...found];
   }
   const pluginTarget = /\/?plugin install\s+(\S+)/.exec(addon.install ?? "")?.[1];
   const marketplaceOnly = /\/?plugin marketplace add\s+(\S+)/.exec(addon.install ?? "")?.[1];
@@ -338,7 +341,16 @@ function AddonConfigDialog({
         // provider is how each CLI works, but the user acts once.
         const slug = addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
         const targets = installTargets();
-        if (npxCmd || urlTarget) {
+        const needsArgs = /<[^>]+>/.test(addon.install ?? "");
+        if (needsArgs) {
+          setOutput(
+            `This connector needs your own settings first (the <...> part). Open "Add connector", paste this command, and replace the placeholder:\n${addon.install}`,
+          );
+        } else if (!targets.length) {
+          setOutput(
+            "No supported CLI is installed on this Mac. Install Claude Code, Grok Build, or Codex in Connections first.",
+          );
+        } else if (npxCmd || urlTarget) {
           const parts = npxCmd ? npxCmd.split(/\s+/) : [];
           const lines: string[] = [];
           for (const pid of targets) {
@@ -365,7 +377,7 @@ function AddonConfigDialog({
           );
         } else {
           setOutput(
-            `This connector has no runnable install command in the catalog. Use "Add connector" with its server command or URL, or run in Terminal:\n${addon.install || "(none listed)"}`,
+            `This connector has no one-click install. Use "Add connector" with its server command or URL:\n${addon.install || "(none listed)"}`,
           );
         }
       } else if (action === "install" && bundled) {
@@ -600,13 +612,25 @@ function AddConnectorDialog({
     setBusy(true);
     setOutput("");
     try {
-      const slug = (srv.title || srv.name)
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]+/g, "-")
-        .slice(0, 40);
-      const targets = foundClis.length
-        ? foundClis
-        : [providerId];
+      if (!srv.remote && !srv.npmPkg) {
+        setOutput(
+          "This registry entry has no remote URL or npm package to install.",
+        );
+        return;
+      }
+      if (!foundClis.length) {
+        setOutput(
+          "No supported CLI is installed on this Mac. Install Claude Code, Grok Build, or Codex in Connections first.",
+        );
+        return;
+      }
+      const slug =
+        (srv.title || srv.name || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 40) || "mcp-server";
+      const targets = foundClis;
       const lines: string[] = [];
       for (const pid of targets) {
         const res = srv.remote
