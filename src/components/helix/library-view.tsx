@@ -312,6 +312,13 @@ function AddonConfigDialog({
   const [providerId, setProviderId] = useState(provs[0] ?? "claude");
   const [busy, setBusy] = useState<string | null>(null);
   const [output, setOutput] = useState("");
+  // <...> placeholders in the catalog command (e.g. a database URL) become
+  // input fields right here — Install fills them in and runs.
+  const [argValues, setArgValues] = useState<Record<string, string>>({});
+  const placeholders = useMemo(
+    () => [...(addon.install ?? "").matchAll(/<([^>]+)>/g)].map((m) => m[1]!),
+    [addon.install],
+  );
 
   const cliStatus = useHelix((s) => s.cliStatus);
   function installTargets(): string[] {
@@ -326,8 +333,6 @@ function AddonConfigDialog({
   }
   const pluginTarget = /\/?plugin install\s+(\S+)/.exec(addon.install ?? "")?.[1];
   const marketplaceOnly = /\/?plugin marketplace add\s+(\S+)/.exec(addon.install ?? "")?.[1];
-  const npxCmd = /^npx\s+(.+)$/.exec((addon.install ?? "").trim())?.[1];
-  const urlTarget = /^https?:\/\/\S+$/.exec((addon.install ?? "").trim())?.[0];
   const bundled = /^bundled\b/.test((addon.install ?? "").trim());
 
   async function run(action: string, opts?: { source?: string }) {
@@ -341,20 +346,28 @@ function AddonConfigDialog({
         // provider is how each CLI works, but the user acts once.
         const slug = addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
         const targets = installTargets();
-        const needsArgs = /<[^>]+>/.test(addon.install ?? "");
-        if (needsArgs) {
+        let installStr = (addon.install ?? "").trim();
+        const missing: string[] = [];
+        for (const ph of placeholders) {
+          const v = (argValues[ph] ?? "").trim();
+          if (!v) missing.push(ph);
+          else installStr = installStr.replace(`<${ph}>`, v);
+        }
+        const npxFilled = /^npx\s+(.+)$/.exec(installStr)?.[1];
+        const urlFilled = /^https?:\/\/\S+$/.exec(installStr)?.[0];
+        if (missing.length) {
           setOutput(
-            `This connector needs your own settings first (the <...> part). Open "Add connector", paste this command, and replace the placeholder:\n${addon.install}`,
+            "Fill in the field above first — this connector needs that setting to work.",
           );
         } else if (!targets.length) {
           setOutput(
             "No supported CLI is installed on this Mac. Install Claude Code, Grok Build, or Codex in Connections first.",
           );
-        } else if (npxCmd || urlTarget) {
-          const parts = npxCmd ? npxCmd.split(/\s+/) : [];
+        } else if (npxFilled || urlFilled) {
+          const parts = npxFilled ? npxFilled.split(/\s+/) : [];
           const lines: string[] = [];
           for (const pid of targets) {
-            const res = npxCmd
+            const res = npxFilled
               ? await api.addonMcpAdd({
                   providerId: pid,
                   name: slug,
@@ -364,14 +377,14 @@ function AddonConfigDialog({
               : await api.addonMcpAdd({
                   providerId: pid,
                   name: slug,
-                  commandOrUrl: urlTarget!,
+                  commandOrUrl: urlFilled!,
                   transport: "http",
                 });
             lines.push(`${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`);
           }
           setOutput(
             lines.join("\n") +
-              (urlTarget
+              (urlFilled
                 ? "\nRemote server — use Authenticate to finish OAuth where needed."
                 : ""),
           );
@@ -486,6 +499,26 @@ function AddonConfigDialog({
             </select>
           </div>
 
+          {!addon.installed && placeholders.length ? (
+            <div className="mt-3 space-y-2">
+              {placeholders.map((ph) => (
+                <div key={ph}>
+                  <label className="text-2xs font-medium tracking-wide text-subtle uppercase">
+                    Required setting
+                  </label>
+                  <input
+                    value={argValues[ph] ?? ""}
+                    onChange={(e) =>
+                      setArgValues((v) => ({ ...v, [ph]: e.target.value }))
+                    }
+                    placeholder={ph}
+                    className="mt-1 h-8 w-full rounded-md border border-border bg-window px-2.5 font-mono text-xs outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="mt-3 flex flex-wrap gap-2">
             {!addon.installed ? (
               <Button size="sm" disabled={!!busy} onClick={() => void run("install")}>
@@ -582,7 +615,6 @@ function AddConnectorDialog({
 }) {
   const refreshLibrary = useHelix((s) => s.refreshLibrary);
   const api = westcode();
-  const [providerId, setProviderId] = useState("claude");
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
   const [envText, setEnvText] = useState("");
@@ -667,17 +699,29 @@ function AddConnectorDialog({
         const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line.trim());
         if (m) env[m[1]!] = m[2]!;
       }
-      const res = await api.addonMcpAdd({
-        providerId,
-        name: name.trim(),
-        commandOrUrl: isUrl ? target.trim() : parts[0]!,
-        args: isUrl ? [] : parts.slice(1),
-        transport: isUrl ? "http" : "stdio",
-        env,
-        header: header.trim() || undefined,
-      });
-      setOutput(res.output || (res.ok ? "Connector added." : "Failed."));
-      if (res.ok) void refreshLibrary();
+      if (!foundClis.length) {
+        setOutput(
+          "No supported CLI is installed on this Mac. Install Claude Code, Grok Build, or Codex in Connections first.",
+        );
+        return;
+      }
+      const lines: string[] = [];
+      let anyOk = false;
+      for (const pid of foundClis) {
+        const res = await api.addonMcpAdd({
+          providerId: pid,
+          name: name.trim(),
+          commandOrUrl: isUrl ? target.trim() : parts[0]!,
+          args: isUrl ? [] : parts.slice(1),
+          transport: isUrl ? "http" : "stdio",
+          env,
+          header: header.trim() || undefined,
+        });
+        if (res.ok) anyOk = true;
+        lines.push(`${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`);
+      }
+      setOutput(lines.join("\n"));
+      if (anyOk) void refreshLibrary();
     } finally {
       setBusy(false);
     }
@@ -692,28 +736,11 @@ function AddConnectorDialog({
             Add MCP connector
           </Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-            A command (stdio) or an http(s) URL. WestCode runs the provider's
-            own `mcp add` — remote servers that need OAuth finish sign-in via
-            Authenticate on the connector afterwards.
+            A command (stdio) or an http(s) URL. WestCode runs each CLI's own
+            `mcp add` and installs to every CLI on this Mac — remote servers
+            that need OAuth finish sign-in via Authenticate on the connector
+            afterwards.
           </Dialog.Description>
-
-          <div className="mt-4 flex gap-1.5">
-            {INSTALLABLE_PROVIDERS.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setProviderId(p)}
-                className={cn(
-                  "h-8 rounded-md px-3 text-xs font-medium",
-                  providerId === p
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
 
           <Field label="Name" value={name} onChange={setName} placeholder="playwright" />
           <Field
