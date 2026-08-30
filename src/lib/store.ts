@@ -2035,6 +2035,10 @@ function runSlash(
   }
 
   if (cmd === "clear") {
+    // Abort any in-flight turn first, or its late error/done events would
+    // paint over the freshly cleared transcript.
+    abortBySession.get(sessionId)?.abort();
+    abortBySession.delete(sessionId);
     void westcode()?.stopSession(sessionId);
     set((st) => ({
       sessions: patchSession(st.sessions, sessionId, (ses) => ({
