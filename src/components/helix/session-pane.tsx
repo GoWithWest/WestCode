@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Folder, GitBranch, Pencil, Terminal } from "lucide-react";
+import { Code2, Download, Folder, GitBranch, Pencil, Terminal } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -44,6 +44,7 @@ export function SessionPane({
             <GitChip session={session} />
             <ExportButton session={session} />
             <ResumeButton session={session} />
+            <EditorButton session={session} />
           </div>
         </div>
       </header>
@@ -234,6 +235,22 @@ function ResumeButton({ session }: { session: Session }) {
     >
       <Terminal className="size-3" />
       {copied ? "Copied" : "Terminal"}
+    </button>
+  );
+}
+
+function EditorButton({ session }: { session: Session }) {
+  const api = westcode();
+  if (!api?.openEditor) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void api.openEditor(session.cwd)}
+      className="inline-flex items-center gap-1 hover:text-foreground"
+      title="Open folder in your editor (Cursor / VS Code / Zed)"
+    >
+      <Code2 className="size-3" />
+      Editor
     </button>
   );
 }

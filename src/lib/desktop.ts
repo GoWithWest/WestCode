@@ -120,6 +120,11 @@ type WestcodeBridge = {
     value: string,
   ) => Promise<{ ok: boolean; error?: string }>;
   stateLoad: () => Promise<Record<string, unknown>>;
+  setLoginItem: (enabled: boolean) => Promise<{ ok: boolean }>;
+  openEditor: (cwd: string) => Promise<{ ok: boolean; editor?: string; output?: string }>;
+  onScheduleFire: (
+    fn: (p: { id: string; to: string; prompt: string; name: string }) => void,
+  ) => () => void;
   stateSave: (
     key: string,
     value: unknown,

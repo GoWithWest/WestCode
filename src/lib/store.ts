@@ -58,6 +58,18 @@ const DESK_KEY = "helix-desk-v1";
 const UPDATES_KEY = "helix-cli-updates-dismissed-v1";
 const COLORS_KEY = "helix-provider-colors-v1";
 const SETTINGS_KEY = "helix-settings-v1";
+const SCHEDULES_KEY = "helix-schedules-v1";
+
+export type ScheduledTask = {
+  id: string;
+  name: string;
+  prompt: string;
+  /** Agent name, provider, or "" for the default provider. */
+  to: string;
+  everyMinutes: number;
+  enabled: boolean;
+  lastRun?: number;
+};
 
 export type AppSettings = {
   /** Preselected provider in the New Session dialog. */
@@ -77,6 +89,8 @@ export type AppSettings = {
   delegatedAuto: boolean;
   /** Render transcripts in the tighter compact layout everywhere. */
   transcriptCompact: boolean;
+  /** Start WestCode when the user logs in (keeps schedules running). */
+  launchAtLogin: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -87,6 +101,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultCwd: "",
   delegatedAuto: true,
   transcriptCompact: false,
+  launchAtLogin: false,
 };
 
 type AgentsPersist = {
@@ -192,6 +207,7 @@ export type HelixState = {
   agentsPersist: AgentsPersist;
   providerColors: Record<string, string>;
   settings: AppSettings;
+  schedules: ScheduledTask[];
   cliStatus: CliProbe[];
   cliUpdates: CliUpdate[];
   updateBusy: string | null;
@@ -243,6 +259,10 @@ export type HelixState = {
   restorePresetAgents: () => void;
   setProviderColor: (providerId: string, color: string) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  addSchedule: (t: Omit<ScheduledTask, "id" | "lastRun">) => void;
+  updateSchedule: (id: string, patch: Partial<ScheduledTask>) => void;
+  removeSchedule: (id: string) => void;
+  runScheduledTask: (to: string, prompt: string, name: string) => void;
 };
 
 // Desktop state lives in ~/.westcode/state.json (loaded once at startup) so
@@ -696,6 +716,13 @@ function bindDesktopEvents() {
       promptAsst.delete(ev.sessionId);
     }
   });
+  api.onScheduleFire?.((p) => {
+    const state = useHelix.getState();
+    const task = state.schedules.find((t) => t.id === p.id);
+    // lastRun updates first so a slow turn cannot double-fire on the next tick.
+    if (task) state.updateSchedule(task.id, { lastRun: Date.now() });
+    state.runScheduledTask(p.to, p.prompt, p.name);
+  });
   api.onDeskDeliver?.((p) => {
     const state = useHelix.getState();
     // Agent-name resolution runs FIRST: the prompts tell agents to address
@@ -828,6 +855,7 @@ export const useHelix = create<HelixState>((set, get) => ({
   agentsPersist: { custom: [], overrides: {}, removed: [] },
   providerColors: {},
   settings: DEFAULT_SETTINGS,
+  schedules: [],
   cliStatus: [],
   cliUpdates: [],
   updateBusy: null,
@@ -869,6 +897,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       ...DEFAULT_SETTINGS,
       ...readJson<Partial<AppSettings>>(SETTINGS_KEY, {}),
     };
+    const schedules = readJson<ScheduledTask[]>(SCHEDULES_KEY, []);
     const folders = readJson<RecentFolder[]>(FOLDERS_KEY, []);
     const desk = readJson<{
       sessions?: Session[];
@@ -895,6 +924,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       agents: mergeAgents(agentsPersist),
       providerColors,
       settings,
+      schedules: Array.isArray(schedules) ? schedules : [],
       recentFolders: Array.isArray(folders) ? folders : [],
       sessions,
       activeId: live.length
@@ -1286,6 +1316,81 @@ export const useHelix = create<HelixState>((set, get) => ({
     const settings = { ...get().settings, ...patch };
     saveState(SETTINGS_KEY, settings);
     set({ settings });
+    if ("launchAtLogin" in patch) {
+      void westcode()?.setLoginItem?.(settings.launchAtLogin);
+    }
+  },
+
+  addSchedule: (t) => {
+    const schedules = [...get().schedules, { ...t, id: uid("sch") }];
+    saveState(SCHEDULES_KEY, schedules);
+    set({ schedules });
+  },
+
+  updateSchedule: (id, patch) => {
+    const schedules = get().schedules.map((t) =>
+      t.id === id ? { ...t, ...patch } : t,
+    );
+    saveState(SCHEDULES_KEY, schedules);
+    set({ schedules });
+  },
+
+  removeSchedule: (id) => {
+    const schedules = get().schedules.filter((t) => t.id !== id);
+    saveState(SCHEDULES_KEY, schedules);
+    set({ schedules });
+  },
+
+  runScheduledTask: (to, prompt, name) => {
+    const state = get();
+    // Same routing as the desk bus: confident agent match, else provider,
+    // else the default provider. Always a background session; the schedule
+    // runs unattended, so Bypass.
+    const agent = matchAgent(to, state.agents, { minScore: 80 });
+    let sessionId: string | null = null;
+    if (agent) {
+      const existing = state.sessions.find(
+        (s) => s.agentId === agent.id && !s.archivedAt,
+      );
+      sessionId =
+        existing?.id ??
+        state.createSession({
+          providerId: spawnableProviderId(
+            agent.providerId || state.settings.defaultProviderId || PROVIDER_ORDER[0]!,
+            state,
+          ),
+          projectId: "scratch",
+          cwd: state.settings.defaultCwd || "~",
+          title: `${agent.name} — ${agent.role}`,
+          agentId: agent.id,
+          background: true,
+          model: agent.model || undefined,
+          effort: agent.effort || undefined,
+          permissionMode: agent.permissionMode || "bypass",
+        });
+    } else {
+      const provQuery = to.trim().toLowerCase();
+      const prov = (PROVIDER_ORDER as readonly string[]).includes(provQuery)
+        ? provQuery
+        : state.settings.defaultProviderId || PROVIDER_ORDER[0]!;
+      const existing = state.sessions.find(
+        (s) => s.providerId === prov && !s.archivedAt && !s.agentId,
+      );
+      sessionId =
+        existing?.id ??
+        state.createSession({
+          providerId: prov,
+          projectId: "scratch",
+          cwd: state.settings.defaultCwd || "~",
+          title: `${name} — scheduled`,
+          background: true,
+          permissionMode: "bypass",
+        });
+    }
+    if (sessionId) {
+      void get().send(sessionId, `[Scheduled task: ${name}]
+${prompt}`);
+    }
   },
 
   updateAgent: (id, patch) => {
