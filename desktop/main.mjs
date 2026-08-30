@@ -16,6 +16,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
 const ICON_PNG = join(here, "icon.png");
 
+// A late async failure (e.g. a child process that cannot spawn) must not
+// take the whole app down with Electron's crash dialog.
+process.on("uncaughtException", (err) => {
+  console.error("[westcode] uncaught exception:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[westcode] unhandled rejection:", err);
+});
+
 /** @type {BrowserWindow | null} */
 let win = null;
 /** @type {import("node:child_process").ChildProcess | null} */

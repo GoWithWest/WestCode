@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -217,10 +218,23 @@ class AcpSession {
       unsandboxed: this.unsandboxed,
       permissionMode: this.permissionMode,
     });
+    if (!existsSync(this.cwd)) {
+      this.dead = true;
+      throw new Error(
+        `Folder ${this.cwd} no longer exists — pick another folder for this session.`,
+      );
+    }
     this.proc = spawn(spec.command, spec.args, {
       cwd: this.cwd,
       env: spec.env,
       stdio: ["pipe", "pipe", "pipe"],
+    });
+    this.proc.on("error", (err) => {
+      this.dead = true;
+      const wrapped = new Error(`Agent failed to start: ${err.message}`);
+      for (const [, p] of this.pending) p.reject(wrapped);
+      this.pending.clear();
+      if (!this.stopped) this.emit({ type: "error", message: wrapped.message });
     });
     this.proc.stdout.on("data", (chunk) => this._onStdout(chunk));
     this.proc.stderr.on("data", (chunk) => {
