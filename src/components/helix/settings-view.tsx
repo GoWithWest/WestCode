@@ -279,12 +279,14 @@ export function SettingsView() {
           <h3 className="text-sm font-medium">Cloud</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             WestCode's desk is local. To run work while this Mac is closed,
-            use each provider's own cloud — they run independently and you
-            pick up results in their apps or by resuming in a session here.
+            use each provider's own cloud — they run provider-side, without
+            this desk's sessions or folders, and you pick results up in their
+            apps. A closed lid still sleeps this Mac; for an always-on desk,
+            run WestCode on a machine that stays awake.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <a
-              href="https://grok.com/tasks"
+              href="https://grok.com/automations"
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs hover:bg-muted/50"
@@ -293,7 +295,7 @@ export function SettingsView() {
               Grok Automations
             </a>
             <a
-              href="https://claude.ai"
+              href="https://claude.ai/code/routines"
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs hover:bg-muted/50"
