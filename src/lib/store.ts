@@ -2035,10 +2035,12 @@ function runSlash(
   }
 
   if (cmd === "clear") {
-    // Abort any in-flight turn first, or its late error/done events would
-    // paint over the freshly cleared transcript.
+    // Retire any in-flight turn the same way stop() does, or its late
+    // events would paint over — and its queue replay into — the freshly
+    // cleared transcript.
     abortBySession.get(sessionId)?.abort();
     abortBySession.delete(sessionId);
+    promptAsst.delete(sessionId);
     void westcode()?.stopSession(sessionId);
     set((st) => ({
       sessions: patchSession(st.sessions, sessionId, (ses) => ({
@@ -2054,6 +2056,7 @@ function runSlash(
         updatedAt: Date.now(),
         status: "idle",
         permission: null,
+        queued: [],
         slashCommands: undefined,
       })),
     }));
