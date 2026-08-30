@@ -330,26 +330,37 @@ function AddonConfigDialog({
           args: parts,
         });
         setOutput(res.output || (res.ok ? "Added." : "Failed."));
-      } else if (action === "install" && pluginTarget) {
-        // The marketplace half of name@marketplace must exist first — the
-        // documented flow on both CLIs. addon.repo names its source repo.
-        if (addon.repo && pluginTarget.includes("@")) {
-          await api.addonAction({
+      } else if (action === "install" && (pluginTarget || addon.repo)) {
+        if (providerId === "grok") {
+          // grok installs plugins from a git source, not name@marketplace.
+          const res = await api.addonAction({
             providerId,
-            kind: "marketplace",
-            action: "add",
-            name: pluginTarget.split("@")[1]!,
-            source: addon.repo,
+            kind: "plugin",
+            action: "install",
+            name: addon.name,
+            source: addon.repo || pluginTarget,
           });
+          setOutput(res.output || (res.ok ? "Installed." : "Failed."));
+        } else {
+          // claude: marketplace must exist first, then name@marketplace.
+          if (addon.repo && pluginTarget?.includes("@")) {
+            await api.addonAction({
+              providerId,
+              kind: "marketplace",
+              action: "add",
+              name: pluginTarget.split("@")[1]!,
+              source: addon.repo,
+            });
+          }
+          const res = await api.addonAction({
+            providerId,
+            kind: "plugin",
+            action: "install",
+            name: addon.name,
+            source: pluginTarget || addon.repo,
+          });
+          setOutput(res.output || (res.ok ? "Installed." : "Failed."));
         }
-        const res = await api.addonAction({
-          providerId,
-          kind: "plugin",
-          action: "install",
-          name: addon.name,
-          source: pluginTarget,
-        });
-        setOutput(res.output || (res.ok ? "Installed." : "Failed."));
       } else if (action === "install") {
         setOutput(
           `No automated installer for this entry. Run in Terminal:\n${addon.install || "(no install command listed)"}`,

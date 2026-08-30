@@ -387,18 +387,24 @@ ipcMain.handle("addon:mcp-add", async (_e, payload) => {
   }
   const bin = which(spec.binary);
   if (!bin) return { ok: false, output: `${spec.name} is not installed.` };
+  const isUrl = /^https?:\/\//.test(String(commandOrUrl));
   const args = ["mcp", "add"];
-  if (transport && transport !== "stdio") args.push("--transport", String(transport));
+  if (isUrl && providerId !== "codex") {
+    args.push("--transport", String(transport || "http"));
+  }
   for (const [k, v] of Object.entries(env || {})) args.push("-e", `${k}=${v}`);
   args.push(String(name));
-  const isUrl = /^https?:\/\//.test(String(commandOrUrl));
-  if (isUrl) {
+  if (isUrl && providerId === "codex") {
+    // codex takes the remote form as `mcp add <name> --url <url>`
+    args.push("--url", String(commandOrUrl));
+  } else if (isUrl) {
     args.push(String(commandOrUrl));
   } else if (providerId === "grok") {
+    // grok (per its own CLI help): `mcp add <name> <command> -- <server args>`
     args.push(String(commandOrUrl));
     if (Array.isArray(extraArgs) && extraArgs.length) args.push("--", ...extraArgs.map(String));
   } else {
-    // claude/codex: `mcp add <name> -- <command> [args...]`
+    // claude/codex stdio: `mcp add <name> -- <command> [args...]`
     args.push("--", String(commandOrUrl), ...(Array.isArray(extraArgs) ? extraArgs.map(String) : []));
   }
   return new Promise((resolve) => {
@@ -528,6 +534,7 @@ async function readStateFile() {
 // ---- Scheduled tasks: main owns the clock so schedules survive renderer
 // reloads; firing is delegated to the renderer (it owns sessions/desk).
 let scheduleTimer = null;
+const scheduleFiredAt = new Map();
 function startScheduler() {
   if (scheduleTimer) return;
   scheduleTimer = setInterval(async () => {
@@ -542,7 +549,9 @@ function startScheduler() {
         const every = Number(t.everyMinutes) > 0 ? Number(t.everyMinutes) * 60_000 : 0;
         if (!every) continue;
         const last = Number(t.lastRun) || 0;
-        if (now - last >= every) {
+        const fired = scheduleFiredAt.get(t.id) || 0;
+        if (now - Math.max(last, fired) >= every) {
+          scheduleFiredAt.set(t.id, now);
           win?.webContents.send("schedule:fire", {
             id: t.id,
             to: t.to || "",
