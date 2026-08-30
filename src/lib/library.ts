@@ -181,7 +181,7 @@ export const LIBRARY: Addon[] = [
     repo: "github/github-mcp-server",
     summary: "PRs, issues, checks. Tools namespace as /mcp__github__*.",
     providers: ["claude", "codex", "cursor", "grok"],
-    install: "MCP · stdio github-mcp-server",
+    install: "https://api.githubcopilot.com/mcp/",
   },
   {
     id: "mcp-linear",
@@ -191,7 +191,7 @@ export const LIBRARY: Addon[] = [
     repo: "linear/linear-mcp",
     summary: "Issues, projects, cycles.",
     providers: ["claude", "cursor", "codex"],
-    install: "MCP · Linear OAuth",
+    install: "https://mcp.linear.app/mcp",
   },
   {
     id: "mcp-notion",
@@ -201,7 +201,7 @@ export const LIBRARY: Addon[] = [
     repo: "makenotion/notion-mcp-server",
     summary: "Pages, databases, comments.",
     providers: ["claude", "codex", "cursor", "grok"],
-    install: "MCP · Notion integration",
+    install: "https://mcp.notion.com/mcp",
   },
   {
     id: "mcp-slack",
@@ -211,7 +211,7 @@ export const LIBRARY: Addon[] = [
     repo: "modelcontextprotocol/servers",
     summary: "Channels, threads, search.",
     providers: ["claude", "cursor"],
-    install: "MCP · Slack bot token",
+    install: "npx -y @modelcontextprotocol/server-slack",
   },
   {
     id: "mcp-postgres",
@@ -221,7 +221,7 @@ export const LIBRARY: Addon[] = [
     repo: "modelcontextprotocol/servers",
     summary: "Read-only SQL against a database URL.",
     providers: ["claude", "codex", "cursor", "grok"],
-    install: "MCP · DATABASE_URL",
+    install: "npx -y @modelcontextprotocol/server-postgres",
   },
   {
     id: "mcp-sentry",
@@ -231,7 +231,7 @@ export const LIBRARY: Addon[] = [
     repo: "getsentry/sentry-mcp",
     summary: "Issues, stack traces, releases.",
     providers: ["claude", "codex", "cursor"],
-    install: "MCP · Sentry auth token",
+    install: "https://mcp.sentry.dev/mcp",
   },
   {
     id: "mcp-figma",
@@ -241,7 +241,7 @@ export const LIBRARY: Addon[] = [
     repo: "figma/mcp-server-guide",
     summary: "File structure, components, variables.",
     providers: ["claude", "cursor"],
-    install: "MCP · Figma Dev Mode",
+    install: "https://mcp.figma.com/mcp",
   },
   {
     id: "mcp-stripe",
@@ -251,7 +251,7 @@ export const LIBRARY: Addon[] = [
     repo: "stripe/agent-toolkit",
     summary: "Customers, invoices, payment intents.",
     providers: ["claude", "codex"],
-    install: "MCP · Stripe restricted key",
+    install: "https://mcp.stripe.com",
   },
   {
     id: "mcp-playwright",

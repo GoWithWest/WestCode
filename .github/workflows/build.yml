@@ -90,9 +90,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="v$VERSION"
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY"               --title "WestCode $VERSION"               --notes "Signed and notarized macOS build (arm64). Built from $GITHUB_SHA."
-          fi
-          gh release upload "$TAG" release/*.dmg release/*.zip             --repo "$GITHUB_REPOSITORY" --clobber
+          # Version: every release bumps the patch above the latest v* tag.
+          # A manual bump in package.json beyond that (e.g. 2.0.0) wins.
+          git fetch --tags --quiet
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1 | sed 's/^v//')
+          BASE=$(node -p "require('./package.json').version")
+          NEXT=$(LATEST="$LATEST" BASE="$BASE" node -e "
+            const bump = (v) => { const p = v.split('.').map(Number); p[2] = (p[2]||0) + 1; return p.join('.'); };
+            const cmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i]||0) !== (y[i]||0)) return (x[i]||0) - (y[i]||0); } return 0; };
+            const latest = process.env.LATEST || '0.0.0';
+            const candidate = bump(latest);
+            console.log(cmp(process.env.BASE, candidate) > 0 ? process.env.BASE : candidate);
+          ")
+          TAG="v$NEXT"
+          echo "Releasing $TAG (latest tag: v$LATEST, package.json: $BASE)"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "WestCode $NEXT" --latest --notes "Signed and notarized macOS build (arm64). Built from $GITHUB_SHA." release/*.dmg release/*.zip

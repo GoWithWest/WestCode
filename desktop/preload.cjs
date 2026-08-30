@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("westcode", {
   library: (providerId) => ipcRenderer.invoke("cli:library", providerId),
   addonAction: (payload) => ipcRenderer.invoke("addon:action", payload),
   addonMcpAdd: (payload) => ipcRenderer.invoke("addon:mcp-add", payload),
+  registrySearch: (q) => ipcRenderer.invoke("registry:search", { q }),
   updates: () => ipcRenderer.invoke("cli:updates"),
   updateCli: (providerId) => ipcRenderer.invoke("cli:update", providerId),
   installCli: (providerId) => ipcRenderer.invoke("cli:install", providerId),

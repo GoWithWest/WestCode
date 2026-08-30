@@ -313,6 +313,14 @@ function AddonConfigDialog({
   const [busy, setBusy] = useState<string | null>(null);
   const [output, setOutput] = useState("");
 
+  const cliStatus = useHelix((s) => s.cliStatus);
+  function installTargets(): string[] {
+    const found = new Set(
+      cliStatus.filter((c) => c.found).map((c) => c.id),
+    );
+    const declared = actionProviders(addon).filter((p) => found.has(p));
+    return declared.length ? declared : [providerId];
+  }
   const pluginTarget = /\/?plugin install\s+(\S+)/.exec(addon.install ?? "")?.[1];
   const marketplaceOnly = /\/?plugin marketplace add\s+(\S+)/.exec(addon.install ?? "")?.[1];
   const npxCmd = /^npx\s+(.+)$/.exec((addon.install ?? "").trim())?.[1];
@@ -325,25 +333,36 @@ function AddonConfigDialog({
     setOutput("");
     try {
       if (action === "install" && addon.kind === "connector") {
-        // Connectors ALWAYS install via `mcp add` — never the plugin path.
+        // Connectors ALWAYS install via `mcp add` — and to EVERY installed
+        // CLI this connector supports in one click; one server config per
+        // provider is how each CLI works, but the user acts once.
         const slug = addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-        if (npxCmd) {
-          const parts = npxCmd.split(/\s+/);
-          const res = await api.addonMcpAdd({
-            providerId,
-            name: slug,
-            commandOrUrl: "npx",
-            args: parts,
-          });
-          setOutput(res.output || (res.ok ? "Added." : "Failed."));
-        } else if (urlTarget) {
-          const res = await api.addonMcpAdd({
-            providerId,
-            name: slug,
-            commandOrUrl: urlTarget,
-            transport: "http",
-          });
-          setOutput(res.output || (res.ok ? "Added." : "Failed."));
+        const targets = installTargets();
+        if (npxCmd || urlTarget) {
+          const parts = npxCmd ? npxCmd.split(/\s+/) : [];
+          const lines: string[] = [];
+          for (const pid of targets) {
+            const res = npxCmd
+              ? await api.addonMcpAdd({
+                  providerId: pid,
+                  name: slug,
+                  commandOrUrl: "npx",
+                  args: parts,
+                })
+              : await api.addonMcpAdd({
+                  providerId: pid,
+                  name: slug,
+                  commandOrUrl: urlTarget!,
+                  transport: "http",
+                });
+            lines.push(`${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`);
+          }
+          setOutput(
+            lines.join("\n") +
+              (urlTarget
+                ? "\nRemote server — use Authenticate to finish OAuth where needed."
+                : ""),
+          );
         } else {
           setOutput(
             `This connector has no runnable install command in the catalog. Use "Add connector" with its server command or URL, or run in Terminal:\n${addon.install || "(none listed)"}`,
@@ -440,7 +459,7 @@ function AddonConfigDialog({
 
           <div className="mt-3 flex items-center gap-2">
             <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
-              Provider
+              Manage on
             </span>
             <select
               value={providerId}
@@ -458,7 +477,11 @@ function AddonConfigDialog({
           <div className="mt-3 flex flex-wrap gap-2">
             {!addon.installed ? (
               <Button size="sm" disabled={!!busy} onClick={() => void run("install")}>
-                {busy === "install" ? "Installing…" : "Install"}
+                {busy === "install"
+                  ? "Installing…"
+                  : addon.kind === "connector"
+                    ? "Install for all CLIs"
+                    : "Install"}
               </Button>
             ) : null}
             {addon.installed && removableKind ? (
@@ -528,6 +551,15 @@ function AddonConfigDialog({
   );
 }
 
+type RegistryServer = {
+  name: string;
+  title: string;
+  description: string;
+  remote: string;
+  npmPkg: string;
+  repo: string;
+};
+
 /** `mcp add` for any provider — the one procedure both CLIs document. */
 function AddConnectorDialog({
   open,
@@ -545,6 +577,59 @@ function AddConnectorDialog({
   const [header, setHeader] = useState("");
   const [busy, setBusy] = useState(false);
   const [output, setOutput] = useState("");
+  const [regQuery, setRegQuery] = useState("");
+  const [regResults, setRegResults] = useState<RegistryServer[]>([]);
+  const [regBusy, setRegBusy] = useState(false);
+  const cliStatus = useHelix((s) => s.cliStatus);
+  const foundClis = cliStatus.filter((c) => c.found).map((c) => c.id);
+
+  async function searchRegistry() {
+    if (!api?.registrySearch || !regQuery.trim()) return;
+    setRegBusy(true);
+    try {
+      const r = await api.registrySearch(regQuery.trim());
+      setRegResults(r.servers);
+      if (!r.ok) setOutput(r.output || "Registry search failed.");
+    } finally {
+      setRegBusy(false);
+    }
+  }
+
+  async function installFromRegistry(srv: RegistryServer) {
+    if (!api?.addonMcpAdd) return;
+    setBusy(true);
+    setOutput("");
+    try {
+      const slug = (srv.title || srv.name)
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .slice(0, 40);
+      const targets = foundClis.length
+        ? foundClis
+        : [providerId];
+      const lines: string[] = [];
+      for (const pid of targets) {
+        const res = srv.remote
+          ? await api.addonMcpAdd({
+              providerId: pid,
+              name: slug,
+              commandOrUrl: srv.remote,
+              transport: "http",
+            })
+          : await api.addonMcpAdd({
+              providerId: pid,
+              name: slug,
+              commandOrUrl: "npx",
+              args: ["-y", srv.npmPkg],
+            });
+        lines.push(`${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`);
+      }
+      setOutput(lines.join("\n"));
+      void refreshLibrary();
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit() {
     if (!api?.addonMcpAdd || !name.trim() || !target.trim()) return;
@@ -630,6 +715,47 @@ function AddConnectorDialog({
               className="mt-1.5 w-full resize-none rounded-md border border-border bg-window px-3 py-2 font-mono text-xs outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
             />
           </label>
+
+          <p className="mt-4 text-2xs font-medium tracking-wide text-subtle uppercase">
+            Or search the MCP registry
+          </p>
+          <div className="mt-1.5 flex gap-2">
+            <input
+              value={regQuery}
+              onChange={(e) => setRegQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void searchRegistry()}
+              placeholder="github, postgres, browser…"
+              className="h-8 flex-1 rounded-md border border-border bg-window px-2.5 text-xs outline-none placeholder:text-subtle"
+            />
+            <Button size="sm" variant="outline" disabled={regBusy} onClick={() => void searchRegistry()}>
+              {regBusy ? "Searching…" : "Search"}
+            </Button>
+          </div>
+          {regResults.length ? (
+            <ul className="scrollbar-thin mt-2 max-h-44 space-y-1.5 overflow-y-auto">
+              {regResults.map((srv) => (
+                <li
+                  key={srv.name}
+                  className="flex items-center gap-2 rounded-md border border-border bg-window px-2.5 py-1.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium">{srv.title}</p>
+                    <p className="truncate text-2xs text-subtle">
+                      {srv.remote ? "remote" : `npx ${srv.npmPkg}`} · {srv.description}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => void installFromRegistry(srv)}
+                  >
+                    Install
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
           {output ? (
             <pre className="scrollbar-thin mt-3 max-h-32 overflow-auto rounded-md bg-window p-2 font-mono text-2xs whitespace-pre-wrap">
