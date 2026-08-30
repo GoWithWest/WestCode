@@ -71,10 +71,10 @@ export function deskPreamble(
 ): string {
   const others = formatRoster(roster);
   const skills = addons?.skills?.length
-    ? `\nEnabled skills for this session: ${addons.skills.join(", ")}.`
+    ? `\nInstalled skills for this provider: ${addons.skills.join(", ")}.`
     : "";
   const connectors = addons?.connectors?.length
-    ? `\nEnabled connectors for this session: ${addons.connectors.join(", ")}.`
+    ? `\nInstalled connectors for this provider: ${addons.connectors.join(", ")}.`
     : "";
   return `[WestCode desk]
 You are one session on a shared WestCode desk (id ${selfId}, provider ${providerId}).

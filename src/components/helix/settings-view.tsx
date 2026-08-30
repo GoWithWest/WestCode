@@ -158,9 +158,11 @@ export function SettingsView() {
         <section className="mt-4 rounded-lg border border-border bg-surface p-4">
           <h3 className="text-sm font-medium">Scheduled tasks</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Run a prompt on an interval while WestCode is open. Sessions run
-            unattended (Bypass). Turn on launch-at-login below so schedules
-            keep running after a reboot.
+            Run a prompt on an interval while WestCode is open. Each task
+            gets its own dedicated session and runs unattended (Bypass, or
+            the agent's configured mode). Overdue tasks catch up once at
+            launch. Turn on launch-at-login below so schedules keep running
+            after a reboot.
           </p>
           <ul className="mt-3 space-y-2">
             {schedules.map((t) => (

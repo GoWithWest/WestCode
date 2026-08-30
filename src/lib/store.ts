@@ -69,6 +69,8 @@ export type ScheduledTask = {
   everyMinutes: number;
   enabled: boolean;
   lastRun?: number;
+  /** Dedicated session this task delivers into (created on first fire). */
+  sessionId?: string;
 };
 
 export type AppSettings = {
@@ -463,7 +465,7 @@ function rosterFor(
   agents: AgentProfile[] = [],
 ): AgentRosterItem[] {
   return sessions
-    .filter((s) => s.id !== selfId)
+    .filter((s) => s.id !== selfId && !s.archivedAt)
     .map((s) => ({
       id: s.id,
       title: s.title,
@@ -732,11 +734,14 @@ function bindDesktopEvents() {
     // "quinn@claude" pins the agent to a provider for this spawn; a bare
     // provider name ("claude") starts a plain session with no persona.
     const [toName, toProviderRaw] = p.to.split("@", 2);
-    const pinnedProvider =
-      toProviderRaw &&
-      (PROVIDER_ORDER as readonly string[]).includes(toProviderRaw.trim().toLowerCase())
-        ? toProviderRaw.trim().toLowerCase()
-        : undefined;
+    const pinRaw = toProviderRaw?.trim().toLowerCase();
+    const pinnedProvider = pinRaw
+      ? (PROVIDER_ORDER as readonly string[]).includes(pinRaw)
+        ? pinRaw
+        : state.customProviders.find(
+            (c) => c.id.toLowerCase() === pinRaw || c.name.toLowerCase() === pinRaw,
+          )?.id
+      : undefined;
     // A confident match only — an exact name/id/first-name/initials hit,
     // not a 3-letter prefix typo. Weak queries fall through to the fuzzy
     // session resolver instead of entering the agent branch at all.
@@ -1353,9 +1358,13 @@ export const useHelix = create<HelixState>((set, get) => ({
     // so an interval prompt never lands in a session the user is using.
     const agent = matchAgent(to, state.agents, { minScore: 80 });
     const title = `${name} — scheduled`;
-    const dedicated = state.sessions.find(
-      (s) => s.title === title && !s.archivedAt,
-    );
+    const task = state.schedules.find((t) => t.name === name && t.prompt === prompt);
+    const bySavedId = task?.sessionId
+      ? state.sessions.find((x) => x.id === task.sessionId && !x.archivedAt)
+      : undefined;
+    const dedicated =
+      bySavedId ??
+      state.sessions.find((x) => x.title === title && !x.archivedAt);
     let sessionId: string | null = dedicated?.id ?? null;
     if (!sessionId) {
       const provQuery = to.trim().toLowerCase();
@@ -1386,6 +1395,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         effort: agent?.effort || undefined,
         permissionMode: agent?.permissionMode || "bypass",
       });
+      if (task) get().updateSchedule(task.id, { sessionId });
     }
     if (sessionId) {
       void get().send(sessionId, `[Scheduled task: ${name}]\n${prompt}`);
