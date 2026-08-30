@@ -346,15 +346,21 @@ function AddonConfigDialog({
         // provider is how each CLI works, but the user acts once.
         const slug = addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
         const targets = installTargets();
-        let installStr = (addon.install ?? "").trim();
-        const missing: string[] = [];
-        for (const ph of placeholders) {
-          const v = (argValues[ph] ?? "").trim();
-          if (!v) missing.push(ph);
-          else installStr = installStr.replace(`<${ph}>`, v);
-        }
-        const npxFilled = /^npx\s+(.+)$/.exec(installStr)?.[1];
-        const urlFilled = /^https?:\/\/\S+$/.exec(installStr)?.[0];
+        const missing = placeholders.filter(
+          (ph) => !(argValues[ph] ?? "").trim(),
+        );
+        // Substitute per TOKEN of the template, so a filled-in value with
+        // spaces (a folder path, say) stays one spawn argument.
+        const fill = (tok: string) =>
+          tok.replace(/<([^>]+)>/g, (_m, ph: string) =>
+            (argValues[ph] ?? "").trim(),
+          );
+        const templateTokens = (addon.install ?? "").trim().split(/\s+/);
+        const isNpx = templateTokens[0] === "npx";
+        const npxArgs = isNpx ? templateTokens.slice(1).map(fill) : [];
+        const urlFilled = /^https?:\/\/\S+$/.exec(
+          fill((addon.install ?? "").trim()),
+        )?.[0];
         if (missing.length) {
           setOutput(
             "Fill in the field above first — this connector needs that setting to work.",
@@ -363,16 +369,15 @@ function AddonConfigDialog({
           setOutput(
             "No supported CLI is installed on this Mac. Install Claude Code, Grok Build, or Codex in Connections first.",
           );
-        } else if (npxFilled || urlFilled) {
-          const parts = npxFilled ? npxFilled.split(/\s+/) : [];
+        } else if (isNpx || urlFilled) {
           const lines: string[] = [];
           for (const pid of targets) {
-            const res = npxFilled
+            const res = isNpx
               ? await api.addonMcpAdd({
                   providerId: pid,
                   name: slug,
                   commandOrUrl: "npx",
-                  args: parts,
+                  args: npxArgs,
                 })
               : await api.addonMcpAdd({
                   providerId: pid,
