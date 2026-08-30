@@ -161,7 +161,7 @@ export function ProvidersView() {
                       variant="ghost"
                       onClick={() => {
                         setView("mosaic");
-                        setNewOpen(true);
+                        setNewOpen(true, p.id);
                       }}
                     >
                       New session
@@ -190,7 +190,7 @@ export function ProvidersView() {
                         variant="ghost"
                         onClick={() => {
                           setView("mosaic");
-                          setNewOpen(true);
+                          setNewOpen(true, p.id);
                         }}
                       >
                         New session

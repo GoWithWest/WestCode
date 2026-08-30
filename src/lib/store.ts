@@ -201,6 +201,7 @@ export type HelixState = {
   mobileNav: "desk" | "sessions";
   clock: number;
   newOpen: boolean;
+  newProviderId: string | null;
   enabledAddons: string[];
   customAddons: Addon[];
   customProviders: CustomProvider[];
@@ -220,7 +221,7 @@ export type HelixState = {
   setView: (v: LayoutView) => void;
   setActive: (id: string) => void;
   setSplit: (ids: [string, string]) => void;
-  setNewOpen: (open: boolean) => void;
+  setNewOpen: (open: boolean, providerId?: string | null) => void;
   setMobileNav: (v: "desk" | "sessions") => void;
   tick: () => void;
   restoreState: () => Promise<void>;
@@ -857,6 +858,7 @@ export const useHelix = create<HelixState>((set, get) => ({
   mobileNav: "desk",
   clock: Date.now(),
   newOpen: false,
+  newProviderId: null,
   enabledAddons: DEFAULT_ENABLED,
   customAddons: [],
   customProviders: [],
@@ -877,7 +879,8 @@ export const useHelix = create<HelixState>((set, get) => ({
   setActive: (id) =>
     set({ activeId: id, view: "focus", mobileNav: "desk" }),
   setSplit: (ids) => set({ splitIds: ids, view: "split", mobileNav: "desk" }),
-  setNewOpen: (newOpen) => set({ newOpen }),
+  setNewOpen: (newOpen, providerId = null) =>
+    set({ newOpen, newProviderId: newOpen ? providerId : null }),
   setMobileNav: (mobileNav) => set({ mobileNav }),
   tick: () => set({ clock: Date.now() }),
 
@@ -1332,7 +1335,12 @@ export const useHelix = create<HelixState>((set, get) => ({
   },
 
   addSchedule: (t) => {
-    const schedules = [...get().schedules, { ...t, id: uid("sch") }];
+    // Seed lastRun so a brand-new task first fires after its interval,
+    // not the moment it is added.
+    const schedules = [
+      ...get().schedules,
+      { ...t, id: uid("sch"), lastRun: Date.now() },
+    ];
     saveState(SCHEDULES_KEY, schedules);
     set({ schedules });
   },
@@ -2027,6 +2035,12 @@ function runSlash(
   }
 
   if (cmd === "clear") {
+    // Retire any in-flight turn the same way stop() does, or its late
+    // events would paint over — and its queue replay into — the freshly
+    // cleared transcript.
+    abortBySession.get(sessionId)?.abort();
+    abortBySession.delete(sessionId);
+    promptAsst.delete(sessionId);
     void westcode()?.stopSession(sessionId);
     set((st) => ({
       sessions: patchSession(st.sessions, sessionId, (ses) => ({
@@ -2042,6 +2056,7 @@ function runSlash(
         updatedAt: Date.now(),
         status: "idle",
         permission: null,
+        queued: [],
         slashCommands: undefined,
       })),
     }));

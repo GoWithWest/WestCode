@@ -16,6 +16,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
 const ICON_PNG = join(here, "icon.png");
 
+// A late async failure (e.g. a child process that cannot spawn) must not
+// take the whole app down with Electron's crash dialog.
+process.on("uncaughtException", (err) => {
+  console.error("[westcode] uncaught exception:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[westcode] unhandled rejection:", err);
+});
+
 /** @type {BrowserWindow | null} */
 let win = null;
 /** @type {import("node:child_process").ChildProcess | null} */
@@ -430,6 +439,84 @@ ipcMain.handle("addon:mcp-add", async (_e, payload) => {
       resolve({ ok: code === 0, output: out.slice(-3000) }),
     );
   });
+});
+
+// Search the official MCP registry (registry.modelcontextprotocol.io) for
+// installable servers — remotes (http) and npm packages (stdio via npx).
+ipcMain.handle("registry:search", async (_e, { q }) => {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15_000);
+  try {
+    const query = String(q || "");
+    const ql = query.toLowerCase();
+    const byName = new Map();
+    const collect = async (term, pages) => {
+      let cursor = "";
+      for (let page = 0; page < pages; page++) {
+        const url =
+          `https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(term)}&limit=100` +
+          (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+        const res = await fetch(url, { signal: ac.signal });
+        if (!res.ok) return res;
+        const data = await res.json();
+        for (const item of data.servers || []) {
+          const s = item.server || {};
+          if (!s.name) continue;
+          const meta = item._meta?.["io.modelcontextprotocol.registry/official"];
+          const isLatest = !meta || meta.isLatest !== false;
+          const remote = (s.remotes || []).find((r) => r.url)?.url || "";
+          const npmPkg = (s.packages || []).find((p) => p.registryType === "npm")?.identifier || "";
+          if (!remote && !npmPkg) continue;
+          // Keep the latest version of a server; among rows all marked
+          // isLatest: false, keep the newest (later pages are newer).
+          const existing = byName.get(s.name);
+          if (existing && existing.isLatest) continue;
+          byName.set(s.name, {
+            name: s.name,
+            title: s.title || s.name,
+            description: String(s.description || "").slice(0, 200),
+            remote,
+            npmPkg,
+            repo: s.repository?.url || "",
+            isLatest,
+          });
+        }
+        cursor = data.metadata?.nextCursor || "";
+        if (!cursor) break;
+      }
+      return null;
+    };
+    // The registry substring-matches namespaces too (searching "github"
+    // returns pages of io.github.* servers), so walk a few pages, and run
+    // a second, sharper query — official vendor servers are usually named
+    // <vendor>-mcp-server (e.g. io.github.github/github-mcp-server).
+    const failed = await collect(query, 3);
+    if (failed && !byName.size) {
+      return { ok: false, output: `${failed.status} ${failed.statusText}`, servers: [] };
+    }
+    if (ql && !ql.includes(" ")) await collect(`${ql}-mcp-server`, 2);
+    const rank = (s) => {
+      const name = String(s.name).toLowerCase();
+      const title = String(s.title).toLowerCase();
+      const short = name.split("/").pop() ?? "";
+      // The vendor's own namespace (io.github.github/…) outranks
+      // third-party proxies whose short name merely equals the query.
+      if (ql && name.startsWith(`io.github.${ql}/`)) return 0;
+      if (ql && (title === ql || short === ql || short === `${ql}-mcp-server`))
+        return 1;
+      if (ql && (title.includes(ql) || short.includes(ql))) return 2;
+      return 3;
+    };
+    const servers = [...byName.values()]
+      .sort((a, b) => rank(a) - rank(b))
+      .slice(0, 25)
+      .map(({ isLatest: _latest, ...rest }) => rest);
+    return { ok: true, servers };
+  } catch (err) {
+    return { ok: false, output: err.message, servers: [] };
+  } finally {
+    clearTimeout(timer);
+  }
 });
 
 ipcMain.handle("cli:probe", () => probeAll());
