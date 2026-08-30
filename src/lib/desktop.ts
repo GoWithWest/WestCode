@@ -86,6 +86,7 @@ type WestcodeBridge = {
     args?: string[];
     transport?: string;
     env?: Record<string, string>;
+    header?: string;
   }) => Promise<{ ok: boolean; output: string }>;
   updates: () => Promise<CliUpdate[]>;
   updateCli: (providerId: string) => Promise<{ ok: boolean; output: string }>;
@@ -102,6 +103,11 @@ type WestcodeBridge = {
     defaultName: string,
     content: string,
   ) => Promise<{ ok: boolean; path?: string }>;
+  installSkillFile: (
+    path: string,
+    name: string,
+    providers: string[],
+  ) => Promise<{ ok: boolean; output: string }>;
   pickFile: () => Promise<{
     name: string;
     path: string;

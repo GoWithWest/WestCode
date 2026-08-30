@@ -10,7 +10,7 @@ export function Sidebar() {
   const activeId = useHelix((s) => s.activeId);
   const view = useHelix((s) => s.view);
   const clock = useHelix((s) => s.clock);
-  const enabledAddons = useHelix((s) => s.enabledAddons);
+  const liveAddons = useHelix((s) => s.liveAddons);
   const setActive = useHelix((s) => s.setActive);
   const setView = useHelix((s) => s.setView);
   const setNewOpen = useHelix((s) => s.setNewOpen);
@@ -163,7 +163,7 @@ export function Sidebar() {
           <Blocks className="size-3.5" />
           Library
           <span className="ml-auto text-2xs tabular-nums text-subtle">
-            {enabledAddons.length}
+            {liveAddons.length}
           </span>
         </Button>
         <Button

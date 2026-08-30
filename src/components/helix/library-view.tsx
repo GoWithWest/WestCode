@@ -103,9 +103,9 @@ export function LibraryView() {
           <div>
             <h2 className="text-lg font-medium tracking-tight">Library</h2>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Skills, plugins, and MCP connectors belong to each CLI
-              (~/.claude, ~/.grok, ~/.codex). Enable what that provider already
-              installed; WestCode does not keep a separate catalog.
+              Everything your CLIs have installed (~/.claude, ~/.grok,
+              ~/.codex), merged with a curated catalog you can install from.
+              Install, remove, and configure run each provider's own CLI.
             </p>
           </div>
           <div className="flex gap-2">
@@ -314,22 +314,57 @@ function AddonConfigDialog({
   const [output, setOutput] = useState("");
 
   const pluginTarget = /\/?plugin install\s+(\S+)/.exec(addon.install ?? "")?.[1];
+  const marketplaceOnly = /\/?plugin marketplace add\s+(\S+)/.exec(addon.install ?? "")?.[1];
   const npxCmd = /^npx\s+(.+)$/.exec((addon.install ?? "").trim())?.[1];
+  const urlTarget = /^https?:\/\/\S+$/.exec((addon.install ?? "").trim())?.[0];
+  const bundled = /^bundled\b/.test((addon.install ?? "").trim());
 
   async function run(action: string, opts?: { source?: string }) {
     if (!api?.addonAction) return;
     setBusy(action);
     setOutput("");
     try {
-      if (action === "install" && addon.kind === "connector" && npxCmd) {
-        const parts = npxCmd.split(/\s+/);
-        const res = await api.addonMcpAdd({
+      if (action === "install" && addon.kind === "connector") {
+        // Connectors ALWAYS install via `mcp add` — never the plugin path.
+        const slug = addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+        if (npxCmd) {
+          const parts = npxCmd.split(/\s+/);
+          const res = await api.addonMcpAdd({
+            providerId,
+            name: slug,
+            commandOrUrl: "npx",
+            args: parts,
+          });
+          setOutput(res.output || (res.ok ? "Added." : "Failed."));
+        } else if (urlTarget) {
+          const res = await api.addonMcpAdd({
+            providerId,
+            name: slug,
+            commandOrUrl: urlTarget,
+            transport: "http",
+          });
+          setOutput(res.output || (res.ok ? "Added." : "Failed."));
+        } else {
+          setOutput(
+            `This connector has no runnable install command in the catalog. Use "Add connector" with its server command or URL, or run in Terminal:\n${addon.install || "(none listed)"}`,
+          );
+        }
+      } else if (action === "install" && bundled) {
+        setOutput("Bundled with the CLI — nothing to install.");
+      } else if (action === "install" && marketplaceOnly && !pluginTarget) {
+        const res = await api.addonAction({
           providerId,
-          name: addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-"),
-          commandOrUrl: "npx",
-          args: parts,
+          kind: "marketplace",
+          action: "add",
+          name: addon.name,
+          source: marketplaceOnly,
         });
-        setOutput(res.output || (res.ok ? "Added." : "Failed."));
+        setOutput(
+          (res.output ? res.output + "\n" : "") +
+            (res.ok
+              ? "Marketplace added. Pick the plugin inside the CLI (/plugin) — this entry does not name a single plugin to install."
+              : "Failed."),
+        );
       } else if (action === "install" && (pluginTarget || addon.repo)) {
         if (providerId === "grok") {
           // grok installs plugins from a git source, not name@marketplace.
@@ -382,8 +417,11 @@ function AddonConfigDialog({
   }
 
   const canEnable =
-    providerId === "grok" || (providerId === "claude" && addon.kind === "plugin");
-  const canAuth = providerId === "claude" && addon.kind === "connector";
+    (providerId === "grok" && addon.kind !== "skill") ||
+    (providerId === "claude" && addon.kind === "plugin");
+  const canAuth =
+    (providerId === "claude" || providerId === "codex") &&
+    addon.kind === "connector";
   const canDoctor = providerId === "grok" && addon.kind === "connector";
   const removableKind = addon.kind !== "skill";
 
@@ -444,9 +482,14 @@ function AddonConfigDialog({
               </>
             ) : null}
             {canAuth ? (
-              <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("login")}>
-                Authenticate
-              </Button>
+              <>
+                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("login")}>
+                  Authenticate
+                </Button>
+                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("logout")}>
+                  Log out
+                </Button>
+              </>
             ) : null}
             {canDoctor ? (
               <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("doctor")}>
@@ -499,6 +542,7 @@ function AddConnectorDialog({
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
   const [envText, setEnvText] = useState("");
+  const [header, setHeader] = useState("");
   const [busy, setBusy] = useState(false);
   const [output, setOutput] = useState("");
 
@@ -521,6 +565,7 @@ function AddConnectorDialog({
         args: isUrl ? [] : parts.slice(1),
         transport: isUrl ? "http" : "stdio",
         env,
+        header: header.trim() || undefined,
       });
       setOutput(res.output || (res.ok ? "Connector added." : "Failed."));
       if (res.ok) void refreshLibrary();
@@ -567,6 +612,12 @@ function AddConnectorDialog({
             value={target}
             onChange={setTarget}
             placeholder="npx -y @playwright/mcp@latest   ·   https://mcp.notion.com/mcp"
+          />
+          <Field
+            label="Auth header (optional, http)"
+            value={header}
+            onChange={setHeader}
+            placeholder="Authorization: Bearer …"
           />
           <label className="mt-3 block">
             <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
@@ -615,6 +666,8 @@ function ImportDialog({
   const [summary, setSummary] = useState("");
   const [install, setInstall] = useState("");
   const [providers, setProviders] = useState<string[]>([...PROVIDER_ORDER]);
+  const [pickedPath, setPickedPath] = useState("");
+  const [installNote, setInstallNote] = useState("");
 
   function toggleProv(id: string) {
     setProviders((cur) =>
@@ -625,6 +678,13 @@ function ImportDialog({
   function submit() {
     const n = name.trim();
     if (!n) return;
+    // A picked local file for a skill is INSTALLED into the chosen
+    // providers' skills folders, not just cataloged.
+    if (pickedPath && kind === "skill" && westcode()?.installSkillFile) {
+      void westcode()!
+        .installSkillFile(pickedPath, n, providers.filter((p) => p !== "*"))
+        .then((r) => setInstallNote(r.output));
+    }
     importAddon({
       kind,
       name: n,
@@ -639,6 +699,7 @@ function ImportDialog({
     setRepo("");
     setSummary("");
     setInstall("");
+    setPickedPath("");
     onOpenChange(false);
   }
 
@@ -663,6 +724,7 @@ function ImportDialog({
               onClick={async () => {
                 const f = await westcode()!.pickFile();
                 if (!f) return;
+                setPickedPath(f.path);
                 setName(
                   f.name.replace(/\.(md|json|ya?ml|toml|txt)$/i, "").replace(/[-_]/g, " "),
                 );
@@ -747,12 +809,21 @@ function ImportDialog({
             ))}
           </div>
 
+          {pickedPath && kind === "skill" ? (
+            <p className="mt-3 text-2xs text-muted-foreground">
+              This file will be installed to the selected providers' skills
+              folders (~/.claude/skills, ~/.grok/skills, …).
+            </p>
+          ) : null}
+          {installNote ? (
+            <pre className="mt-2 font-mono text-2xs whitespace-pre-wrap text-subtle">{installNote}</pre>
+          ) : null}
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button onClick={submit} disabled={!name.trim()}>
-              Add to library
+              {pickedPath && kind === "skill" ? "Install & add" : "Add to library"}
             </Button>
           </div>
         </Dialog.Content>

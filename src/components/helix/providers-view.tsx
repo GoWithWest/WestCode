@@ -195,6 +195,24 @@ export function ProvidersView() {
                       >
                         New session
                       </Button>
+                      {p.id === "grok" ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy === p.id}
+                          onClick={async () => {
+                            setBusy(p.id);
+                            try {
+                              await api?.updateCli?.(p.id);
+                              await refreshCli();
+                            } finally {
+                              setBusy(null);
+                            }
+                          }}
+                        >
+                          {busy === p.id ? "Updating…" : "Update"}
+                        </Button>
+                      ) : null}
                     </>
                   ) : (
                     <>
