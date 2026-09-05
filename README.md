@@ -37,3 +37,7 @@ npm run dist       # signed DMG/ZIP into release/ (Developer ID cert required)
 CI (`.github/workflows/build.yml`) typechecks, lints, then builds a **signed + notarized + stapled** DMG/ZIP on every push to main and publishes it to GitHub Releases (requires the `MAC_CERT_P12`/`APPLE_API_*` repo secrets; unsigned dev artifact otherwise).
 
 Note: building from a folder synced by iCloud/cloud file providers breaks codesign (`com.apple.provenance` stamping) — `npm run dist` therefore packages via `/tmp/westcode-release` and copies the DMG/ZIP back.
+
+## Licence
+
+WestCode is **source-available**, not open source. The [LICENSE](LICENSE) lets you run it for personal use, read it, fork it on GitHub to work on it, and send improvements back as pull requests. It does not let you put any of it inside other software, run it for other people as a service, use it in a business without written permission, or sell it in any form. Business use: ask at chat@withwest.net. Third-party components keep their own licences.
