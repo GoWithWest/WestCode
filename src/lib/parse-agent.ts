@@ -90,20 +90,49 @@ export function blocksToPlain(blocks: Block[]): string {
     .join("\n\n");
 }
 
+/** Trailing text after the last tool/think is the reply; everything before is work. */
+export function splitActivity(blocks: Block[]): {
+  activity: Block[];
+  reply: Block[];
+} {
+  let cut = -1;
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i]?.type !== "text") cut = i;
+  }
+  if (cut < 0) return { activity: [], reply: blocks };
+  return {
+    activity: blocks.slice(0, cut + 1),
+    reply: blocks.slice(cut + 1),
+  };
+}
+
+export function activitySummary(blocks: Block[]): string {
+  const tools = blocks.filter((b) => b.type === "tool").length;
+  const thinking = blocks.some((b) => b.type === "think");
+  const parts: string[] = [];
+  if (tools) parts.push(tools === 1 ? "1 tool" : `${tools} tools`);
+  if (thinking) parts.push("thinking");
+  return parts.join(" · ") || "activity";
+}
+
 export function lastSnippet(blocks: Block[], max = 140): string {
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const b = blocks[i];
-    if (!b) continue;
-    if (b.type === "text" && b.text.trim()) {
-      const t = b.text.replace(/\s+/g, " ").trim();
-      return t.length > max ? `${t.slice(0, max)}…` : t;
-    }
-    if (b.type === "tool") {
-      if (/^sendmessage$/i.test(b.name)) {
-        return `SendMessage · ${b.to ?? "session"}`;
+  const { activity, reply } = splitActivity(blocks);
+  const prefer = reply.length ? reply : activity;
+  for (const group of [prefer, blocks]) {
+    for (let i = group.length - 1; i >= 0; i--) {
+      const b = group[i];
+      if (!b) continue;
+      if (b.type === "text" && b.text.trim()) {
+        const t = b.text.replace(/\s+/g, " ").trim();
+        return t.length > max ? `${t.slice(0, max)}…` : t;
       }
-      const target = b.path ?? b.command ?? b.name;
-      return `${b.name} · ${target}`;
+      if (b.type === "tool") {
+        if (/^sendmessage$/i.test(b.name)) {
+          return `SendMessage · ${b.to ?? "session"}`;
+        }
+        const target = b.path ?? b.command ?? b.name;
+        return `${b.name} · ${target}`;
+      }
     }
   }
   return "No output yet";
@@ -186,23 +215,42 @@ export function exportTranscript(session: {
             ? `Agent (${m.fromTitle ?? "peer"})`
             : "System";
     lines.push(`## ${who} — ${new Date(m.createdAt).toLocaleString()}`, "");
-    for (const b of m.blocks) {
-      if (b.type === "text") lines.push(b.text, "");
-      else if (b.type === "think") lines.push(`> _${b.text.replaceAll("\n", " ")}_`, "");
-      else if (b.type === "tool") {
+    if (m.role === "assistant") {
+      const { activity, reply } = splitActivity(m.blocks);
+      if (activity.length) {
         lines.push(
-          `**${b.name}**${b.path ? ` · ${b.path}` : ""}${b.command ? ` · \`${b.command}\`` : ""}`,
+          "<details>",
+          `<summary>${activitySummary(activity)}</summary>`,
           "",
         );
-        if (b.content) {
-          // A fence longer than any run of backticks in the payload keeps
-          // tool output that itself contains ``` from breaking the document.
-          const runs = b.content.match(/`+/g) ?? [];
-          const fence = "`".repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
-          lines.push(fence, b.content, fence, "");
-        }
+        writeBlocks(lines, activity);
+        lines.push("</details>", "");
       }
+      writeBlocks(lines, reply);
+    } else {
+      writeBlocks(lines, m.blocks);
     }
   }
   return lines.join("\n");
+}
+
+function writeBlocks(lines: string[], blocks: Block[]) {
+  for (const b of blocks) {
+    if (b.type === "text") lines.push(b.text, "");
+    else if (b.type === "think") {
+      lines.push(`> _${b.text.replaceAll("\n", " ")}_`, "");
+    } else if (b.type === "tool") {
+      lines.push(
+        `**${b.name}**${b.path ? ` · ${b.path}` : ""}${b.command ? ` · \`${b.command}\`` : ""}`,
+        "",
+      );
+      if (b.content) {
+        // A fence longer than any run of backticks in the payload keeps
+        // tool output that itself contains ``` from breaking the document.
+        const runs = b.content.match(/`+/g) ?? [];
+        const fence = "`".repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
+        lines.push(fence, b.content, fence, "");
+      }
+    }
+  }
 }

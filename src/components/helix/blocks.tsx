@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as Collapsible from "@radix-ui/react-collapsible";
 import {
   Check,
   ChevronRight,
@@ -9,6 +10,7 @@ import {
   Terminal,
   Users,
 } from "lucide-react";
+import { activitySummary, splitActivity } from "@/lib/parse-agent";
 import type { Attachment, Block, ChatMessage, ToolBlock } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ProviderDot, useResolvedProvider } from "./provider";
@@ -79,15 +81,90 @@ function Message({
     );
   }
 
+  const { activity, reply } = splitActivity(message.blocks);
+
   return (
     <div className="flex flex-col gap-2.5">
-      {message.blocks.map((b, i) => (
-        <BlockView key={`${message.id}-${i}`} block={b} compact={compact} />
+      {activity.length ? (
+        <ActivityDump
+          id={message.id}
+          blocks={activity}
+          compact={compact}
+          streaming={Boolean(message.streaming)}
+          hasReply={reply.length > 0}
+        />
+      ) : null}
+      {reply.map((b, i) => (
+        <BlockView key={`${message.id}-r-${i}`} block={b} compact={compact} />
       ))}
       {message.streaming && message.blocks.length === 0 ? (
         <span className="text-xs text-muted-foreground">Thinking</span>
       ) : null}
     </div>
+  );
+}
+
+function ActivityDump({
+  id,
+  blocks,
+  compact,
+  streaming,
+  hasReply,
+}: {
+  id: string;
+  blocks: Block[];
+  compact?: boolean;
+  streaming: boolean;
+  hasReply: boolean;
+}) {
+  const running = blocks.some((b) => b.type === "tool" && b.status === "running");
+  const autoOpen = streaming || !hasReply;
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? autoOpen;
+  const tools = blocks.filter((b) => b.type === "tool").length;
+
+  return (
+    <Collapsible.Root open={open} onOpenChange={setUserOpen}>
+      <div className="overflow-hidden rounded-md border border-border bg-surface">
+        <Collapsible.Trigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "flex w-full items-center gap-2 px-3 py-2 text-left",
+              compact && "py-1.5",
+            )}
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 shrink-0 text-subtle transition-transform duration-(--motion-quick) ease-(--ease-out)",
+                open && "rotate-90",
+              )}
+            />
+            <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+              {activitySummary(blocks)}
+            </span>
+            {running ? (
+              <CircleDashed className="size-3.5 animate-spin text-claude" />
+            ) : tools ? (
+              <Check className="size-3.5 text-success" />
+            ) : null}
+          </button>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          <div
+            className={cn(
+              "flex flex-col gap-2 border-t border-border bg-background/40 p-3",
+              compact && "gap-1.5 p-2.5",
+            )}
+          >
+            {blocks.map((b, i) => (
+              <BlockView key={`${id}-a-${i}`} block={b} compact={compact} />
+            ))}
+          </div>
+        </Collapsible.Content>
+      </div>
+    </Collapsible.Root>
   );
 }
 
@@ -163,18 +240,17 @@ function BlockView({ block, compact }: { block: Block; compact?: boolean }) {
 function ToolCard({ tool, compact }: { tool: ToolBlock; compact?: boolean }) {
   const send = /^sendmessage$/i.test(tool.name);
   const list = /^listagents$/i.test(tool.name);
-  const [open, setOpen] = useState(
-    tool.status === "running" || Boolean(tool.content),
-  );
+  const running = tool.status === "running";
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? running;
   const target = tool.to ?? tool.path ?? tool.command ?? "";
   const Icon = send ? Send : list ? Users : tool.name === "Bash" ? Terminal : FileCode;
-  const running = tool.status === "running";
 
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface-2">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setUserOpen((v) => !(v ?? running))}
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
       >
         <ChevronRight
