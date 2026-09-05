@@ -1,0 +1,153 @@
+WestCode Source-Available License
+Version 1.0, 5 September 2026
+
+Copyright (c) 2026 West (company registration number 2019/538970/07, South
+Africa), the "Licensor". Contact: chat@withwest.net.
+
+This licence lets you read, run, study and improve WestCode, and send your
+improvements back. It does not let you build other products out of it, run it
+for other people, or sell it. Read the whole text; this paragraph is a
+summary, not the licence.
+
+1. Definitions
+
+   "WestCode Material" means the source code, build scripts, assets and
+   documentation in this repository that the Licensor wrote or owns, and the
+   parts of any binary built from them. It excludes Third-Party Components.
+   "Third-Party Components" means components written by others and included
+   in this repository or in a binary, each under its own licence.
+   "Software" means WestCode Material together with the Third-Party
+   Components as combined in this repository or in a binary.
+   "Modification" means a derivative work of WestCode Material within the
+   meaning of the South African Copyright Act 98 of 1978, or a copy of a
+   substantial part of WestCode Material. It does not include fair quotation
+   for criticism, review or user documentation.
+   "Contribution" means a Modification you submit to the Licensor's official
+   repository, for example as a pull request.
+   "Personal Use" means use by a natural person for that person's own
+   purposes, with no commercial advantage or monetary compensation sought.
+   "Business Use" means any use by or for a company, organisation, sole
+   trader or other undertaking, including internal use by its staff, other
+   than the work described in section 2(g).
+   "Sell" means to charge, or to take advertising revenue, for the Software,
+   a Modification, access to or hosting of either, or any product or service
+   of which either is a part; or to offer paid support, warranty or indemnity
+   whose subject is either. It does not include wages from an employer that
+   holds permission under section 4, or genuinely independent advice that
+   does not transfer or host the Software.
+
+2. What you may do
+
+   Subject to section 3, the Licensor grants you a worldwide, royalty-free,
+   non-exclusive, non-transferable licence to:
+
+   (a) download, install and run the Software, for Personal Use;
+   (b) read and study the source code;
+   (c) make Modifications, and run them, for Personal Use;
+   (d) submit Modifications to the Licensor as Contributions;
+   (e) share unmodified copies of the Software with others, free of charge,
+       provided this licence file travels with every copy;
+   (f) fork the official repository on GitHub and push Modifications to that
+       fork solely to develop, review and submit Contributions; and
+   (g) make and run Modifications, including at your place of work, solely
+       to prepare a Contribution. That is not Business Use and is not a
+       Sell.
+
+3. What you may not do
+
+   (a) You may not Sell the Software or any Modification, in any form, to
+       anyone, for any reason. No permission under this licence, and no
+       permission the Licensor grants separately under section 4, ever
+       extends to selling.
+   (b) You may not include WestCode Material, or any part of it, in any
+       software, product, service, library, plug-in, website or system,
+       whether by copying, linking, embedding, wrapping, bundling or
+       hosting. WestCode is licensed as a whole application, not as parts.
+   (c) You may not distribute a Modification except (i) as a Contribution to
+       the Licensor's official repository, or (ii) as commits on a GitHub
+       fork solely for the purpose in section 2(f). A fork is not permission
+       to use a Modification outside this licence.
+   (d) You may not make Business Use of the Software or of any Modification
+       without the Licensor's prior written permission under section 4.
+   (e) You may not remove or alter copyright notices, this licence, or the
+       names and marks described in section 6.
+   (f) You may not copy WestCode Material as training, fine-tuning or
+       evaluation data for a machine-learning model without the Licensor's
+       prior written permission. This does not restrict uses that copyright
+       law does not restrict, or incidental use of a generally available
+       coding assistant that you do not control.
+   (g) You may not make the Software or a Modification available to third
+       parties as a network, hosted, cloud or on-demand service, whether
+       paid or free.
+
+4. Business Use with permission
+
+   The Licensor may grant a named undertaking written permission to make
+   Business Use of the Software. Permission may be requested at the contact
+   address above and may be refused. It is personal to that undertaking,
+   does not permit selling, does not permit the inclusions in section 3(b)
+   or the services in section 3(g), and does not permit sub-licensing. The
+   Licensor may withdraw permission for future use, but not for copies
+   already lawfully made, except on breach of this licence.
+
+5. Contributions
+
+   By submitting a Contribution you grant the Licensor a perpetual,
+   worldwide, irrevocable, royalty-free licence to use, copy, modify,
+   reproduce, distribute and sub-license it solely as part of the Software,
+   under this licence or a successor licence applied to the Software. You
+   keep the copyright in your Contribution; this is a licence, not an
+   assignment. You warrant that you have all rights needed to grant it,
+   including your employer's or any co-owner's consent where the
+   Contribution was made in the course of employment.
+
+6. Names and marks
+
+   "West", "WestCode", the W mark and the WestCode icon are the Licensor's.
+   This licence grants no right to use them, except to identify unmodified
+   copies of the Software as required by section 2(e).
+
+7. Third-party software
+
+   Third-Party Components are licensed under their own terms, which govern
+   those components and prevail over this licence for those files. This
+   licence governs WestCode Material, and the combination, only to the
+   extent those terms allow. Nothing in this licence restricts rights you
+   have under them.
+
+8. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
+
+9. Limitation of liability
+
+   TO THE EXTENT PERMITTED BY LAW, THE LICENSOR IS NOT LIABLE FOR ANY CLAIM,
+   DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, DELICT OR OTHERWISE,
+   ARISING FROM OR IN CONNECTION WITH THE SOFTWARE OR ITS USE. Nothing in
+   this licence excludes liability that cannot be excluded by law, including
+   under the South African Consumer Protection Act where it applies.
+
+10. Termination
+
+   Your rights under this licence end thirty days after a breach unless you
+   cure the breach within that time. When they end, you must stop using the
+   Software and delete the copies you can reasonably delete. Automated
+   backups and legally required archives need not be purged, but may not be
+   restored for use. You need not destroy your own work that does not
+   include WestCode Material. Licences already granted under section 5
+   survive. Sections 5 to 11 survive.
+
+11. General
+
+   This licence is governed by the law of the Republic of South Africa, and
+   its courts have jurisdiction, without prejudice to any mandatory
+   protection you have under the law of the country where you live. This
+   licence does not limit the rights that GitHub's Terms of Service grant to
+   view and fork a public repository on GitHub; outside that functionality,
+   this licence governs. If any part of this licence is unenforceable, the
+   rest remains in force. This is not an Open Source Initiative approved
+   licence: the Software is source-available, not open source. The Licensor
+   may publish new versions of this licence; each version of the Software is
+   governed by the licence text distributed with it.
