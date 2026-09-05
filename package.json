@@ -2,6 +2,7 @@
   "name": "westcode",
   "productName": "WestCode",
   "version": "0.1.0",
+  "license": "SEE LICENSE IN LICENSE",
   "description": "All your coding agents. One desk.",
   "author": "WestCode",
   "private": true,
