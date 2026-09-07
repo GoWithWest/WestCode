@@ -745,6 +745,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
       }
       const block: ToolBlock = {
         type: "tool",
+        toolId: ev.toolId,
         name: ev.name || "Tool",
         path: ev.path,
         command: ev.command,
@@ -887,17 +888,21 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       messages: ses.messages.map((m) => {
         if (m.id !== asstId) return m;
         const blocks = [...m.blocks];
+        // Match on the agent's call id. Matching on `path` used to work only
+        // for tools that HAVE no path (the id was stored there), so a Read or
+        // Edit update opened a second card instead of completing the first.
         const idx = blocks.findIndex(
           (b) =>
             b.type === "tool" &&
             (ev.toolId
-              ? b.path === ev.toolId || b.name === ev.name
+              ? b.toolId === ev.toolId || (!b.toolId && b.name === ev.name)
               : b.name === ev.name && b.status === "running"),
         );
         const tool: Block = {
           type: "tool",
+          toolId: ev.toolId,
           name: ev.name || "Tool",
-          path: ev.path || ev.toolId,
+          path: ev.path,
           command: ev.command,
           content: ev.content || "",
           status: ev.status || "running",
@@ -913,6 +918,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           blocks[idx] = {
             ...tool,
             name: meaningfulName,
+            toolId: tool.toolId || prev.toolId,
             content: tool.content || prev.content,
             path: tool.path || prev.path,
             command: tool.command || prev.command,
