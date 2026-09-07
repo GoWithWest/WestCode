@@ -936,6 +936,11 @@ ipcMain.handle("session:open", async (_e, payload) => {
   if (!sessionId || !providerId || !agentSessionId) {
     return { ok: false, output: "sessionId, providerId and agentSessionId are required." };
   }
+  // A session that already booted has had its replay drained, so reusing it
+  // would hand back an empty transcript. Respawn it — unless a turn is in
+  // flight, which must never be interrupted just to redraw history.
+  const live = getSession(sessionId);
+  if (live?.ready && !live.dead && live.pending.size === 0) dropSession(sessionId);
   let session = null;
   const emit = (event) => {
     if (session && (session.stopped || getSession(sessionId) !== session)) return;

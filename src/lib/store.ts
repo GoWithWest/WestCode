@@ -159,6 +159,8 @@ function persistAgents(p: AgentsPersist) {
 }
 const MAX_HOP = 6;
 const abortBySession = new Map<string, AbortController>();
+/** Sessions whose transcript is being replayed, so it happens once. */
+const hydrating = new Set<string>();
 const hopBySession = new Map<string, number>();
 const busLog: { from: string; to: string; at: number; hash: string }[] = [];
 
@@ -273,6 +275,7 @@ export type HelixState = {
   runScheduledTask: (to: string, prompt: string, name: string) => void;
   refreshCliSessions: () => Promise<void>;
   openCliSession: (row: CliSession) => Promise<string | null>;
+  hydrateSession: (sessionId: string) => Promise<void>;
 };
 
 // Desktop state lives in ~/.westcode/state.json (loaded once at startup) so
@@ -314,6 +317,19 @@ function persistFolders(list: RecentFolder[]) {
   saveState(FOLDERS_KEY, list);
 }
 
+/**
+ * The CLIs keep their own transcript (~/.claude, ~/.grok, ~/.codex) and hand
+ * it back through session/load, so WestCode stores the pointer rather than a
+ * second copy. Custom API providers have no such store — their messages stay
+ * here, as they always have.
+ */
+export function cliBacked(s: Session): boolean {
+  return (
+    Boolean(s.agentSessionId) &&
+    (PROVIDER_ORDER as readonly string[]).includes(s.providerId)
+  );
+}
+
 function sanitizeSession(s: Session): Session {
   return {
     ...s,
@@ -322,7 +338,9 @@ function sanitizeSession(s: Session): Session {
     queued: undefined,
     permissionMode: s.permissionMode || DEFAULT_PERMISSION,
     agentSessionId: s.agentSessionId,
-    messages: s.messages.map((m) => ({ ...m, streaming: false })),
+    messages: cliBacked(s)
+      ? []
+      : s.messages.map((m) => ({ ...m, streaming: false })),
   };
 }
 
@@ -563,6 +581,35 @@ export function cliSessionTitle(row: CliSession): string {
   return t || row.cwd.split("/").filter(Boolean).pop() || "session";
 }
 
+/**
+ * Every prompt WestCode sends is prefixed with desk/persona scaffolding, so a
+ * replayed user turn starts with it. Show only what the human typed: cut at
+ * the last line of whichever scaffolding blocks are present.
+ */
+export function stripDeskPreamble(text: string): string {
+  // A history re-injection from an older WestCode restart is scaffolding in
+  // full: the turns it quotes are already in the transcript above it.
+  if (text.startsWith("[WestCode restored this thread")) return "";
+  if (!text.startsWith("[WestCode desk]")) return text;
+  const enders = [
+    "Never acknowledge a completion report.",
+    "delegate to them with westcode_send_message when a task belongs to their role.",
+    "the sender is waiting for your reply.",
+    "acknowledgment ping-pong wastes both sessions.",
+  ];
+  let cut = 0;
+  for (const end of enders) {
+    const at = text.lastIndexOf(end);
+    if (at >= 0) cut = Math.max(cut, at + end.length);
+  }
+  if (!cut) return text;
+  let rest = text.slice(cut);
+  // Delegation notes for @mentioned agents sit between the scaffolding and
+  // the human's own words.
+  rest = rest.replace(/^(\s*\[@[^\]]*\]\s*)+/, "");
+  return rest.trim() || text;
+}
+
 /** Turn a session/load replay into transcript messages. */
 export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
   const out: ChatMessage[] = [];
@@ -571,14 +618,15 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
   const push = (m: ChatMessage) => out.push(m);
   for (const ev of events) {
     if (ev.type === "user") {
-      if (!ev.text?.trim()) continue;
+      const text = stripDeskPreamble(ev.text ?? "");
+      if (!text.trim()) continue;
       asst = null;
       tools.clear();
       push({
         id: uid("msg"),
         role: "user",
         createdAt: Date.now(),
-        blocks: [{ type: "text", text: ev.text }],
+        blocks: [{ type: "text", text }],
       });
       continue;
     }
@@ -965,8 +1013,10 @@ export const useHelix = create<HelixState>((set, get) => ({
   cliSessionStatus: "idle",
 
   setView: (view) => set({ view, mobileNav: "desk" }),
-  setActive: (id) =>
-    set({ activeId: id, view: "focus", mobileNav: "desk" }),
+  setActive: (id) => {
+    set({ activeId: id, view: "focus", mobileNav: "desk" });
+    void get().hydrateSession(id);
+  },
   setSplit: (ids) => set({ splitIds: ids, view: "split", mobileNav: "desk" }),
   setNewOpen: (newOpen, providerId = null) =>
     set({ newOpen, newProviderId: newOpen ? providerId : null }),
@@ -1037,6 +1087,13 @@ export const useHelix = create<HelixState>((set, get) => ({
         ? get().view
         : (desk.view ?? (sessions.length ? "focus" : "mosaic")),
     });
+    // Restored CLI sessions carry only a pointer — refill the ones on screen
+    // from the CLI itself. Off-screen panes wait until they are opened, so a
+    // restart does not spawn every agent at once.
+    const onScreen = [get().activeId, ...(get().splitIds ?? [])].filter(
+      Boolean,
+    ) as string[];
+    for (const id of new Set(onScreen)) void get().hydrateSession(id);
     bindDeskPersist();
     void get().refreshCli();
     void get().refreshLibrary();
@@ -1166,6 +1223,38 @@ export const useHelix = create<HelixState>((set, get) => ({
       });
     } catch {
       set({ cliSessions: had, cliSessionStatus: "ready" });
+    }
+  },
+
+  hydrateSession: async (sessionId) => {
+    const api = westcode();
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    // Only for a CLI-backed session whose transcript is not in memory — a
+    // restart drops it on purpose, because the CLI still has it.
+    if (!api?.openSession || !ses || !cliBacked(ses) || ses.messages.length) return;
+    if (hydrating.has(sessionId)) return;
+    hydrating.add(sessionId);
+    try {
+      const res = await api.openSession({
+        sessionId: ses.id,
+        providerId: ses.providerId,
+        cwd: ses.cwd,
+        model: ses.model,
+        effort: ses.effort,
+        permissionMode: ses.permissionMode,
+        agentSessionId: ses.agentSessionId!,
+      });
+      const messages = res.ok ? replayToMessages(res.history ?? []) : [];
+      if (!messages.length) return;
+      set((state) => ({
+        sessions: patchSession(state.sessions, sessionId, (s) =>
+          // A turn may have started while the replay was in flight; never
+          // stomp on messages that arrived in the meantime.
+          s.messages.length ? s : { ...s, messages },
+        ),
+      }));
+    } finally {
+      hydrating.delete(sessionId);
     }
   },
 
