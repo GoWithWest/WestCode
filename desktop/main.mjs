@@ -936,19 +936,13 @@ ipcMain.handle("session:open", async (_e, payload) => {
   if (!sessionId || !providerId || !agentSessionId) {
     return { ok: false, output: "sessionId, providerId and agentSessionId are required." };
   }
-  // A session that already booted has had its replay drained, so reusing it
-  // would hand back an empty transcript. Respawn it — unless a turn is in
-  // flight, which must never be interrupted just to redraw history.
-  const live = getSession(sessionId);
-  if (live?.ready && !live.dead && live.pending.size === 0) dropSession(sessionId);
-  let session = null;
-  const emit = (event) => {
-    if (session && (session.stopped || getSession(sessionId) !== session)) return;
-    send(sessionId, event);
-  };
-  session = ensureSession(
+  // Read history through a session of its own, never the pane's: a prompt
+  // the user sends while the replay is still in flight owns the pane's
+  // session, and tearing this one down must not touch that turn.
+  const readerId = `history:${sessionId}:${Date.now()}`;
+  const session = ensureSession(
     {
-      sessionId,
+      sessionId: readerId,
       providerId,
       cwd,
       model,
@@ -957,19 +951,18 @@ ipcMain.handle("session:open", async (_e, payload) => {
       agentSessionId,
       requireResume: true,
     },
-    emit,
+    () => {},
   );
   try {
     await session.start();
     const history = session.takeReplay();
-    // Reading history should not cost a resident agent per click — browsing
-    // 10 sessions would be 10 CLI processes. The next prompt respawns and
-    // resumes from agentSessionId, exactly as a restored session does.
-    dropSession(sessionId);
     return { ok: true, history, resumed: true };
   } catch (err) {
-    dropSession(sessionId);
     return { ok: false, output: err.message, history: [] };
+  } finally {
+    // Browsing 10 sessions must not leave 10 CLI processes behind; the next
+    // prompt spawns the pane's own agent and resumes from agentSessionId.
+    dropSession(readerId);
   }
 });
 

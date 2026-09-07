@@ -596,6 +596,9 @@ export function stripDeskPreamble(text: string): string {
   // full: the turns it quotes are already in the transcript above it.
   if (text.startsWith("[WestCode restored this thread")) return "";
   if (!text.startsWith("[WestCode desk]")) return text;
+  // In the order WestCode composes them: desk bus, persona, then the peer
+  // note. Each is searched from the previous cut, so a phrase the human
+  // happens to repeat later cannot swallow their message.
   const enders = [
     "Never acknowledge a completion report.",
     "delegate to them with westcode_send_message when a task belongs to their role.",
@@ -604,8 +607,8 @@ export function stripDeskPreamble(text: string): string {
   ];
   let cut = 0;
   for (const end of enders) {
-    const at = text.lastIndexOf(end);
-    if (at >= 0) cut = Math.max(cut, at + end.length);
+    const at = text.indexOf(end, cut);
+    if (at >= 0) cut = at + end.length;
   }
   if (!cut) return text;
   let rest = text.slice(cut);
@@ -1021,9 +1024,15 @@ export const useHelix = create<HelixState>((set, get) => ({
   setView: (view) => set({ view, mobileNav: "desk" }),
   setActive: (id) => {
     set({ activeId: id, view: "focus", mobileNav: "desk" });
-    void get().hydrateSession(id);
+    // retry: a pane holding only a failure note has no transcript yet, so
+    // focusing it asks the CLI again instead of staying a dead end.
+    void get().hydrateSession(id, { retry: true });
   },
-  setSplit: (ids) => set({ splitIds: ids, view: "split", mobileNav: "desk" }),
+  setSplit: (ids) => {
+    set({ splitIds: ids, view: "split", mobileNav: "desk" });
+    // Both halves are on screen, so both need their transcript.
+    for (const id of new Set(ids)) void get().hydrateSession(id, { retry: true });
+  },
   setNewOpen: (newOpen, providerId = null) =>
     set({ newOpen, newProviderId: newOpen ? providerId : null }),
   setMobileNav: (mobileNav) => set({ mobileNav }),
