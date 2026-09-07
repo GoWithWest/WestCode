@@ -445,10 +445,31 @@ class AcpSession {
     this.dead = true;
   }
 
+  /** Agent stderr is ANSI-coloured and repeats itself; keep it readable. */
+  _why() {
+    const lines = [
+      ...new Set(
+        this.stderr
+          // eslint-disable-next-line no-control-regex
+          .replace(/\u001b\[[0-9;]*m/g, "")
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean),
+      ),
+    ];
+    const auth = lines.find((l) => /AuthRequired|invalid_token|Unauthorized/i.test(l));
+    if (auth) {
+      const server = /resource_metadata=\\?"?https?:\/\/([^/"\\]+)/i.exec(auth)?.[1];
+      return `an MCP server${server ? ` (${server})` : ""} is not authenticated — sign it in or remove it from this CLI`;
+    }
+    return lines.slice(-1).join(" ").slice(0, 300);
+  }
+
   rpc(method, params) {
     const id = this.nextRpc++;
-    const timeout =
-      method === "session/prompt"
+    const timeout = this.readOnly
+      ? 20_000
+      : method === "session/prompt"
         ? 15 * 60_000
         : method === "initialize" || method === "authenticate"
           ? 60_000
@@ -456,9 +477,8 @@ class AcpSession {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(
-          new Error(`Timed out on ${method}. ${this.stderr.trim()}`.trim()),
-        );
+        const why = this._why();
+        reject(new Error(`Timed out on ${method}${why ? `: ${why}` : ""}`));
       }, timeout);
       this.pending.set(id, {
         resolve: (v) => {
