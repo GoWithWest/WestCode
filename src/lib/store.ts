@@ -632,11 +632,6 @@ export function stripDeskPreamble(text: string): string {
   return rest.trim() || text;
 }
 
-/**
- * Anything the user typed while the history was loading is already queued to
- * send, so its bubble must survive the replay replacing the transcript —
- * otherwise the queue drains a prompt the transcript never shows.
- */
 /** Send the first queued message of an idle pane, as send()'s finally does. */
 function drainQueued(sessionId: string) {
   const ses = useHelix.getState().sessions.find((s) => s.id === sessionId);
@@ -657,13 +652,19 @@ function drainQueued(sessionId: string) {
   });
 }
 
-function withQueuedKept(ses: Session, replayed: ChatMessage[]): ChatMessage[] {
-  const queuedIds = new Set(
-    (ses.queued ?? []).map((q) => q.msgId).filter(Boolean) as string[],
-  );
-  if (!queuedIds.size) return replayed;
-  const keep = ses.messages.filter((m) => queuedIds.has(m.id));
-  return keep.length ? [...replayed, ...keep] : replayed;
+/**
+ * Fold a history read into a pane. Whatever is on screen is newer than the
+ * stored transcript — a turn started while the read ran — so history goes in
+ * front of it, and a stale failure note goes. A failed read only ADDS its
+ * note: it must never cost the user messages that are already there.
+ */
+function mergeHistory(
+  ses: Session,
+  incoming: ChatMessage[],
+  ok: boolean,
+): ChatMessage[] {
+  if (!ok) return [...ses.messages, ...incoming];
+  return [...incoming, ...ses.messages.filter((m) => m.role !== "system")];
 }
 
 /** Turn a session/load replay into transcript messages. */
@@ -729,6 +730,10 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     }));
 
   if (ev.type === "ready" && ev.agentSessionId) {
+    // This pane's transcript is on screen already, so its CLI history must
+    // not be replayed over the top of it.
+    const shown = useHelix.getState().sessions.find((x) => x.id === sessionId);
+    if (shown?.messages.length) hydrated.add(sessionId);
     patch((ses) => ({
       ...ses,
       agentSessionId: ev.agentSessionId,
@@ -1324,22 +1329,11 @@ export const useHelix = create<HelixState>((set, get) => ({
       if (!messages.length) return;
       if (res.ok) hydrated.add(sessionId);
       set((state) => ({
-        sessions: patchSession(state.sessions, sessionId, (s) => {
-          // Whatever is on screen is NEWER than the stored history — a turn
-          // started while this was loading, or a note from a failed try —
-          // so history goes IN FRONT of it, and an earlier failure note is
-          // dropped now that the real transcript is here.
-          const localRows = res.ok
-            ? s.messages.filter((m) => m.role !== "system")
-            : s.messages;
-          return {
-            ...s,
-            messages: res.ok
-              ? [...messages, ...localRows]
-              : withQueuedKept(s, messages),
-            status: res.ok ? (s.status === "error" ? "idle" : s.status) : "error",
-          };
-        }),
+        sessions: patchSession(state.sessions, sessionId, (s) => ({
+          ...s,
+          messages: mergeHistory(s, messages, res.ok),
+          status: res.ok ? (s.status === "error" ? "idle" : s.status) : "error",
+        })),
       }));
     } finally {
       hydrating.delete(sessionId);
@@ -1407,11 +1401,12 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...ses,
         status: res.ok ? "idle" : "error",
         updatedAt: Date.now(),
-        messages: withQueuedKept(
+        messages: mergeHistory(
           ses,
           res.ok
             ? replayToMessages(res.history ?? [])
             : [systemNote(res.output || "Could not open that session.")],
+          res.ok,
         ),
       })),
     }));
