@@ -563,10 +563,10 @@ class AcpSession {
     const method = msg.method;
     const params = msg.params || {};
     if (method === "session/request_permission") {
-      // Replaying stored history must never run a tool, and nobody is
-      // watching a reader session to answer — decline so the load cannot
-      // hang waiting for a click that will not come.
-      if (this.capturing) {
+      // A reader session has no UI behind it, so a prompt it cannot answer
+      // would hang the read. Only readers: a pane resuming its own session
+      // must still surface the request (or auto-approve by mode).
+      if (this.readOnly) {
         this.reply(msg.id, { outcome: { outcome: "cancelled" } });
         return;
       }
