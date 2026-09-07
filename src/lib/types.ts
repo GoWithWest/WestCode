@@ -19,6 +19,8 @@ export type Attachment = {
 
 export type ToolBlock = {
   type: "tool";
+  /** The agent's own call id — identity, so updates patch the right card. */
+  toolId?: string;
   name: string;
   path?: string;
   command?: string;
