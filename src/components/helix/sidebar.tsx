@@ -219,6 +219,7 @@ export function Sidebar() {
 function CliSessionList({ query }: { query: string }) {
   const rows = useHelix((s) => s.cliSessions);
   const status = useHelix((s) => s.cliSessionStatus);
+  const errors = useHelix((s) => s.cliSessionErrors);
   const sessions = useHelix((s) => s.sessions);
   const refresh = useHelix((s) => s.refreshCliSessions);
   const open = useHelix((s) => s.openCliSession);
@@ -229,9 +230,14 @@ function CliSessionList({ query }: { query: string }) {
     if (status === "idle") void refresh();
   }, [status, refresh]);
 
-  // Anything already open in a pane is in the list above; don't show it twice.
+  // Anything already open in a pane is in the list above; don't show it
+  // twice. Archived panes are not in that list, so their CLI row stays —
+  // clicking it brings the pane back.
   const openIds = new Set(
-    sessions.map((s) => s.agentSessionId).filter(Boolean) as string[],
+    sessions
+      .filter((s) => !s.archivedAt)
+      .map((s) => s.agentSessionId)
+      .filter(Boolean) as string[],
   );
   const pool = rows.filter((r) => !openIds.has(r.agentSessionId));
   const matched = query
@@ -243,7 +249,7 @@ function CliSessionList({ query }: { query: string }) {
       )
     : pool;
   const visible = expanded || query ? matched : matched.slice(0, 5);
-  if (!matched.length) return null;
+  if (!matched.length && !errors.length) return null;
 
   return (
     <div className="mt-3 border-t border-border pt-2">
@@ -260,6 +266,11 @@ function CliSessionList({ query }: { query: string }) {
           {status === "loading" ? "…" : "↻"}
         </button>
       </div>
+      {errors.length ? (
+        <p className="px-2.5 pb-1 text-2xs leading-relaxed text-subtle">
+          {errors.join(" · ").slice(0, 200)}
+        </p>
+      ) : null}
       <ul className="flex flex-col">
         {visible.map((r) => (
           <li key={`${r.providerId}:${r.agentSessionId}`}>

@@ -947,13 +947,28 @@ ipcMain.handle("session:open", async (_e, payload) => {
     send(sessionId, event);
   };
   session = ensureSession(
-    { sessionId, providerId, cwd, model, effort, permissionMode, agentSessionId },
+    {
+      sessionId,
+      providerId,
+      cwd,
+      model,
+      effort,
+      permissionMode,
+      agentSessionId,
+      requireResume: true,
+    },
     emit,
   );
   try {
     await session.start();
-    return { ok: true, history: session.takeReplay(), resumed: session.resumed };
+    const history = session.takeReplay();
+    // Reading history should not cost a resident agent per click — browsing
+    // 10 sessions would be 10 CLI processes. The next prompt respawns and
+    // resumes from agentSessionId, exactly as a restored session does.
+    dropSession(sessionId);
+    return { ok: true, history, resumed: true };
   } catch (err) {
+    dropSession(sessionId);
     return { ok: false, output: err.message, history: [] };
   }
 });
