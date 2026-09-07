@@ -341,7 +341,6 @@ class AcpSession {
           this.agentSessionId =
             loaded?.sessionId || loaded?.session_id || resumeId;
           this.resumed = true;
-          this.readOnly = false;
           this._emitModels(init);
           this.emit({ type: "ready", agentSessionId: this.agentSessionId });
           return this.agentSessionId;
@@ -597,6 +596,14 @@ class AcpSession {
         rpcId: msg.id,
         tool: params.toolCall?.title || params.toolCall?.kind || "tool",
         options: params.options || [],
+      });
+      return;
+    }
+    if (method === "fs/read_text_file" && this.readOnly) {
+      this.write({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "WestCode is only reading this session." },
       });
       return;
     }

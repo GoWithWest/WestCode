@@ -161,6 +161,8 @@ const MAX_HOP = 6;
 const abortBySession = new Map<string, AbortController>();
 /** Sessions whose transcript is being replayed, so it happens once. */
 const hydrating = new Set<string>();
+/** Panes whose CLI history is already in memory (memory-only, like it). */
+const hydrated = new Set<string>();
 const hopBySession = new Map<string, number>();
 const busLog: { from: string; to: string; at: number; hash: string }[] = [];
 
@@ -277,10 +279,7 @@ export type HelixState = {
   runScheduledTask: (to: string, prompt: string, name: string) => void;
   refreshCliSessions: () => Promise<void>;
   openCliSession: (row: CliSession) => Promise<string | null>;
-  hydrateSession: (
-    sessionId: string,
-    opts?: { retry?: boolean },
-  ) => Promise<void>;
+  hydrateSession: (sessionId: string) => Promise<void>;
 };
 
 // Desktop state lives in ~/.westcode/state.json (loaded once at startup) so
@@ -638,6 +637,26 @@ export function stripDeskPreamble(text: string): string {
  * send, so its bubble must survive the replay replacing the transcript —
  * otherwise the queue drains a prompt the transcript never shows.
  */
+/** Send the first queued message of an idle pane, as send()'s finally does. */
+function drainQueued(sessionId: string) {
+  const ses = useHelix.getState().sessions.find((s) => s.id === sessionId);
+  const next = ses?.queued?.[0];
+  if (!next || ses?.status === "running") return;
+  useHelix.setState((s) => ({
+    sessions: patchSession(s.sessions, sessionId, (x) => ({
+      ...x,
+      queued: (x.queued ?? []).slice(1),
+    })),
+  }));
+  queueMicrotask(() => {
+    void useHelix.getState().send(sessionId, next.text, {
+      incoming: next.incoming,
+      replay: true,
+      replayOf: next.msgId,
+    });
+  });
+}
+
 function withQueuedKept(ses: Session, replayed: ChatMessage[]): ChatMessage[] {
   const queuedIds = new Set(
     (ses.queued ?? []).map((q) => q.msgId).filter(Boolean) as string[],
@@ -1053,14 +1072,14 @@ export const useHelix = create<HelixState>((set, get) => ({
   setView: (view) => set({ view, mobileNav: "desk" }),
   setActive: (id) => {
     set({ activeId: id, view: "focus", mobileNav: "desk" });
-    // retry: a pane holding only a failure note has no transcript yet, so
-    // focusing it asks the CLI again instead of staying a dead end.
-    void get().hydrateSession(id, { retry: true });
+    // A pane whose history has not been painted yet (including one that
+    // only holds a failure note) asks the CLI again on focus.
+    void get().hydrateSession(id);
   },
   setSplit: (ids) => {
     set({ splitIds: ids, view: "split", mobileNav: "desk" });
     // Both halves are on screen, so both need their transcript.
-    for (const id of new Set(ids)) void get().hydrateSession(id, { retry: true });
+    for (const id of new Set(ids)) void get().hydrateSession(id);
   },
   setNewOpen: (newOpen, providerId = null) =>
     set({ newOpen, newProviderId: newOpen ? providerId : null }),
@@ -1275,17 +1294,15 @@ export const useHelix = create<HelixState>((set, get) => ({
     }
   },
 
-  hydrateSession: async (sessionId, opts) => {
+  hydrateSession: async (sessionId) => {
     const api = westcode();
     const ses = get().sessions.find((s) => s.id === sessionId);
-    // Only for a CLI-backed session whose transcript is not in memory — a
-    // restart drops it on purpose, because the CLI still has it. A retry
-    // ignores an earlier failure note, so a failed open is never permanent.
-    const loaded = opts?.retry
-      ? ses?.messages.some((m) => m.role === "user" || m.role === "assistant")
-      : Boolean(ses?.messages.length);
-    if (!api?.openSession || !ses || !cliBacked(ses) || loaded) return;
-    if (hydrating.has(sessionId)) return;
+    // A CLI-backed pane holds no transcript across a restart on purpose —
+    // the CLI has it. The guard is "have we already painted this pane's
+    // history", NOT "does the pane have messages": a turn the user started
+    // before the history arrived must not cost them the history.
+    if (!api?.openSession || !ses || !cliBacked(ses)) return;
+    if (hydrating.has(sessionId) || hydrated.has(sessionId)) return;
     hydrating.add(sessionId);
     try {
       const res = await api.openSession({
@@ -1305,18 +1322,21 @@ export const useHelix = create<HelixState>((set, get) => ({
             ),
           ];
       if (!messages.length) return;
+      if (res.ok) hydrated.add(sessionId);
       set((state) => ({
         sessions: patchSession(state.sessions, sessionId, (s) => {
-          // A turn may have started while the replay was in flight; never
-          // stomp on messages that arrived in the meantime. A retry may
-          // still replace a previous failure note.
-          const live = opts?.retry
-            ? s.messages.some((m) => m.role === "user" || m.role === "assistant")
-            : s.messages.length > 0;
-          if (live) return s;
+          // Whatever is on screen is NEWER than the stored history — a turn
+          // started while this was loading, or a note from a failed try —
+          // so history goes IN FRONT of it, and an earlier failure note is
+          // dropped now that the real transcript is here.
+          const localRows = res.ok
+            ? s.messages.filter((m) => m.role !== "system")
+            : s.messages;
           return {
             ...s,
-            messages: withQueuedKept(s, messages),
+            messages: res.ok
+              ? [...messages, ...localRows]
+              : withQueuedKept(s, messages),
             status: res.ok ? (s.status === "error" ? "idle" : s.status) : "error",
           };
         }),
@@ -1345,7 +1365,7 @@ export const useHelix = create<HelixState>((set, get) => ({
           archivedAt: undefined,
         })),
       }));
-      await get().hydrateSession(existing.id, { retry: true });
+      await get().hydrateSession(existing.id);
       return existing.id;
     }
     const p = resolveProvider(row.providerId, get().customProviders);
@@ -1395,6 +1415,11 @@ export const useHelix = create<HelixState>((set, get) => ({
         ),
       })),
     }));
+    if (res.ok) hydrated.add(session.id);
+    // The pane was "running" while the history loaded, so anything typed in
+    // that window queued behind it. Nothing else drains that queue — send()
+    // only drains from its own finally — so kick it now.
+    drainQueued(session.id);
     return session.id;
   },
 
