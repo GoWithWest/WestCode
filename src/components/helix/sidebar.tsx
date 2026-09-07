@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Archive, ArchiveRestore, Blocks, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
-import { useHelix } from "@/lib/store";
+import { cliSessionTitle, useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, StatusLabel, useAllProviders } from "./provider";
@@ -126,6 +126,7 @@ export function Sidebar() {
               : `${archivedCount} archived — show`}
           </button>
         ) : null}
+        <CliSessionList query={q} />
       </nav>
       <div className="border-t border-border p-2">
         <p className="px-2 pb-1.5 text-2xs font-medium tracking-wide text-subtle uppercase">
@@ -207,5 +208,105 @@ export function Sidebar() {
         </Button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Sessions the CLIs themselves have stored — including ones started in a
+ * terminal, which never existed in WestCode's own list. Opening one resumes
+ * the real agent session and replays its transcript.
+ */
+function CliSessionList({ query }: { query: string }) {
+  const rows = useHelix((s) => s.cliSessions);
+  const status = useHelix((s) => s.cliSessionStatus);
+  const sessions = useHelix((s) => s.sessions);
+  const refresh = useHelix((s) => s.refreshCliSessions);
+  const open = useHelix((s) => s.openCliSession);
+  const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (status === "idle") void refresh();
+  }, [status, refresh]);
+
+  // Anything already open in a pane is in the list above; don't show it twice.
+  const openIds = new Set(
+    sessions.map((s) => s.agentSessionId).filter(Boolean) as string[],
+  );
+  const pool = rows.filter((r) => !openIds.has(r.agentSessionId));
+  const matched = query
+    ? pool.filter(
+        (r) =>
+          cliSessionTitle(r).toLowerCase().includes(query) ||
+          r.providerId.toLowerCase().includes(query) ||
+          r.cwd.toLowerCase().includes(query),
+      )
+    : pool;
+  const visible = expanded || query ? matched : matched.slice(0, 5);
+  if (!matched.length) return null;
+
+  return (
+    <div className="mt-3 border-t border-border pt-2">
+      <div className="flex items-center justify-between px-2.5 pb-1">
+        <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
+          From your CLIs
+        </span>
+        <button
+          type="button"
+          aria-label="Refresh CLI sessions"
+          onClick={() => void refresh()}
+          className="text-2xs text-subtle hover:text-foreground"
+        >
+          {status === "loading" ? "…" : "↻"}
+        </button>
+      </div>
+      <ul className="flex flex-col">
+        {visible.map((r) => (
+          <li key={`${r.providerId}:${r.agentSessionId}`}>
+            <button
+              type="button"
+              disabled={busy === r.agentSessionId}
+              onClick={async () => {
+                setBusy(r.agentSessionId);
+                try {
+                  await open(r);
+                } finally {
+                  setBusy(null);
+                }
+              }}
+              className="w-full rounded-md px-2.5 py-1.5 text-left hover:bg-muted/50 disabled:opacity-60"
+            >
+              <span className="flex items-center gap-2">
+                <ProviderDot id={r.providerId} />
+                <span className="min-w-0 flex-1 truncate text-xs">
+                  {cliSessionTitle(r)}
+                </span>
+              </span>
+              <span className="mt-0.5 flex items-center gap-1.5 pl-4 text-2xs text-subtle">
+                <span className="min-w-0 flex-1 truncate">
+                  {r.cwd.split("/").filter(Boolean).pop() || r.cwd}
+                </span>
+                <span className="shrink-0">
+                  {busy === r.agentSessionId
+                    ? "opening…"
+                    : r.updatedAt
+                      ? relativeTime(r.updatedAt)
+                      : ""}
+                </span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {!query && matched.length > 5 ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 w-full px-2.5 py-1 text-left text-2xs text-subtle hover:text-foreground"
+        >
+          {expanded ? "Show fewer" : `${matched.length - 5} more — show all`}
+        </button>
+      ) : null}
+    </div>
   );
 }

@@ -37,6 +37,7 @@ import {
 import {
   westcode,
   type CliProbe,
+  type CliSession,
   type CliUpdate,
   type LiveAddon,
   type SessionEvent,
@@ -49,6 +50,7 @@ import type {
   IncomingRef,
   LayoutView,
   Session,
+  ToolBlock,
 } from "./types";
 import { projectById } from "./types";
 import { uid } from "./utils";
@@ -217,6 +219,9 @@ export type HelixState = {
   updateError: string | null;
   liveAddons: LiveAddon[];
   libraryStatus: "idle" | "loading" | "ready";
+  /** Sessions the provider CLIs store themselves (their own session/list). */
+  cliSessions: CliSession[];
+  cliSessionStatus: "idle" | "loading" | "ready";
 
   setView: (v: LayoutView) => void;
   setActive: (id: string) => void;
@@ -266,6 +271,8 @@ export type HelixState = {
   updateSchedule: (id: string, patch: Partial<ScheduledTask>) => void;
   removeSchedule: (id: string) => void;
   runScheduledTask: (to: string, prompt: string, name: string) => void;
+  refreshCliSessions: () => Promise<void>;
+  openCliSession: (row: CliSession) => Promise<string | null>;
 };
 
 // Desktop state lives in ~/.westcode/state.json (loaded once at startup) so
@@ -529,6 +536,86 @@ function busAllowed(from: string, to: string, text: string, hop: number) {
   }
   busLog.push({ from, to, at: now, hash: h });
   return null;
+}
+
+/**
+ * The CLIs title a session from its first user message, and WestCode's first
+ * message carries the desk preamble — so its own sessions come back titled
+ * "[WestCode desk] You are one session…". Strip that for display and fall
+ * back to the folder name.
+ */
+export function cliSessionTitle(row: CliSession): string {
+  let t = (row.title || "").trim();
+  if (/^\[WestCode desk\]/i.test(t)) {
+    const line = t
+      .split("\n")
+      .map((l) => l.trim())
+      .find(
+        (l) =>
+          l &&
+          !/^\[WestCode desk\]/i.test(l) &&
+          !/^(You are one session|Other sessions|Installed (skills|connectors)|- ses-)/i.test(l),
+      );
+    t = line ?? "";
+  }
+  t = t.replace(/\s+/g, " ").trim();
+  if (t.length > 60) t = `${t.slice(0, 57)}…`;
+  return t || row.cwd.split("/").filter(Boolean).pop() || "session";
+}
+
+/** Turn a session/load replay into transcript messages. */
+export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let asst: ChatMessage | null = null;
+  const tools = new Map<string, ToolBlock>();
+  const push = (m: ChatMessage) => out.push(m);
+  for (const ev of events) {
+    if (ev.type === "user") {
+      if (!ev.text?.trim()) continue;
+      asst = null;
+      tools.clear();
+      push({
+        id: uid("msg"),
+        role: "user",
+        createdAt: Date.now(),
+        blocks: [{ type: "text", text: ev.text }],
+      });
+      continue;
+    }
+    if (ev.type !== "text" && ev.type !== "thought" && ev.type !== "tool") continue;
+    if (!asst) {
+      asst = { id: uid("msg"), role: "assistant", createdAt: Date.now(), blocks: [] };
+      push(asst);
+    }
+    if (ev.type === "tool") {
+      const key = ev.toolId || uid("tool");
+      const known = tools.get(key);
+      if (known) {
+        if (ev.name) known.name = ev.name;
+        if (ev.content) known.content = ev.content;
+        if (ev.status) known.status = ev.status;
+        continue;
+      }
+      const block: ToolBlock = {
+        type: "tool",
+        name: ev.name || "Tool",
+        path: ev.path,
+        command: ev.command,
+        content: ev.content || "",
+        status: ev.status || "done",
+      };
+      tools.set(key, block);
+      asst.blocks.push(block);
+      continue;
+    }
+    // Chunks stream in pieces — keep appending to the trailing block of the
+    // same kind instead of making one block per chunk.
+    const kind = ev.type === "thought" ? "think" : "text";
+    const last = asst.blocks[asst.blocks.length - 1];
+    if (last && last.type === kind) last.text += ev.text ?? "";
+    else asst.blocks.push({ type: kind, text: ev.text ?? "" });
+  }
+  return out.filter((m) => m.blocks.some((b) => b.type !== "text" || b.text.trim()));
 }
 
 function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
@@ -874,6 +961,8 @@ export const useHelix = create<HelixState>((set, get) => ({
   updateError: null,
   liveAddons: [],
   libraryStatus: "idle",
+  cliSessions: [],
+  cliSessionStatus: "idle",
 
   setView: (view) => set({ view, mobileNav: "desk" }),
   setActive: (id) =>
@@ -1061,6 +1150,82 @@ export const useHelix = create<HelixState>((set, get) => ({
     ].slice(0, 6);
     persistFolders(next);
     set({ recentFolders: next });
+  },
+
+  refreshCliSessions: async () => {
+    const api = westcode();
+    if (!api?.cliSessions) return;
+    if (get().cliSessionStatus === "loading") return;
+    const had = get().cliSessions;
+    set({ cliSessionStatus: "loading" });
+    try {
+      const res = await api.cliSessions(PROVIDER_ORDER.slice());
+      set({
+        cliSessions: res.ok ? res.sessions : had,
+        cliSessionStatus: "ready",
+      });
+    } catch {
+      set({ cliSessions: had, cliSessionStatus: "ready" });
+    }
+  },
+
+  openCliSession: async (row) => {
+    const api = westcode();
+    if (!api?.openSession) return null;
+    // Already open in a pane? Focus it instead of starting a second view of
+    // the same agent-side session.
+    const existing = get().sessions.find(
+      (s) => s.agentSessionId === row.agentSessionId && !s.archivedAt,
+    );
+    if (existing) {
+      set({ activeId: existing.id, view: "focus", mobileNav: "desk" });
+      return existing.id;
+    }
+    const p = resolveProvider(row.providerId, get().customProviders);
+    const settings = get().settings;
+    const scoped = settings.defaultProviderId === row.providerId;
+    const session: Session = {
+      id: uid("ses"),
+      title: cliSessionTitle(row),
+      providerId: row.providerId,
+      projectId: "scratch",
+      cwd: row.cwd,
+      model: (scoped && settings.defaultModel) || p.defaultModel,
+      effort: (scoped && settings.defaultEffort) || defaultEffortFor(row.providerId),
+      permissionMode: settings.defaultPermissionMode || DEFAULT_PERMISSION,
+      status: "running",
+      createdAt: row.updatedAt || Date.now(),
+      updatedAt: Date.now(),
+      messages: [],
+      turns: 0,
+      agentSessionId: row.agentSessionId,
+    };
+    set((state) => ({
+      sessions: [session, ...state.sessions],
+      activeId: session.id,
+      view: "focus" as const,
+      mobileNav: "desk" as const,
+    }));
+    const res = await api.openSession({
+      sessionId: session.id,
+      providerId: session.providerId,
+      cwd: session.cwd,
+      model: session.model,
+      effort: session.effort,
+      permissionMode: session.permissionMode,
+      agentSessionId: row.agentSessionId,
+    });
+    set((state) => ({
+      sessions: patchSession(state.sessions, session.id, (ses) => ({
+        ...ses,
+        status: res.ok ? "idle" : "error",
+        updatedAt: Date.now(),
+        messages: res.ok
+          ? replayToMessages(res.history ?? [])
+          : [systemNote(res.output || "Could not open that session.")],
+      })),
+    }));
+    return session.id;
   },
 
   createSession: ({
