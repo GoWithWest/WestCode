@@ -730,10 +730,13 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     }));
 
   if (ev.type === "ready" && ev.agentSessionId) {
-    // This pane's transcript is on screen already, so its CLI history must
-    // not be replayed over the top of it.
+    // A session WestCode STARTED owns what is on screen, so its CLI history
+    // must not be replayed over the top of it. A restored pane is the other
+    // way round: it already carries a pointer and is still waiting for its
+    // history, so a turn that lands before the read (a desk delivery, a
+    // scheduled task) must not lock it out.
     const shown = useHelix.getState().sessions.find((x) => x.id === sessionId);
-    if (shown?.messages.length) hydrated.add(sessionId);
+    if (shown?.messages.length && !shown.agentSessionId) hydrated.add(sessionId);
     patch((ses) => ({
       ...ses,
       agentSessionId: ev.agentSessionId,
