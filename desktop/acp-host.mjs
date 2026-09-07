@@ -186,8 +186,11 @@ class AcpSession {
     /** Transcript replayed by session/load, drained once by session:open. */
     this.replay = [];
     this.capturing = false;
-    /** Opening stored history: fail rather than start a blank session. */
-    this.requireResume = false;
+    /**
+     * Reading stored history: no desk MCP to register (this session is not
+     * on the desk), and a failed load must not become a blank new session.
+     */
+    this.readOnly = false;
   }
 
   takeReplay() {
@@ -313,7 +316,8 @@ class AcpSession {
 
     await this._authenticate(init);
 
-    const mcpServers = deskMcp(this.id);
+    // A history read needs no tools and must not join the desk bus.
+    const mcpServers = this.readOnly ? [] : deskMcp(this.id);
     const resumeId = this.resumeId;
     if (resumeId) {
       // session/load replays the whole transcript as session/update
@@ -337,7 +341,7 @@ class AcpSession {
           this.agentSessionId =
             loaded?.sessionId || loaded?.session_id || resumeId;
           this.resumed = true;
-          this.requireResume = false;
+          this.readOnly = false;
           this._emitModels(init);
           this.emit({ type: "ready", agentSessionId: this.agentSessionId });
           return this.agentSessionId;
@@ -352,7 +356,7 @@ class AcpSession {
       // Opening a stored session must not quietly become a blank new one —
       // the user asked for THAT conversation. Prompting may still fall
       // through to session/new, which is how a dead agent recovers.
-      if (this.requireResume) {
+      if (this.readOnly) {
         this.dead = true;
         throw new Error(
           `Could not reopen session ${resumeId}: ${loadError?.message || "the agent refused to load it"}`,
@@ -559,6 +563,13 @@ class AcpSession {
     const method = msg.method;
     const params = msg.params || {};
     if (method === "session/request_permission") {
+      // Replaying stored history must never run a tool, and nobody is
+      // watching a reader session to answer — decline so the load cannot
+      // hang waiting for a click that will not come.
+      if (this.capturing) {
+        this.reply(msg.id, { outcome: { outcome: "cancelled" } });
+        return;
+      }
       const kind = String(params.toolCall?.kind || "").toLowerCase();
       // ACP declares the tool kind — trust it first; the title regex is only
       // a fallback for adapters that omit kind.
@@ -784,7 +795,7 @@ export function ensureSession(opts, emit) {
     emit,
   );
   s.resumeId = opts.agentSessionId || null;
-  s.requireResume = Boolean(opts.requireResume && s.resumeId);
+  s.readOnly = Boolean(opts.readOnly && s.resumeId);
   sessions.set(opts.sessionId, s);
   return s;
 }

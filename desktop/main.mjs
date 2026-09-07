@@ -949,7 +949,7 @@ ipcMain.handle("session:open", async (_e, payload) => {
       effort,
       permissionMode,
       agentSessionId,
-      requireResume: true,
+      readOnly: true,
     },
     () => {},
   );
