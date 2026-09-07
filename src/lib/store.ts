@@ -658,13 +658,36 @@ function drainQueued(sessionId: string) {
  * front of it, and a stale failure note goes. A failed read only ADDS its
  * note: it must never cost the user messages that are already there.
  */
-function mergeHistory(
+export function mergeHistory(
   ses: Session,
   incoming: ChatMessage[],
   ok: boolean,
 ): ChatMessage[] {
   if (!ok) return [...ses.messages, ...incoming];
-  return [...incoming, ...ses.messages.filter((m) => m.role !== "system")];
+  const local = ses.messages.filter((m) => m.role !== "system");
+  if (!local.length) return incoming;
+  // A turn that FINISHED before the read (a desk delivery or a scheduled
+  // task on a pane nobody had opened yet) is in the stored transcript AND
+  // on screen. Drop the tail of the history those rows repeat, or the
+  // conversation shows twice. An in-flight turn matches nothing and stays.
+  const key = (m: ChatMessage) =>
+    `${m.role === "agent" ? "user" : m.role}:${blocksToPlain(m.blocks).trim().slice(0, 200)}`;
+  const localKeys = local.map(key);
+  let overlap = 0;
+  for (let k = Math.min(incoming.length, local.length); k > 0; k--) {
+    let same = true;
+    for (let i = 0; i < k; i++) {
+      if (key(incoming[incoming.length - k + i]!) !== localKeys[i]) {
+        same = false;
+        break;
+      }
+    }
+    if (same) {
+      overlap = k;
+      break;
+    }
+  }
+  return [...incoming.slice(0, incoming.length - overlap), ...local];
 }
 
 /** Turn a session/load replay into transcript messages. */
