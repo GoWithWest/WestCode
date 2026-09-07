@@ -670,8 +670,27 @@ export function mergeHistory(
   // task on a pane nobody had opened yet) is in the stored transcript AND
   // on screen. Drop the tail of the history those rows repeat, or the
   // conversation shows twice. An in-flight turn matches nothing and stays.
-  const key = (m: ChatMessage) =>
-    `${m.role === "agent" ? "user" : m.role}:${blocksToPlain(m.blocks).trim().slice(0, 200)}`;
+  // Match on what BOTH sides agree about. Not blocksToPlain: it keys a tool
+  // by `path`, and the live stream puts the tool id there where the replay
+  // puts a real path — so every tool-using turn would look different. Think
+  // text is out too (a replay need not carry thoughts), and a row still
+  // streaming can never be one the CLI has already recorded.
+  const key = (m: ChatMessage) => {
+    if (m.streaming) return `live:${m.id}`;
+    const body = m.blocks
+      .map((b) =>
+        b.type === "text"
+          ? b.text
+          : b.type === "tool"
+            ? `${b.name} ${b.command ?? ""} ${b.content}`
+            : "",
+      )
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
+    return `${m.role === "agent" ? "user" : m.role}:${body}`;
+  };
   const localKeys = local.map(key);
   let overlap = 0;
   for (let k = Math.min(incoming.length, local.length); k > 0; k--) {
