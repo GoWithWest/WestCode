@@ -596,22 +596,37 @@ export function stripDeskPreamble(text: string): string {
   // full: the turns it quotes are already in the transcript above it.
   if (text.startsWith("[WestCode restored this thread")) return "";
   if (!text.startsWith("[WestCode desk]")) return text;
-  // In the order WestCode composes them: desk bus, persona, then the peer
-  // note. Each is searched from the previous cut, so a phrase the human
-  // happens to repeat later cannot swallow their message.
-  const enders = [
-    "Never acknowledge a completion report.",
-    "delegate to them with westcode_send_message when a task belongs to their role.",
-    "the sender is waiting for your reply.",
-    "acknowledgment ping-pong wastes both sessions.",
+  // The desk block is always first and always present here.
+  const deskEnd = "Never acknowledge a completion report.";
+  const at = text.indexOf(deskEnd);
+  if (at < 0) return text;
+  let rest = text.slice(at + deskEnd.length);
+  // Then the optional blocks, in the order WestCode composes them. Each is
+  // consumed only when its OPENING marker starts what is left, so a phrase
+  // the human happens to use later in their own message is never a cut
+  // point — the blocks are scaffolding at the front or they are not there.
+  const optional: [RegExp, string[]][] = [
+    [
+      /^\s*\[Agent profile:/,
+      ["delegate to them with westcode_send_message when a task belongs to their role."],
+    ],
+    [
+      /^\s*\[Peer agent:/,
+      [
+        "the sender is waiting for your reply.",
+        "acknowledgment ping-pong wastes both sessions.",
+      ],
+    ],
   ];
-  let cut = 0;
-  for (const end of enders) {
-    const at = text.indexOf(end, cut);
-    if (at >= 0) cut = at + end.length;
+  for (const [opens, ends] of optional) {
+    if (!opens.test(rest)) continue;
+    const stop = ends
+      .map((e) => rest.indexOf(e))
+      .filter((i) => i >= 0)
+      .sort((a, b) => a - b)[0];
+    if (stop === undefined) continue;
+    rest = rest.slice(stop + ends.find((e) => rest.startsWith(e, stop))!.length);
   }
-  if (!cut) return text;
-  let rest = text.slice(cut);
   // Delegation notes for @mentioned agents sit between the scaffolding and
   // the human's own words.
   rest = rest.replace(/^(\s*\[@[^\]]*\]\s*)+/, "");
