@@ -186,6 +186,8 @@ class AcpSession {
     /** Transcript replayed by session/load, drained once by session:open. */
     this.replay = [];
     this.capturing = false;
+    /** Opening stored history: fail rather than start a blank session. */
+    this.requireResume = false;
   }
 
   takeReplay() {
@@ -322,6 +324,7 @@ class AcpSession {
       const order = caps.loadSession
         ? ["session/load", "session/resume"]
         : ["session/resume", "session/load"];
+      let loadError = null;
       for (const method of order) {
         this.replay = [];
         this.capturing = true;
@@ -334,15 +337,26 @@ class AcpSession {
           this.agentSessionId =
             loaded?.sessionId || loaded?.session_id || resumeId;
           this.resumed = true;
+          this.requireResume = false;
           this._emitModels(init);
           this.emit({ type: "ready", agentSessionId: this.agentSessionId });
           return this.agentSessionId;
-        } catch {
+        } catch (err) {
+          loadError = err;
           this.replay = [];
           /* try next / fall through */
         } finally {
           this.capturing = false;
         }
+      }
+      // Opening a stored session must not quietly become a blank new one —
+      // the user asked for THAT conversation. Prompting may still fall
+      // through to session/new, which is how a dead agent recovers.
+      if (this.requireResume) {
+        this.dead = true;
+        throw new Error(
+          `Could not reopen session ${resumeId}: ${loadError?.message || "the agent refused to load it"}`,
+        );
       }
     }
 
@@ -770,6 +784,7 @@ export function ensureSession(opts, emit) {
     emit,
   );
   s.resumeId = opts.agentSessionId || null;
+  s.requireResume = Boolean(opts.requireResume && s.resumeId);
   sessions.set(opts.sessionId, s);
   return s;
 }
@@ -800,6 +815,10 @@ export async function listAcpSessions(providerId, opts = {}) {
   };
   proc.on("error", (err) => settleAll(err));
   proc.on("exit", () => settleAll(new Error("Agent exited before answering.")));
+  let stderr = "";
+  proc.stderr.on("data", (chunk) => {
+    stderr = (stderr + chunk.toString("utf8")).slice(-2000);
+  });
   proc.stdout.on("data", (chunk) => {
     buf = Buffer.concat([buf, chunk]);
     for (;;) {
@@ -857,7 +876,11 @@ export async function listAcpSessions(providerId, opts = {}) {
       .filter((s) => s.agentSessionId);
     return { ok: true, sessions: rows };
   } catch (err) {
-    return { ok: false, output: err.message, sessions: [] };
+    return {
+      ok: false,
+      output: `${err.message}${stderr.trim() ? ` — ${stderr.trim().split("\n").slice(-2).join(" ")}` : ""}`,
+      sessions: [],
+    };
   } finally {
     try {
       proc.kill();

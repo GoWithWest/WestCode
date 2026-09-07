@@ -224,6 +224,8 @@ export type HelixState = {
   /** Sessions the provider CLIs store themselves (their own session/list). */
   cliSessions: CliSession[];
   cliSessionStatus: "idle" | "loading" | "ready";
+  /** Providers that failed to list, so a broken CLI is not silently empty. */
+  cliSessionErrors: string[];
 
   setView: (v: LayoutView) => void;
   setActive: (id: string) => void;
@@ -275,7 +277,10 @@ export type HelixState = {
   runScheduledTask: (to: string, prompt: string, name: string) => void;
   refreshCliSessions: () => Promise<void>;
   openCliSession: (row: CliSession) => Promise<string | null>;
-  hydrateSession: (sessionId: string) => Promise<void>;
+  hydrateSession: (
+    sessionId: string,
+    opts?: { retry?: boolean },
+  ) => Promise<void>;
 };
 
 // Desktop state lives in ~/.westcode/state.json (loaded once at startup) so
@@ -1011,6 +1016,7 @@ export const useHelix = create<HelixState>((set, get) => ({
   libraryStatus: "idle",
   cliSessions: [],
   cliSessionStatus: "idle",
+  cliSessionErrors: [],
 
   setView: (view) => set({ view, mobileNav: "desk" }),
   setActive: (id) => {
@@ -1219,19 +1225,28 @@ export const useHelix = create<HelixState>((set, get) => ({
       const res = await api.cliSessions(PROVIDER_ORDER.slice());
       set({
         cliSessions: res.ok ? res.sessions : had,
+        cliSessionErrors: res.errors ?? [],
         cliSessionStatus: "ready",
       });
-    } catch {
-      set({ cliSessions: had, cliSessionStatus: "ready" });
+    } catch (err) {
+      set({
+        cliSessions: had,
+        cliSessionErrors: [(err as Error).message],
+        cliSessionStatus: "ready",
+      });
     }
   },
 
-  hydrateSession: async (sessionId) => {
+  hydrateSession: async (sessionId, opts) => {
     const api = westcode();
     const ses = get().sessions.find((s) => s.id === sessionId);
     // Only for a CLI-backed session whose transcript is not in memory — a
-    // restart drops it on purpose, because the CLI still has it.
-    if (!api?.openSession || !ses || !cliBacked(ses) || ses.messages.length) return;
+    // restart drops it on purpose, because the CLI still has it. A retry
+    // ignores an earlier failure note, so a failed open is never permanent.
+    const loaded = opts?.retry
+      ? ses?.messages.some((m) => m.role === "user" || m.role === "assistant")
+      : Boolean(ses?.messages.length);
+    if (!api?.openSession || !ses || !cliBacked(ses) || loaded) return;
     if (hydrating.has(sessionId)) return;
     hydrating.add(sessionId);
     try {
@@ -1244,14 +1259,29 @@ export const useHelix = create<HelixState>((set, get) => ({
         permissionMode: ses.permissionMode,
         agentSessionId: ses.agentSessionId!,
       });
-      const messages = res.ok ? replayToMessages(res.history ?? []) : [];
+      const messages = res.ok
+        ? replayToMessages(res.history ?? [])
+        : [
+            systemNote(
+              `Could not reload this session's history from ${resolveProvider(ses.providerId, get().customProviders).name}: ${res.output || "the CLI did not return it"}. Sending a message starts a fresh turn.`,
+            ),
+          ];
       if (!messages.length) return;
       set((state) => ({
-        sessions: patchSession(state.sessions, sessionId, (s) =>
+        sessions: patchSession(state.sessions, sessionId, (s) => {
           // A turn may have started while the replay was in flight; never
-          // stomp on messages that arrived in the meantime.
-          s.messages.length ? s : { ...s, messages },
-        ),
+          // stomp on messages that arrived in the meantime. A retry may
+          // still replace a previous failure note.
+          const live = opts?.retry
+            ? s.messages.some((m) => m.role === "user" || m.role === "assistant")
+            : s.messages.length > 0;
+          if (live) return s;
+          return {
+            ...s,
+            messages,
+            status: res.ok ? (s.status === "error" ? "idle" : s.status) : "error",
+          };
+        }),
       }));
     } finally {
       hydrating.delete(sessionId);
@@ -1261,13 +1291,23 @@ export const useHelix = create<HelixState>((set, get) => ({
   openCliSession: async (row) => {
     const api = westcode();
     if (!api?.openSession) return null;
-    // Already open in a pane? Focus it instead of starting a second view of
-    // the same agent-side session.
+    // Already on the desk? Focus that pane (un-archiving it) rather than
+    // opening a second view of one agent-side session. A pane whose history
+    // never loaded is retried instead of being a dead end.
     const existing = get().sessions.find(
-      (s) => s.agentSessionId === row.agentSessionId && !s.archivedAt,
+      (s) => s.agentSessionId === row.agentSessionId,
     );
     if (existing) {
-      set({ activeId: existing.id, view: "focus", mobileNav: "desk" });
+      set((state) => ({
+        activeId: existing.id,
+        view: "focus" as const,
+        mobileNav: "desk" as const,
+        sessions: patchSession(state.sessions, existing.id, (s) => ({
+          ...s,
+          archivedAt: undefined,
+        })),
+      }));
+      await get().hydrateSession(existing.id, { retry: true });
       return existing.id;
     }
     const p = resolveProvider(row.providerId, get().customProviders);
