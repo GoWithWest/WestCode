@@ -613,6 +613,15 @@ class AcpSession {
         );
       return;
     }
+    if (method === "fs/write_text_file" && this.readOnly) {
+      // Showing history must never touch the user's files.
+      this.write({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "WestCode is only reading this session." },
+      });
+      return;
+    }
     if (method === "fs/write_text_file") {
       const path = expandHome(params.path || "");
       mkdir(dirname(path), { recursive: true })

@@ -633,6 +633,20 @@ export function stripDeskPreamble(text: string): string {
   return rest.trim() || text;
 }
 
+/**
+ * Anything the user typed while the history was loading is already queued to
+ * send, so its bubble must survive the replay replacing the transcript —
+ * otherwise the queue drains a prompt the transcript never shows.
+ */
+function withQueuedKept(ses: Session, replayed: ChatMessage[]): ChatMessage[] {
+  const queuedIds = new Set(
+    (ses.queued ?? []).map((q) => q.msgId).filter(Boolean) as string[],
+  );
+  if (!queuedIds.size) return replayed;
+  const keep = ses.messages.filter((m) => queuedIds.has(m.id));
+  return keep.length ? [...replayed, ...keep] : replayed;
+}
+
 /** Turn a session/load replay into transcript messages. */
 export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
   const out: ChatMessage[] = [];
@@ -1302,7 +1316,7 @@ export const useHelix = create<HelixState>((set, get) => ({
           if (live) return s;
           return {
             ...s,
-            messages,
+            messages: withQueuedKept(s, messages),
             status: res.ok ? (s.status === "error" ? "idle" : s.status) : "error",
           };
         }),
@@ -1373,9 +1387,12 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...ses,
         status: res.ok ? "idle" : "error",
         updatedAt: Date.now(),
-        messages: res.ok
-          ? replayToMessages(res.history ?? [])
-          : [systemNote(res.output || "Could not open that session.")],
+        messages: withQueuedKept(
+          ses,
+          res.ok
+            ? replayToMessages(res.history ?? [])
+            : [systemNote(res.output || "Could not open that session.")],
+        ),
       })),
     }));
     return session.id;

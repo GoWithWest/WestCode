@@ -947,7 +947,10 @@ ipcMain.handle("session:open", async (_e, payload) => {
       cwd,
       model,
       effort,
-      permissionMode,
+      // Never the pane's mode: Bypass/Auto spawn a CLI that runs tools
+      // WITHOUT asking, and a reader would then execute them while merely
+      // showing history. Ask means it asks, and readOnly declines.
+      permissionMode: "ask",
       agentSessionId,
       readOnly: true,
     },
