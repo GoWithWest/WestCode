@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, hasLiveSession, stopAll, setDeskUrl } from "./acp-host.mjs";
+import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl } from "./acp-host.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -903,6 +903,53 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
   } catch (err) {
     emit({ type: "error", message: err.message });
     return { ok: false, error: err.message };
+  }
+});
+
+// The CLIs keep their own session history; ask each one what it has so
+// sessions started in a terminal show up in the app too.
+ipcMain.handle("sessions:cli-list", async (_e, payload) => {
+  const wanted = Array.isArray(payload?.providerIds) && payload.providerIds.length
+    ? payload.providerIds
+    : Object.keys(PROVIDERS);
+  const probes = await probeAll();
+  const results = await Promise.all(
+    wanted
+      .filter((id) => PROVIDERS[id] && probes.find((p) => p.id === id)?.found)
+      .map(async (id) => ({ id, res: await listAcpSessions(id) })),
+  );
+  const sessions = [];
+  const errors = [];
+  for (const { id, res } of results) {
+    if (res.ok) sessions.push(...res.sessions);
+    else errors.push(`${id}: ${res.output}`);
+  }
+  sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+  return { ok: true, sessions, errors };
+});
+
+// Start a session against an agent-side session id and hand back the
+// transcript session/load replayed, so the pane opens already filled in.
+ipcMain.handle("session:open", async (_e, payload) => {
+  const { sessionId, providerId, cwd, model, effort, permissionMode, agentSessionId } =
+    payload || {};
+  if (!sessionId || !providerId || !agentSessionId) {
+    return { ok: false, output: "sessionId, providerId and agentSessionId are required." };
+  }
+  let session = null;
+  const emit = (event) => {
+    if (session && (session.stopped || getSession(sessionId) !== session)) return;
+    send(sessionId, event);
+  };
+  session = ensureSession(
+    { sessionId, providerId, cwd, model, effort, permissionMode, agentSessionId },
+    emit,
+  );
+  try {
+    await session.start();
+    return { ok: true, history: session.takeReplay(), resumed: session.resumed };
+  } catch (err) {
+    return { ok: false, output: err.message, history: [] };
   }
 });
 

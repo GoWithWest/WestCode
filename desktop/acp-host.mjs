@@ -183,6 +183,15 @@ class AcpSession {
     this.dead = false;
     this.stopped = false;
     this.unsandboxed = false;
+    /** Transcript replayed by session/load, drained once by session:open. */
+    this.replay = [];
+    this.capturing = false;
+  }
+
+  takeReplay() {
+    const out = this.replay;
+    this.replay = [];
+    return out;
   }
 
   start() {
@@ -305,7 +314,17 @@ class AcpSession {
     const mcpServers = deskMcp(this.id);
     const resumeId = this.resumeId;
     if (resumeId) {
-      for (const method of ["session/resume", "session/load"]) {
+      // session/load replays the whole transcript as session/update
+      // notifications; session/resume restores the agent's context silently.
+      // Prefer load when the agent advertises it, so opening a session the
+      // user started in the terminal actually shows its history.
+      const caps = init?.agentCapabilities || init?.agent_capabilities || {};
+      const order = caps.loadSession
+        ? ["session/load", "session/resume"]
+        : ["session/resume", "session/load"];
+      for (const method of order) {
+        this.replay = [];
+        this.capturing = true;
         try {
           const loaded = await this.rpc(method, {
             sessionId: resumeId,
@@ -319,7 +338,10 @@ class AcpSession {
           this.emit({ type: "ready", agentSessionId: this.agentSessionId });
           return this.agentSessionId;
         } catch {
+          this.replay = [];
           /* try next / fall through */
+        } finally {
+          this.capturing = false;
         }
       }
     }
@@ -505,6 +527,17 @@ class AcpSession {
       return;
     }
     if (msg.method === "session/update") {
+      if (this.capturing) {
+        // Replayed history: keep user turns (live ones are already on screen,
+        // so mapUpdate drops them) and hold the transcript back from the live
+        // stream. Session-level updates that happen to arrive mid-replay —
+        // slash commands, model lists — are not transcript, so they still go
+        // straight through.
+        const ev = mapUpdate(msg.params || {}, { replay: true });
+        if (TRANSCRIPT_EVENTS.has(ev.type)) this.replay.push(ev);
+        else if (ev.type !== "noop") this.emit(ev);
+        return;
+      }
       this.emit(mapUpdate(msg.params || {}));
       return;
     }
@@ -583,9 +616,15 @@ class AcpSession {
   }
 }
 
-function mapUpdate(params) {
+/** Event types that belong to a transcript, so session/load can replay them. */
+const TRANSCRIPT_EVENTS = new Set(["user", "text", "thought", "tool"]);
+
+function mapUpdate(params, opts = {}) {
   const u = params.update || params;
   const kind = u.sessionUpdate || u.session_update || "";
+  if (opts.replay && (kind === "user_message_chunk" || kind === "user_message")) {
+    return { type: "user", text: extractText(u) };
+  }
   if (kind === "available_commands_update" || u.availableCommands) {
     const list = u.availableCommands || u.available_commands || [];
     return {
@@ -733,6 +772,99 @@ export function ensureSession(opts, emit) {
   s.resumeId = opts.agentSessionId || null;
   sessions.set(opts.sessionId, s);
   return s;
+}
+
+/**
+ * Ask a CLI for the sessions it has stored itself — the ones the user started
+ * in a terminal as well as the ones WestCode started. session/list is an ACP
+ * method, so this reads no private on-disk format (Claude's and Codex's
+ * transcript schemas are internal and change between releases). The agent is
+ * spawned only for the query and killed straight after.
+ */
+export async function listAcpSessions(providerId, opts = {}) {
+  const spec = spawnSpec(providerId, opts.model || "", opts.effort || "", {
+    permissionMode: "ask",
+  });
+  const cwd = expandHome(opts.cwd || homedir());
+  const proc = spawn(spec.command, spec.args, {
+    cwd,
+    env: spec.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let buf = Buffer.alloc(0);
+  let nextId = 1;
+  const pending = new Map();
+  const settleAll = (err) => {
+    for (const [, p] of pending) p.reject(err);
+    pending.clear();
+  };
+  proc.on("error", (err) => settleAll(err));
+  proc.on("exit", () => settleAll(new Error("Agent exited before answering.")));
+  proc.stdout.on("data", (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    for (;;) {
+      const nl = buf.indexOf(10);
+      if (nl < 0) break;
+      const line = buf.subarray(0, nl).toString("utf8").trim();
+      buf = buf.subarray(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.id != null && msg.method == null && pending.has(msg.id)) {
+        const p = pending.get(msg.id);
+        pending.delete(msg.id);
+        if (msg.error) p.reject(new Error(msg.error.message || "ACP error"));
+        else p.resolve(msg.result ?? {});
+      }
+    }
+  });
+  const rpc = (method, params) =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      pending.set(id, { resolve, reject });
+      proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          reject(new Error(`${method} timed out`));
+        }
+      }, 45_000);
+    });
+  try {
+    await rpc("initialize", {
+      protocolVersion: 1,
+      clientInfo: { name: "westcode", title: "WestCode", version: "1.0.0" },
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: false,
+      },
+    });
+    // No cwd filter: both adapters then return every stored session, across
+    // every folder, which is what the sidebar wants.
+    const res = await rpc("session/list", {});
+    const rows = (res?.sessions || [])
+      .map((s) => ({
+        providerId,
+        agentSessionId: s.sessionId || s.session_id || "",
+        cwd: s.cwd || "",
+        title: String(s.title || "").trim(),
+        updatedAt: Date.parse(s.updatedAt || s.updated_at || "") || 0,
+      }))
+      .filter((s) => s.agentSessionId);
+    return { ok: true, sessions: rows };
+  } catch (err) {
+    return { ok: false, output: err.message, sessions: [] };
+  } finally {
+    try {
+      proc.kill();
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 export function dropSession(id) {

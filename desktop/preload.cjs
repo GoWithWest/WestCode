@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld("westcode", {
     return () => ipcRenderer.removeListener("schedule:fire", handler);
   },
   stateSave: (key, value) => ipcRenderer.invoke("state:save", { key, value }),
+  cliSessions: (providerIds) => ipcRenderer.invoke("sessions:cli-list", { providerIds }),
+  openSession: (payload) => ipcRenderer.invoke("session:open", payload),
   prompt: (payload) => ipcRenderer.invoke("session:prompt", payload),
   cancel: (sessionId) => ipcRenderer.invoke("session:cancel", sessionId),
   stopSession: (sessionId) => ipcRenderer.invoke("session:stop", sessionId),

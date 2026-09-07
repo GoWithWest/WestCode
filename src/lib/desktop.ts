@@ -21,6 +21,15 @@ export type LiveAddon = {
   providers: string[];
 };
 
+/** A session a provider CLI stores itself, from its own `session/list`. */
+export type CliSession = {
+  providerId: string;
+  agentSessionId: string;
+  cwd: string;
+  title: string;
+  updatedAt: number;
+};
+
 export type SessionEvent = {
   sessionId: string;
   type:
@@ -33,6 +42,7 @@ export type SessionEvent = {
     | "error"
     | "models"
     | "ready"
+    | "user"
     | "noop";
   text?: string;
   toolId?: string;
@@ -147,6 +157,25 @@ type WestcodeBridge = {
     key: string,
     value: unknown,
   ) => Promise<{ ok: boolean; error?: string }>;
+  cliSessions: (providerIds?: string[]) => Promise<{
+    ok: boolean;
+    sessions: CliSession[];
+    errors: string[];
+  }>;
+  openSession: (payload: {
+    sessionId: string;
+    providerId: string;
+    cwd: string;
+    model: string;
+    effort: string;
+    permissionMode?: string;
+    agentSessionId: string;
+  }) => Promise<{
+    ok: boolean;
+    output?: string;
+    resumed?: boolean;
+    history?: SessionEvent[];
+  }>;
   prompt: (payload: {
     sessionId: string;
     providerId: string;
