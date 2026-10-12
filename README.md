@@ -22,8 +22,12 @@ Login opens Terminal so each CLI completes its own browser OAuth — WestCode ne
 
 - **Sessions** for any provider, in mosaic, focus, or split view. Rename them, switch their working directory, and watch the live **git chip** (branch, +/− lines, ahead/behind, PR link).
 - **Desk bus**: sessions message each other across providers (`/msg`, or just ask an agent to "tell Codex…"). Assignments carry an explicit reply-to contract so agents report back instead of waiting on each other.
-- **Agents**: preset personas (Avery the Architect, Beck the Builder, Sable the Swarm, Quinn the QA, Lennox the Lore, Oz the Orchestrator) with avatars — editable, deletable, or make your own. Say `You are @Oz` in a session to assign one; tag `@Beck` to delegate.
+- **Agents**: preset personas (Avery the Architect, Beck the Builder, Sable the Swarm, Quinn the QA, Lennox the Lore, Oz the Orchestrator, Mason the Maker) with avatars — editable, deletable, or make your own. Say `You are @Oz` in a session to assign one; tag `@Beck` to delegate.
 - **Library**: skills, plugins, and MCP connectors read live from each CLI (`~/.claude`, `~/.grok`, `~/.codex`), filterable by provider and kind; import from a repo or a local file.
+
+## WestCreate
+
+[WestCreate](https://github.com/thejago/WestCreate) (laser cutting, CNC, 3D printing) registers its MCP server with Claude Code, Grok and Codex the first time it is opened. Every WestCode session of those providers then has its tools, and the server shows in the Library. Say `You are @Mason` in a session, or tag `@Mason`, to steer WestCreate from the desk: draw, generate boxes, prepare and run laser jobs. Nothing in WestCode talks to WestCreate directly; the CLIs do.
 
 ## Develop
 
