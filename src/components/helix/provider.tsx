@@ -98,7 +98,7 @@ export function StatusLabel({
 }) {
   const map = {
     running: { label: "Running", cls: "text-claude" },
-    waiting: { label: "Waiting", cls: "text-warn" },
+    waiting: { label: "Your turn", cls: "text-muted-foreground" },
     idle: { label: "Idle", cls: "text-muted-foreground" },
     error: { label: "Error", cls: "text-danger" },
   } as const;

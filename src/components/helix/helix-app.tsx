@@ -28,6 +28,21 @@ export function HelixApp() {
   const setMobileNav = useHelix((s) => s.setMobileNav);
   const tick = useHelix((s) => s.tick);
   const restoreState = useHelix((s) => s.restoreState);
+  const theme = useHelix((s) => s.settings.theme ?? "dark");
+
+  // Appearance: data-theme on <html>; "system" follows the OS live.
+  useEffect(() => {
+    const root = document.documentElement;
+    const mq = window.matchMedia?.("(prefers-color-scheme: light)");
+    const apply = () => {
+      const light = theme === "light" || (theme === "system" && Boolean(mq?.matches));
+      root.dataset.theme = light ? "light" : "dark";
+    };
+    apply();
+    if (theme !== "system" || !mq) return;
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [theme]);
 
   useEffect(() => {
     void restoreState();
