@@ -29,6 +29,34 @@ contextBridge.exposeInMainWorld("westcode", {
   saveText: (defaultName, content) => ipcRenderer.invoke("fs:saveText", { defaultName, content }),
   installSkillFile: (path, name, providers) => ipcRenderer.invoke("skill:install-file", { path, name, providers }),
   gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
+  westcreate: () => ipcRenderer.invoke("westcreate:snapshot"),
+  learn: {
+    review: (payload) => ipcRenderer.invoke("learn:review", payload),
+    cancel: (origin) => ipcRenderer.invoke("learn:cancel", origin),
+    pending: () => ipcRenderer.invoke("learn:pending"),
+    decide: (id, verdict, edited) => ipcRenderer.invoke("learn:decide", { id, verdict, edited }),
+    memory: () => ipcRenderer.invoke("learn:memory"),
+  },
+  openWestcreate: () => ipcRenderer.invoke("westcreate:open"),
+  git: {
+    changes: (cwd) => ipcRenderer.invoke("git:changes", { cwd }),
+    diff: (cwd, file) => ipcRenderer.invoke("git:diff", { cwd, file }),
+    commit: (cwd, payload) => ipcRenderer.invoke("git:commit", { cwd, ...payload }),
+    undo: (cwd) => ipcRenderer.invoke("git:undo", { cwd }),
+    discard: (cwd, files) => ipcRenderer.invoke("git:discard", { cwd, files }),
+    branches: (cwd) => ipcRenderer.invoke("git:branches", { cwd }),
+    checkout: (cwd, payload) => ipcRenderer.invoke("git:checkout", { cwd, ...payload }),
+    sync: (cwd, action) => ipcRenderer.invoke("git:sync", { cwd, action }),
+    log: (cwd, payload) => ipcRenderer.invoke("git:log", { cwd, ...(payload || {}) }),
+    show: (cwd, sha) => ipcRenderer.invoke("git:show", { cwd, sha }),
+    checkpoint: (cwd, label) => ipcRenderer.invoke("git:checkpoint", { cwd, label }),
+    restore: (cwd, sha) => ipcRenderer.invoke("git:restore", { cwd, sha }),
+    onProgress: (fn) => {
+      const handler = (_e, data) => fn(data);
+      ipcRenderer.on("git:progress", handler);
+      return () => ipcRenderer.removeListener("git:progress", handler);
+    },
+  },
   apiPrompt: (payload) => ipcRenderer.invoke("api:prompt", payload),
   setSecret: (id, value) => ipcRenderer.invoke("secret:set", { id, value }),
   stateLoad: () => ipcRenderer.invoke("state:load"),

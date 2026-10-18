@@ -58,6 +58,48 @@
   --motion-slow: 400ms;
 }
 
+/* Light theme: same tokens, light values. Applied by data-theme on <html>
+   (Settings → Appearance: System / Dark / Light). */
+:root[data-theme="light"] {
+  --color-background: #f1f0eb;
+  --color-foreground: #1f1e1d;
+  --color-surface: #ffffff;
+  --color-surface-2: #f7f6f2;
+  --color-muted: #ebe9e3;
+  --color-muted-foreground: #5d5b56;
+  --color-subtle: #8b8881;
+  --color-accent: #2a2926;
+  --color-accent-foreground: #faf9f5;
+  --color-border: rgb(31 30 29 / 0.1);
+  --color-border-strong: rgb(31 30 29 / 0.2);
+  --color-ring: rgb(31 30 29 / 0.35);
+  --color-desktop: #e9e7e1;
+  --color-menubar: rgb(250 249 245 / 0.86);
+  --color-window: #faf9f5;
+  --color-claude: #c2653f;
+  --color-codex: #4b7a61;
+  --color-cursor: #5c6b7d;
+  --color-grok: #2a2926;
+  --color-danger: #b23f37;
+  --color-success: #3c7a58;
+  --color-warn: #a2741f;
+  --shadow-window: 0 24px 48px -20px rgb(31 30 29 / 0.25), 0 0 0 1px rgb(31 30 29 / 0.06);
+  color-scheme: light;
+}
+:root[data-theme="light"] ::selection {
+  background: rgb(31 30 29 / 0.14);
+}
+:root[data-theme="light"] .scrollbar-thin {
+  scrollbar-color: rgb(31 30 29 / 0.18) transparent;
+}
+:root[data-theme="light"] .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgb(31 30 29 / 0.18);
+  background-clip: padding-box;
+}
+:root:not([data-theme="light"]) {
+  color-scheme: dark;
+}
+
 @layer base {
   html,
   body,
@@ -145,6 +187,210 @@
     background:
       radial-gradient(ellipse at 50% -10%, #2a2622 0%, transparent 55%),
       radial-gradient(ellipse at 90% 110%, #161820 0%, transparent 50%);
+  }
+}
+
+@layer components {
+  /* Live-work label: a light band sweeps across the text. */
+  .shimmer-text {
+    background: linear-gradient(
+        100deg,
+        var(--color-muted-foreground) 20%,
+        var(--color-foreground) 45%,
+        var(--color-muted-foreground) 70%
+      )
+      0 0 / 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer-sweep 1.8s linear infinite;
+  }
+
+  .prose-west > :first-child {
+    margin-top: 0;
+  }
+  .prose-west > :last-child {
+    margin-bottom: 0;
+  }
+  .prose-west p,
+  .prose-west ul,
+  .prose-west ol,
+  .prose-west blockquote,
+  .prose-west table {
+    margin: 0.6em 0;
+  }
+  .prose-west ul {
+    list-style: disc;
+    padding-left: 1.25em;
+  }
+  .prose-west ol {
+    list-style: decimal;
+    padding-left: 1.4em;
+  }
+  .prose-west li {
+    margin: 0.2em 0;
+  }
+  .prose-west li::marker {
+    color: var(--color-subtle);
+  }
+  .prose-west h1,
+  .prose-west h2,
+  .prose-west h3,
+  .prose-west h4 {
+    margin: 1em 0 0.4em;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .prose-west h1 {
+    font-size: 1.25em;
+  }
+  .prose-west h2 {
+    font-size: 1.12em;
+  }
+  .prose-west h3,
+  .prose-west h4 {
+    font-size: 1em;
+  }
+  .prose-west strong {
+    font-weight: 600;
+  }
+  .prose-west blockquote {
+    border-left: 2px solid var(--color-border-strong);
+    padding-left: 0.8em;
+    color: var(--color-muted-foreground);
+  }
+  .prose-west hr {
+    margin: 1em 0;
+    border-color: var(--color-border);
+  }
+  .prose-west table {
+    display: block;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.92em;
+  }
+  .prose-west th,
+  .prose-west td {
+    border: 1px solid var(--color-border);
+    padding: 0.3em 0.6em;
+    text-align: left;
+  }
+  .prose-west th {
+    background: var(--color-surface-2);
+    font-weight: 600;
+  }
+}
+
+/* Bot characters (dot.tsx). Motion lives on inner groups so the svg box
+   never moves the layout. */
+.dot-bot .dot-body,
+.dot-bot .dot-eyes,
+.dot-bot .dot-eye {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.dot-bot .dot-eye {
+  transform-origin: 50% 50%;
+}
+.dot-idle .dot-body {
+  animation: dot-float 3.2s ease-in-out infinite;
+}
+.dot-idle .dot-eye {
+  animation: dot-blink 5.5s infinite;
+}
+.dot-thinking .dot-body {
+  animation: dot-float 2.6s ease-in-out infinite;
+}
+.dot-thinking .dot-eyes {
+  animation: dot-look 2.4s ease-in-out infinite;
+}
+.dot-working .dot-body {
+  animation: dot-sway 1.1s ease-in-out infinite;
+}
+.dot-speaking .dot-body {
+  animation: dot-talk 0.38s ease-in-out infinite;
+}
+.dot-needs-input .dot-body {
+  animation: dot-hop 1.6s cubic-bezier(0.3, 1.6, 0.5, 1) infinite;
+}
+.dot-done .dot-body {
+  animation: dot-hop 0.6s cubic-bezier(0.3, 1.6, 0.5, 1) 1;
+}
+.dot-error,
+.dot-paused {
+  filter: grayscale(0.7) brightness(0.85);
+}
+@keyframes dot-float {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-5%) scale(1.02, 0.98);
+  }
+}
+@keyframes dot-blink {
+  0%,
+  93%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.1);
+  }
+}
+@keyframes dot-look {
+  0%,
+  35% {
+    transform: translate(0, 0);
+  }
+  45%,
+  65% {
+    transform: translate(-8%, -6%);
+  }
+  75%,
+  100% {
+    transform: translate(8%, -6%);
+  }
+}
+@keyframes dot-sway {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+@keyframes dot-talk {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.04, 0.96);
+  }
+}
+@keyframes dot-hop {
+  0%,
+  55%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  20% {
+    transform: translateY(-16%) scale(0.95, 1.06);
+  }
+  38% {
+    transform: translateY(0) scale(1.06, 0.94);
+  }
+}
+
+@keyframes shimmer-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
   }
 }
 

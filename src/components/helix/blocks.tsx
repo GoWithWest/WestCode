@@ -1,56 +1,85 @@
-import { useState } from "react";
-import * as Collapsible from "@radix-ui/react-collapsible";
+import { memo, useEffect, useState, type ComponentType } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
+  Brain,
   Check,
   ChevronRight,
-  CircleDashed,
-  FileCode,
+  Copy,
+  FilePen,
+  FileSearch,
   FileText,
+  Globe,
+  History,
+  Search,
   Send,
-  Terminal,
+  SquareTerminal,
+  Trash2,
   Users,
+  Wrench,
+  X,
+  type LucideProps,
 } from "lucide-react";
-import { activitySummary, splitActivity } from "@/lib/parse-agent";
-import type { Attachment, Block, ChatMessage, ToolBlock } from "@/lib/types";
+import { diffLines, statsForDiffs, withContext, type DiffRow } from "@/lib/diff";
+import { activityLine, formatSeconds, liveLabel, toolKindOf, toolLabel } from "@/lib/activity";
+import { splitActivity } from "@/lib/parse-agent";
+import type { Attachment, Block, ChatMessage, FileDiff, ToolBlock } from "@/lib/types";
+import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ProviderDot, useResolvedProvider } from "./provider";
+
+type Detail = "normal" | "thinking" | "verbose";
 
 export function MessageList({
   messages,
   compact,
+  sessionId,
 }: {
   messages: ChatMessage[];
   compact?: boolean;
+  sessionId?: string;
 }) {
+  const detail = useHelix((s) => s.settings.transcriptDetail ?? "normal");
   return (
-    <div className={cn("flex flex-col", compact ? "gap-3" : "gap-5")}>
+    <div className={cn("mx-auto flex w-full max-w-3xl flex-col", compact ? "gap-4" : "gap-6")}>
       {messages.map((m) => (
-        <Message key={m.id} message={m} compact={compact} />
+        <Message key={m.id} message={m} compact={compact} detail={detail} sessionId={sessionId} />
       ))}
     </div>
   );
 }
 
-function Message({
+const Message = memo(function Message({
   message,
   compact,
+  detail,
+  sessionId,
 }: {
   message: ChatMessage;
   compact?: boolean;
+  detail: Detail;
+  sessionId?: string;
 }) {
   if (message.role === "system") {
-    const text = message.blocks
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("\n");
+    const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
     return (
       <div className="flex justify-center">
         <pre
           className={cn(
-            "max-w-[min(42rem,100%)] whitespace-pre-wrap rounded-md border border-border bg-surface px-3 py-2 font-sans text-2xs leading-relaxed text-muted-foreground",
+            "max-w-[min(42rem,100%)] whitespace-pre-wrap rounded-md bg-surface px-3 py-2 font-sans text-2xs leading-relaxed text-muted-foreground",
             compact && "px-2.5 py-1.5",
           )}
         >
           {text}
+          {message.restoreUndo && sessionId ? (
+            <button
+              type="button"
+              onClick={() => void useHelix.getState().restoreCheckpoint(sessionId, message.restoreUndo!, "the restore")}
+              className="ml-2 font-medium text-foreground underline underline-offset-2"
+            >
+              Undo
+            </button>
+          ) : null}
         </pre>
       </div>
     );
@@ -61,20 +90,36 @@ function Message({
   }
 
   if (message.role === "user") {
-    const text = message.blocks
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("\n");
+    const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
     return (
-      <div className="flex justify-end">
+      <div className="group/user flex items-center justify-end gap-2">
+        {message.checkpoint && sessionId ? (
+          <button
+            type="button"
+            title="Put the folder's files back to how they were before this message (undoable)"
+            aria-label="Restore files to before this message"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Restore the folder's files to how they were before this message? Changes made after it are undone (you can undo the restore).",
+                )
+              ) {
+                void useHelix.getState().restoreCheckpoint(sessionId, message.checkpoint!, text.slice(0, 50));
+              }
+            }}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-subtle opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100"
+          >
+            <History className="size-3" />
+            Restore
+          </button>
+        ) : null}
         <div
           className={cn(
-            "max-w-[min(42rem,92%)] rounded-lg bg-muted px-3.5 py-2.5 text-sm leading-relaxed text-foreground",
+            "max-w-[min(36rem,88%)] whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed text-foreground",
             compact && "px-3 py-2 text-xs",
           )}
         >
-          {message.attachments?.length ? (
-            <AttachmentRow items={message.attachments} />
-          ) : null}
+          {message.attachments?.length ? <AttachmentRow items={message.attachments} /> : null}
           {text}
         </div>
       </div>
@@ -82,110 +127,366 @@ function Message({
   }
 
   const { activity, reply } = splitActivity(message.blocks);
-
+  const streaming = Boolean(message.streaming);
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2">
       {activity.length ? (
-        <ActivityDump
-          id={message.id}
+        <Activity
           blocks={activity}
           compact={compact}
-          streaming={Boolean(message.streaming)}
-          hasReply={reply.length > 0}
+          streaming={streaming && reply.length === 0}
+          detail={detail}
         />
       ) : null}
-      {reply.map((b, i) => (
-        <BlockView key={`${message.id}-r-${i}`} block={b} compact={compact} />
-      ))}
-      {message.streaming && message.blocks.length === 0 ? (
-        <span className="text-xs text-muted-foreground">Thinking</span>
+      {reply.map((b, i) =>
+        b.type === "text" ? (
+          <Markdown key={`${message.id}-r-${i}`} text={b.text} compact={compact} />
+        ) : null,
+      )}
+      {streaming && message.blocks.length === 0 ? <Shimmer>Thinking</Shimmer> : null}
+    </div>
+  );
+});
+
+const THINKING_VERBS = [
+  "Thinking",
+  "Pondering",
+  "Weighing it up",
+  "Untangling",
+  "Sifting",
+  "Mulling it over",
+  "Piecing it together",
+  "Working it out",
+];
+let verbIndex = 0;
+let verbTimer: number | null = null;
+const verbListeners = new Set<(i: number) => void>();
+
+/** One verb shared by every live "Thinking" label, changing every 8 s. */
+function useThinkingVerb(active: boolean) {
+  const [i, setI] = useState(verbIndex);
+  useEffect(() => {
+    if (!active) return;
+    verbListeners.add(setI);
+    if (verbTimer == null) {
+      verbTimer = window.setInterval(() => {
+        verbIndex = (verbIndex + 1) % THINKING_VERBS.length;
+        verbListeners.forEach((fn) => fn(verbIndex));
+      }, 8000);
+    }
+    return () => {
+      verbListeners.delete(setI);
+      if (!verbListeners.size && verbTimer != null) {
+        window.clearInterval(verbTimer);
+        verbTimer = null;
+        verbIndex = 0;
+      }
+    };
+  }, [active]);
+  return THINKING_VERBS[i] ?? "Thinking";
+}
+
+/** "Thinking…" with a light sweep, the way the desktop apps show live work. */
+export function Shimmer({ children, className }: { children: string; className?: string }) {
+  const thinking = children === "Thinking";
+  const verb = useThinkingVerb(thinking);
+  return (
+    <span
+      className={cn(
+        "shimmer-text inline-block text-xs font-medium text-muted-foreground",
+        className,
+      )}
+      aria-live="polite"
+    >
+      {thinking ? `${verb}…` : children}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------- activity
+
+const KIND_ICON: Record<string, ComponentType<LucideProps>> = {
+  read: FileText,
+  edit: FilePen,
+  delete: Trash2,
+  move: FilePen,
+  search: Search,
+  execute: SquareTerminal,
+  fetch: Globe,
+  think: Brain,
+  send: Send,
+  other: Wrench,
+};
+
+function Activity({
+  blocks,
+  compact,
+  streaming,
+  detail,
+}: {
+  blocks: Block[];
+  compact?: boolean;
+  streaming: boolean;
+  detail: Detail;
+}) {
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? detail !== "normal";
+  const failed = blocks.some((b) => b.type === "tool" && b.status === "error");
+  const diffs = blocks.flatMap((b) => (b.type === "tool" && b.diffs ? b.diffs : []));
+  const stats = diffs.length ? statsForDiffs(diffs) : null;
+
+  return (
+    <div className={cn("flex flex-col", compact ? "gap-1" : "gap-1.5")}>
+      <button
+        type="button"
+        onClick={() => setUserOpen(!open)}
+        aria-expanded={open}
+        className="group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground hover:text-foreground"
+      >
+        {streaming ? (
+          <Shimmer className="truncate">{liveLabel(blocks)}</Shimmer>
+        ) : (
+          <span className="truncate">{activityLine(blocks)}</span>
+        )}
+        {stats && (stats.adds || stats.dels) ? (
+          <span className="shrink-0 font-mono text-2xs tabular-nums">
+            <span className="text-success">+{stats.adds}</span>{" "}
+            <span className="text-danger">−{stats.dels}</span>
+          </span>
+        ) : null}
+        {failed ? <X className="size-3 shrink-0 text-danger" aria-label="A tool failed" /> : null}
+        <ChevronRight
+          className={cn(
+            "size-3 shrink-0 opacity-60 transition-transform duration-(--motion-quick)",
+            open && "rotate-90",
+          )}
+        />
+      </button>
+      {open ? (
+        <div className="ml-1 flex flex-col gap-0.5 border-l border-border pl-3">
+          {blocks.map((b, i) =>
+            b.type === "tool" ? (
+              <ToolRow key={b.toolId ?? `t${i}`} tool={b} compact={compact} verbose={detail === "verbose"} />
+            ) : b.type === "think" ? (
+              <ThoughtRow key={`k${i}`} block={b} defaultOpen={detail !== "normal"} />
+            ) : b.text.trim() ? (
+              <Markdown key={`x${i}`} text={b.text} compact muted />
+            ) : null,
+          )}
+        </div>
       ) : null}
     </div>
   );
 }
 
-function ActivityDump({
-  id,
-  blocks,
-  compact,
-  streaming,
-  hasReply,
+function ThoughtRow({
+  block,
+  defaultOpen,
 }: {
-  id: string;
-  blocks: Block[];
-  compact?: boolean;
-  streaming: boolean;
-  hasReply: boolean;
+  block: Extract<Block, { type: "think" }>;
+  defaultOpen: boolean;
 }) {
-  const running = blocks.some((b) => b.type === "tool" && b.status === "running");
-  const autoOpen = streaming || !hasReply;
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const open = userOpen ?? autoOpen;
-  const tools = blocks.filter((b) => b.type === "tool").length;
-
+  const [open, setOpen] = useState(defaultOpen);
+  const live = block.ms == null;
   return (
-    <Collapsible.Root open={open} onOpenChange={setUserOpen}>
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
-        <Collapsible.Trigger asChild>
-          <button
-            type="button"
-            className={cn(
-              "flex w-full items-center gap-2 px-3 py-2 text-left",
-              compact && "py-1.5",
-            )}
-          >
-            <ChevronRight
-              className={cn(
-                "size-3.5 shrink-0 text-subtle transition-transform duration-(--motion-quick) ease-(--ease-out)",
-                open && "rotate-90",
-              )}
-            />
-            <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-              {activitySummary(blocks)}
-            </span>
-            {running ? (
-              <CircleDashed className="size-3.5 animate-spin text-claude" />
-            ) : tools ? (
-              <Check className="size-3.5 text-success" />
-            ) : null}
-          </button>
-        </Collapsible.Trigger>
-        <Collapsible.Content>
-          <div
-            className={cn(
-              "flex flex-col gap-2 border-t border-border bg-background/40 p-3",
-              compact && "gap-1.5 p-2.5",
-            )}
-          >
-            {blocks.map((b, i) => (
-              <BlockView key={`${id}-a-${i}`} block={b} compact={compact} />
-            ))}
-          </div>
-        </Collapsible.Content>
-      </div>
-    </Collapsible.Root>
+    <div className="py-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <Brain className="size-3.5 shrink-0" />
+        {live ? <Shimmer>Thinking</Shimmer> : <span>Thought for {formatSeconds(block.ms ?? 0)}</span>}
+        <ChevronRight className={cn("size-3 opacity-60 transition-transform", open && "rotate-90")} />
+      </button>
+      {open ? (
+        <p className="mt-1 ml-5 whitespace-pre-wrap text-xs leading-relaxed text-subtle italic">
+          {block.text}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
-function AgentNote({
-  message,
+function ToolRow({
+  tool,
   compact,
+  verbose,
 }: {
-  message: ChatMessage;
+  tool: ToolBlock;
   compact?: boolean;
+  verbose?: boolean;
 }) {
-  const who = useResolvedProvider(message.fromProviderId ?? "claude");
-  const text = message.blocks
-    .map((b) => (b.type === "text" ? b.text : ""))
-    .join("\n");
+  const kind = toolKindOf(tool);
+  const Icon = /^listagents$/i.test(tool.name) ? Users : (KIND_ICON[kind] ?? Wrench);
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const hasBody = Boolean(tool.content || tool.diffs?.length);
+  const open = userOpen ?? Boolean(verbose && hasBody);
+  const stats = tool.diffs?.length ? statsForDiffs(tool.diffs) : null;
+  const running = tool.status === "running";
+
   return (
-    <div
-      className={cn(
-        "rounded-lg border border-border bg-surface px-3.5 py-2.5",
-        compact && "px-3 py-2",
-      )}
-    >
+    <div>
+      <button
+        type="button"
+        disabled={!hasBody}
+        onClick={() => setUserOpen(!open)}
+        className="flex w-full min-w-0 items-center gap-2 rounded-sm py-1 text-left text-xs text-muted-foreground enabled:hover:text-foreground"
+      >
+        <Icon className={cn("size-3.5 shrink-0", tool.status === "error" && "text-danger")} />
+        {running ? (
+          <Shimmer className="min-w-0 truncate">{toolLabel(tool)}</Shimmer>
+        ) : (
+          <span className="min-w-0 truncate font-mono text-[11.5px]">{toolLabel(tool)}</span>
+        )}
+        {stats ? (
+          <span className="shrink-0 font-mono text-2xs tabular-nums">
+            <span className="text-success">+{stats.adds}</span>{" "}
+            <span className="text-danger">−{stats.dels}</span>
+          </span>
+        ) : null}
+        {tool.status === "error" ? <span className="shrink-0 text-2xs text-danger">failed</span> : null}
+        {hasBody ? (
+          <ChevronRight
+            className={cn("ml-auto size-3 shrink-0 opacity-50 transition-transform", open && "rotate-90")}
+          />
+        ) : null}
+      </button>
+      {open ? (
+        <div className="mt-1 mb-2 flex flex-col gap-2">
+          {tool.diffs?.map((d, i) => <DiffView key={`${d.path}-${i}`} diff={d} compact={compact} />)}
+          {tool.content && !tool.diffs?.length ? <Output text={tool.content} kind={kind} compact={compact} /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Shell output keeps its head and tail when long, like a terminal pane. */
+function Output({ text, kind, compact }: { text: string; kind: string; compact?: boolean }) {
+  const [all, setAll] = useState(false);
+  const clean = text.replace(/^```[\w-]*\n?|```$/g, "").trimEnd();
+  const lines = clean.split("\n");
+  const long = lines.length > 14;
+  const shown =
+    long && !all
+      ? kind === "execute"
+        ? [...lines.slice(0, 4), `… ${lines.length - 10} more lines`, ...lines.slice(-6)]
+        : [...lines.slice(0, 12), `… ${lines.length - 12} more lines`]
+      : lines;
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-background/60">
+      <pre
+        className={cn(
+          "scrollbar-thin overflow-x-auto p-2.5 font-mono text-2xs leading-relaxed text-muted-foreground",
+          compact ? "max-h-40" : "max-h-80",
+        )}
+      >
+        {shown.join("\n")}
+      </pre>
+      {long ? (
+        <button
+          type="button"
+          onClick={() => setAll((v) => !v)}
+          className="w-full border-t border-border px-2.5 py-1 text-left text-2xs text-subtle hover:text-foreground"
+        >
+          {all ? "Show less" : `Show all ${lines.length} lines`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+export function DiffView({ diff, compact }: { diff: FileDiff; compact?: boolean }) {
+  return (
+    <DiffRows
+      rows={withContext(diffLines(diff.oldText, diff.newText), 3)}
+      path={diff.path}
+      compact={compact}
+    />
+  );
+}
+
+export function DiffRows({
+  rows,
+  path,
+  compact,
+  fill,
+}: {
+  rows: DiffRow[];
+  path?: string;
+  compact?: boolean;
+  /** Fill the parent's height instead of capping it. */
+  fill?: boolean;
+}) {
+  const name = path?.split("/").slice(-2).join("/");
+  return (
+    <div className={cn("overflow-hidden rounded-md border border-border bg-background/60", fill && "flex min-h-0 flex-col")}>
+      {name ? (
+        <div className="flex items-center gap-2 border-b border-border px-2.5 py-1 font-mono text-2xs text-muted-foreground">
+          <FileSearch className="size-3" />
+          <span className="truncate" title={path}>
+            {name}
+          </span>
+        </div>
+      ) : null}
+      <div
+        className={cn(
+          "scrollbar-thin overflow-auto font-mono text-2xs leading-[1.55]",
+          fill ? "min-h-0 flex-1" : compact ? "max-h-48" : "max-h-96",
+        )}
+      >
+        <table className="w-full border-collapse">
+          <tbody>
+            {rows.map((r, i) =>
+              r.kind === "gap" ? (
+                <tr key={i} className="text-subtle">
+                  <td colSpan={3} className="bg-muted/30 px-2.5 py-0.5 select-none">
+                    ⋯ {r.skipped} unchanged {r.skipped === 1 ? "line" : "lines"}
+                  </td>
+                </tr>
+              ) : (
+                <tr
+                  key={i}
+                  className={cn(
+                    r.kind === "add" && "bg-success/12",
+                    r.kind === "del" && "bg-danger/12",
+                  )}
+                >
+                  <td className="w-8 px-1.5 text-right text-subtle select-none">
+                    {r.kind === "add" ? "" : r.a}
+                  </td>
+                  <td className="w-8 px-1.5 text-right text-subtle select-none">
+                    {r.kind === "del" ? "" : r.b}
+                  </td>
+                  <td className="px-2 whitespace-pre text-foreground/90">
+                    <span
+                      className={cn(
+                        "mr-1.5 select-none",
+                        r.kind === "add" ? "text-success" : r.kind === "del" ? "text-danger" : "text-subtle",
+                      )}
+                    >
+                      {r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "}
+                    </span>
+                    {r.text}
+                  </td>
+                </tr>
+              ),
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- notes
+
+function AgentNote({ message, compact }: { message: ChatMessage; compact?: boolean }) {
+  const who = useResolvedProvider(message.fromProviderId ?? "claude");
+  const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+  return (
+    <div className={cn("rounded-xl border border-border bg-surface px-3.5 py-2.5", compact && "px-3 py-2")}>
       <p className="mb-1.5 flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
         <Send className="size-3" />
         <ProviderDot id={message.fromProviderId ?? "claude"} />
@@ -197,14 +498,7 @@ function AgentNote({
           </>
         ) : null}
       </p>
-      <p
-        className={cn(
-          "whitespace-pre-wrap text-sm leading-relaxed",
-          compact && "text-xs",
-        )}
-      >
-        {text}
-      </p>
+      <p className={cn("whitespace-pre-wrap text-sm leading-relaxed", compact && "text-xs")}>{text}</p>
     </div>
   );
 }
@@ -225,126 +519,73 @@ function AttachmentRow({ items }: { items: Attachment[] }) {
   );
 }
 
-function BlockView({ block, compact }: { block: Block; compact?: boolean }) {
-  if (block.type === "think") {
-    return (
-      <p className="text-xs italic leading-relaxed text-subtle">{block.text}</p>
-    );
-  }
-  if (block.type === "tool") {
-    return <ToolCard tool={block} compact={compact} />;
-  }
-  return <Prose text={block.text} compact={compact} />;
-}
+// ---------------------------------------------------------------- markdown
 
-function ToolCard({ tool, compact }: { tool: ToolBlock; compact?: boolean }) {
-  const send = /^sendmessage$/i.test(tool.name);
-  const list = /^listagents$/i.test(tool.name);
-  const running = tool.status === "running";
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const open = userOpen ?? running;
-  const target = tool.to ?? tool.path ?? tool.command ?? "";
-  const Icon = send ? Send : list ? Users : tool.name === "Bash" ? Terminal : FileCode;
-
-  return (
-    <div className="overflow-hidden rounded-md border border-border bg-surface-2">
-      <button
-        type="button"
-        onClick={() => setUserOpen((v) => !(v ?? running))}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-      >
-        <ChevronRight
-          className={cn(
-            "size-3.5 shrink-0 text-subtle transition-transform duration-(--motion-quick) ease-(--ease-out)",
-            open && "rotate-90",
-          )}
-        />
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-          {tool.name}
-        </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
-          {target}
-        </span>
-        {running ? (
-          <CircleDashed className="size-3.5 animate-spin text-claude" />
-        ) : (
-          <Check className="size-3.5 text-success" />
-        )}
-      </button>
-      {open && tool.content ? (
-        <pre
-          className={cn(
-            "overflow-x-auto border-t border-border bg-background/40 p-3 font-mono text-2xs leading-relaxed text-muted-foreground",
-            compact && "max-h-32 overflow-y-auto",
-            !compact && "max-h-72",
-          )}
-        >
-          {tool.content}
-        </pre>
-      ) : null}
-    </div>
-  );
-}
-
-function Prose({ text, compact }: { text: string; compact?: boolean }) {
-  const parts = splitFences(text);
+export const Markdown = memo(function Markdown({
+  text,
+  compact,
+  muted,
+}: {
+  text: string;
+  compact?: boolean;
+  muted?: boolean;
+}) {
   return (
     <div
       className={cn(
-        "max-w-prose text-sm leading-relaxed text-foreground",
+        "prose-west max-w-none text-sm leading-relaxed",
+        muted ? "text-muted-foreground" : "text-foreground",
         compact && "text-xs",
       )}
     >
-      {parts.map((p, i) =>
-        p.kind === "code" ? (
-          <pre
-            key={i}
-            className="my-2 overflow-x-auto rounded-md border border-border bg-background p-3 font-mono text-2xs text-muted-foreground"
-          >
-            {p.body}
-          </pre>
-        ) : (
-          <p key={i} className="whitespace-pre-wrap">
-            {inlineCode(p.body)}
-          </p>
-        ),
-      )}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">
+              {children}
+            </a>
+          ),
+          code: ({ className, children }) => {
+            const lang = /language-([\w-]+)/.exec(className ?? "")?.[1];
+            const body = String(children ?? "");
+            if (!lang && !body.includes("\n")) {
+              return <code className="rounded-xs bg-muted px-1 py-0.5 font-mono text-[0.85em]">{children}</code>;
+            }
+            return <CodeBlock lang={lang} body={body.replace(/\n$/, "")} />;
+          },
+          pre: ({ children }) => <>{children}</>,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
-}
+});
 
-function splitFences(text: string) {
-  const out: { kind: "text" | "code"; body: string }[] = [];
-  const re = /```[\w-]*\n?([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index > last) {
-      out.push({ kind: "text", body: text.slice(last, m.index).trim() });
-    }
-    out.push({ kind: "code", body: (m[1] ?? "").trimEnd() });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) {
-    out.push({ kind: "text", body: text.slice(last).trim() });
-  }
-  return out.filter((p) => p.body);
-}
-
-function inlineCode(text: string) {
-  const bits = text.split(/(`[^`]+`)/g);
-  return bits.map((b, i) => {
-    if (b.startsWith("`") && b.endsWith("`")) {
-      return (
-        <code
-          key={i}
-          className="rounded-xs bg-muted px-1 py-0.5 font-mono text-2xs text-accent"
+function CodeBlock({ lang, body }: { lang?: string; body: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="group/code my-2 overflow-hidden rounded-lg border border-border bg-background/70">
+      <div className="flex items-center justify-between border-b border-border px-3 py-1 text-2xs text-subtle">
+        <span className="font-mono">{lang ?? "text"}</span>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard?.writeText(body);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1200);
+          }}
+          className="inline-flex items-center gap-1 opacity-70 hover:opacity-100"
+          aria-label="Copy code"
         >
-          {b.slice(1, -1)}
-        </code>
-      );
-    }
-    return <span key={i}>{b}</span>;
-  });
+          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="scrollbar-thin overflow-x-auto p-3 font-mono text-2xs leading-relaxed text-foreground/90">
+        {body}
+      </pre>
+    </div>
+  );
 }

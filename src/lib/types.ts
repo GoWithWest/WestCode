@@ -6,6 +6,7 @@ export type LayoutView =
   | "providers"
   | "library"
   | "agents"
+  | "westcreate"
   | "settings";
 
 export type Attachment = {
@@ -17,11 +18,18 @@ export type Attachment = {
   text?: string;
 };
 
+export type FileDiff = { path: string; oldText: string; newText: string };
+
 export type ToolBlock = {
   type: "tool";
   /** The agent's own call id — identity, so updates patch the right card. */
   toolId?: string;
   name: string;
+  /** Human label from the agent ("Read calc.py"). */
+  title?: string;
+  /** ACP tool kind: read, edit, delete, move, search, execute, think, fetch, other. */
+  toolKind?: string;
+  diffs?: FileDiff[];
   path?: string;
   command?: string;
   to?: string;
@@ -37,6 +45,9 @@ export type TextBlock = {
 export type ThinkBlock = {
   type: "think";
   text: string;
+  /** When the agent started this thought, and how long it took once done. */
+  startedAt?: number;
+  ms?: number;
 };
 
 export type Block = TextBlock | ToolBlock | ThinkBlock;
@@ -53,6 +64,10 @@ export type ChatMessage = {
   fromProviderId?: string;
   fromTitle?: string;
   hop?: number;
+  /** Working-tree snapshot taken just before this message's turn ran. */
+  checkpoint?: string;
+  /** On a "restored" note: the snapshot that undoes the restore. */
+  restoreUndo?: string;
 };
 
 export type Project = {
@@ -67,6 +82,9 @@ export type Project = {
 export type PermissionPrompt = {
   rpcId: number;
   tool: string;
+  toolKind?: string;
+  command?: string;
+  diffs?: FileDiff[];
   options: { optionId?: string; kind?: string; name?: string }[];
 };
 
@@ -93,6 +111,27 @@ export type Session = {
   agentId?: string;
   /** Hidden from the default sidebar list; restorable. */
   archivedAt?: number;
+  /** Skill groups linked to this session (their skills ride every turn). */
+  skillGroupIds?: string[];
+  /** The agent's live task list (ACP plan updates). */
+  plan?: PlanEntry[];
+  /** Context window use from the agent (ACP usage_update). */
+  usage?: { used: number; size: number };
+  /** Mode the agent reports it is in (it can leave plan mode by itself). */
+  agentMode?: string;
+  /** The user named this session; agent-suggested titles stop applying. */
+  titleLocked?: boolean;
+  /** A side chat (/btw) of this parent session: read-only, shown as a drawer. */
+  sideOf?: string;
+  /** The side chat shown in this session's drawer. */
+  sideOpen?: string;
+  /** Last time the user had this session on screen. */
+  seenAt?: number;
+};
+
+export type PlanEntry = {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
 };
 
 export type IncomingRef = {

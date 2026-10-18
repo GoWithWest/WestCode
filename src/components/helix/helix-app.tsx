@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { HelixMark } from "./mark";
 import { AgentsView } from "./agents-view";
+import { WestCreateView } from "./westcreate-view";
 import { SettingsView } from "./settings-view";
 import { LibraryView } from "./library-view";
 import { Mosaic } from "./mosaic";
@@ -27,6 +28,21 @@ export function HelixApp() {
   const setMobileNav = useHelix((s) => s.setMobileNav);
   const tick = useHelix((s) => s.tick);
   const restoreState = useHelix((s) => s.restoreState);
+  const theme = useHelix((s) => s.settings.theme ?? "dark");
+
+  // Appearance: data-theme on <html>; "system" follows the OS live.
+  useEffect(() => {
+    const root = document.documentElement;
+    const mq = window.matchMedia?.("(prefers-color-scheme: light)");
+    const apply = () => {
+      const light = theme === "light" || (theme === "system" && Boolean(mq?.matches));
+      root.dataset.theme = light ? "light" : "dark";
+    };
+    apply();
+    if (theme !== "system" || !mq) return;
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [theme]);
 
   useEffect(() => {
     void restoreState();
@@ -47,8 +63,21 @@ export function HelixApp() {
         if (live.length >= 2) state.setSplit([live[0]!.id, live[1]!.id]);
       }
     });
+    // ⌘O / Ctrl+O cycles how much agent activity shows (Normal → Thinking →
+    // Verbose), the same key Claude Code uses for its transcript views.
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        const st = useHelix.getState();
+        const order = ["normal", "thinking", "verbose"] as const;
+        const cur = order.indexOf(st.settings.transcriptDetail ?? "normal");
+        st.updateSettings({ transcriptDetail: order[(cur + 1) % order.length]! });
+      }
+    };
+    window.addEventListener("keydown", onKey);
     return () => {
       window.clearInterval(id);
+      window.removeEventListener("keydown", onKey);
       offMenu?.();
     };
   }, [tick, restoreState]);
@@ -100,6 +129,7 @@ export function HelixApp() {
           {view === "providers" ? <ProvidersView /> : null}
           {view === "library" ? <LibraryView /> : null}
           {view === "agents" ? <AgentsView /> : null}
+          {view === "westcreate" ? <WestCreateView /> : null}
           {view === "settings" ? <SettingsView /> : null}
           {view === "focus" && active ? <SessionPane session={active} /> : null}
           {view === "split" && left && right ? (

@@ -35,6 +35,7 @@ export const MODELS: Record<BuiltinProviderId, ModelOpt[]> = {
     { id: "Grok 4", label: "Grok 4" },
   ],
   grok: [
+    { id: "grok-4.7", label: "Grok 4.7" },
     { id: "grok-4.6", label: "Grok 4.6" },
     { id: "grok-4.5", label: "Grok 4.5" },
   ],
@@ -180,6 +181,19 @@ const GENERIC_SLASH: SlashCmd[] = [
 ];
 
 const BUS_SLASH: SlashCmd[] = [
+  {
+    cmd: "group",
+    args: "[name]",
+    hint: "Link a skill group (Web Design, Motion…) to this session",
+    kind: "builtin",
+  },
+  { cmd: "ungroup", args: "<name>", hint: "Unlink a skill group", kind: "builtin" },
+  { cmd: "btw", args: "<question>", hint: "Ask on the side (read-only) without derailing this session", kind: "builtin" },
+  {
+    cmd: "reflect",
+    hint: "Review this session now: propose skills and memory to keep",
+    kind: "builtin",
+  },
   { cmd: "agents", hint: "List other sessions on this desk", kind: "builtin" },
   {
     cmd: "msg",

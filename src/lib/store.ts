@@ -27,6 +27,21 @@ import {
   type AgentProfile,
 } from "./agents";
 import { blocksToPlain, extractSendMessages } from "./parse-agent";
+import {
+  EMPTY_GROUPS,
+  GROUPS_KEY,
+  assignSkill,
+  groupPreamble,
+  matchGroup,
+  mergeGroups,
+  resolveGroup,
+  slugGroupId,
+  unassignSkill,
+  type GroupsPersist,
+  type SkillGroup,
+  type SkillRef,
+} from "./skill-groups";
+import { GROUP_CATALOG } from "./skill-group-catalog";
 import { deskPreamble, formatRoster } from "./prompts";
 import {
   PROVIDER_ORDER,
@@ -36,6 +51,7 @@ import {
 } from "./providers";
 import {
   westcode,
+  type LearnProposal,
   type CliProbe,
   type CliSession,
   type CliUpdate,
@@ -93,6 +109,20 @@ export type AppSettings = {
   delegatedAuto: boolean;
   /** Render transcripts in the tighter compact layout everywhere. */
   transcriptCompact: boolean;
+  /**
+   * How much of the agent's work shows: normal (tools collapsed, thinking
+   * summarised), thinking (thoughts open), verbose (everything open).
+   * Cmd/Ctrl+O cycles it.
+   */
+  transcriptDetail: "normal" | "thinking" | "verbose";
+  /**
+   * The desk learns from finished sessions (Hermes-style): after enough
+   * turns or tool calls a read-only reviewer proposes skills and memory.
+   * "ask" stages them for approval, "auto" applies them, "off" never reviews.
+   */
+  learning: "off" | "ask" | "auto";
+  /** Appearance: follow the OS, or force dark / light. */
+  theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
 };
@@ -105,6 +135,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultCwd: "",
   delegatedAuto: true,
   transcriptCompact: false,
+  transcriptDetail: "normal",
+  learning: "ask",
+  theme: "dark",
   launchAtLogin: false,
 };
 
@@ -181,9 +214,13 @@ export type SendOpts = {
   replay?: boolean;
   /** Transcript message id of the queued row a replay re-sends. */
   replayOf?: string;
+  /** What the user bubble shows when the prompt itself is long scaffolding. */
+  display?: string;
 };
 
 type CreateOpts = {
+  /** Make this a side chat of that session (read-only drawer). */
+  sideOf?: string;
   providerId: string;
   projectId: string;
   title?: string;
@@ -214,6 +251,14 @@ export type HelixState = {
   recentFolders: RecentFolder[];
   agents: AgentProfile[];
   agentsPersist: AgentsPersist;
+  skillGroups: SkillGroup[];
+  groupsPersist: GroupsPersist;
+  /** Learning proposals waiting for the user. */
+  learnPending: LearnProposal[];
+  /** Session ids with a review running now. */
+  reviewing: string[];
+  /** Approved desk memory, as injected into new CLI sessions. */
+  deskMemory: string;
   providerColors: Record<string, string>;
   settings: AppSettings;
   schedules: ScheduledTask[];
@@ -271,6 +316,22 @@ export type HelixState = {
   updateAgent: (id: string, patch: Partial<AgentProfile>) => void;
   removeAgent: (id: string) => void;
   restorePresetAgents: () => void;
+  /** Focus the session running this agent, or start one; optionally send. */
+  openAgent: (agentId: string, prompt?: string) => string | null;
+  addSkillGroup: (g: Omit<SkillGroup, "id" | "builtin">) => string;
+  updateSkillGroup: (id: string, patch: Partial<Pick<SkillGroup, "label" | "description" | "icon">>) => void;
+  removeSkillGroup: (id: string) => void;
+  restorePresetGroups: () => void;
+  assignSkillToGroup: (groupId: string, skill: SkillRef) => void;
+  unassignSkillFromGroup: (groupId: string, name: string) => void;
+  refreshLearning: () => Promise<void>;
+  /** Review a session now (or when counters fire), staging proposals. */
+  reviewSession: (sessionId: string, opts?: { manual?: boolean }) => Promise<void>;
+  decideProposal: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<string | null>;
+  /** Put the session's folder back to a checkpoint (undoable). */
+  restoreCheckpoint: (sessionId: string, sha: string, label: string) => Promise<void>;
+  /** Link (or unlink) a skill group to a session. */
+  linkSkillGroup: (sessionId: string, groupId: string, linked: boolean) => void;
   setProviderColor: (providerId: string, color: string) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
   addSchedule: (t: Omit<ScheduledTask, "id" | "lastRun">) => void;
@@ -739,7 +800,12 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
       const known = tools.get(key);
       if (known) {
         if (ev.name) known.name = ev.name;
+        if (ev.title) known.title = ev.title;
+        if (ev.toolKind) known.toolKind = ev.toolKind;
+        if (ev.path) known.path = ev.path;
+        if (ev.command) known.command = ev.command;
         if (ev.content) known.content = ev.content;
+        if (ev.diffs) known.diffs = ev.diffs;
         if (ev.status) known.status = ev.status;
         continue;
       }
@@ -747,6 +813,9 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         type: "tool",
         toolId: ev.toolId,
         name: ev.name || "Tool",
+        title: ev.title || undefined,
+        toolKind: ev.toolKind,
+        diffs: ev.diffs,
         path: ev.path,
         command: ev.command,
         content: ev.content || "",
@@ -764,6 +833,15 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
     else asst.blocks.push({ type: kind, text: ev.text ?? "" });
   }
   return out.filter((m) => m.blocks.some((b) => b.type !== "text" || b.text.trim()));
+}
+
+/** A thought ends when the agent moves on to text or a tool. */
+export function closeThinking(blocks: Block[]): Block[] {
+  const last = blocks[blocks.length - 1];
+  if (last?.type === "think" && last.ms == null && last.startedAt) {
+    blocks[blocks.length - 1] = { ...last, ms: Date.now() - last.startedAt };
+  }
+  return blocks;
 }
 
 function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
@@ -785,6 +863,23 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       agentSessionId: ev.agentSessionId,
       updatedAt: Date.now(),
     }));
+    return;
+  }
+  if (ev.type === "plan" && ev.plan) {
+    patch((ses) => ({ ...ses, plan: ev.plan, updatedAt: Date.now() }));
+    return;
+  }
+  if (ev.type === "usage" && ev.usage) {
+    patch((ses) => ({ ...ses, usage: ev.usage }));
+    return;
+  }
+  if (ev.type === "info" && ev.title) {
+    // The agent's own title for the work, until the user names it.
+    patch((ses) => (ses.titleLocked ? ses : { ...ses, title: ev.title! }));
+    return;
+  }
+  if (ev.type === "mode" && ev.modeId) {
+    patch((ses) => ({ ...ses, agentMode: ev.modeId }));
     return;
   }
   if (ev.type === "commands" && ev.commands) {
@@ -825,7 +920,14 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
   if (ev.type === "permission" && ev.rpcId != null) {
     patch((ses) => ({
       ...ses,
-      permission: { rpcId: ev.rpcId!, tool: ev.tool || "tool", options: ev.options || [] },
+      permission: {
+        rpcId: ev.rpcId!,
+        tool: ev.tool || "tool",
+        toolKind: ev.toolKind,
+        command: ev.command,
+        diffs: ev.diffs,
+        options: ev.options || [],
+      },
       updatedAt: Date.now(),
     }));
     const key = `${sessionId}:${ev.rpcId}`;
@@ -853,10 +955,10 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
         if (m.id !== asstId) return m;
         const blocks = [...m.blocks];
         const last = blocks[blocks.length - 1];
-        if (last?.type === "think") {
-          blocks[blocks.length - 1] = { type: "think", text: last.text + ev.text };
+        if (last?.type === "think" && last.ms == null) {
+          blocks[blocks.length - 1] = { ...last, text: last.text + ev.text };
         } else {
-          blocks.push({ type: "think", text: ev.text! });
+          blocks.push({ type: "think", text: ev.text!, startedAt: Date.now() });
         }
         return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true };
       }),
@@ -869,7 +971,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       updatedAt: Date.now(),
       messages: ses.messages.map((m) => {
         if (m.id !== asstId) return m;
-        const blocks = [...m.blocks];
+        const blocks = closeThinking([...m.blocks]);
         const last = blocks[blocks.length - 1];
         if (last?.type === "text") {
           blocks[blocks.length - 1] = { type: "text", text: last.text + ev.text };
@@ -887,7 +989,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       updatedAt: Date.now(),
       messages: ses.messages.map((m) => {
         if (m.id !== asstId) return m;
-        const blocks = [...m.blocks];
+        const blocks = closeThinking([...m.blocks]);
         // Match on the agent's call id. Matching on `path` used to work only
         // for tools that HAVE no path (the id was stored there), so a Read or
         // Edit update opened a second card instead of completing the first.
@@ -898,17 +1000,20 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
               ? b.toolId === ev.toolId || (!b.toolId && b.name === ev.name)
               : b.name === ev.name && b.status === "running"),
         );
-        const tool: Block = {
+        const tool: ToolBlock = {
           type: "tool",
           toolId: ev.toolId,
           name: ev.name || "Tool",
+          title: ev.title || undefined,
+          toolKind: ev.toolKind,
           path: ev.path,
           command: ev.command,
           content: ev.content || "",
+          diffs: ev.diffs,
           status: ev.status || "running",
         };
         if (idx >= 0) {
-          const prev = blocks[idx] as Extract<Block, { type: "tool" }>;
+          const prev = blocks[idx] as ToolBlock;
           // tool_call_update is a PATCH: a completion event often carries only
           // {toolCallId, status}. Never let a fabricated/generic name replace
           // the recorded one — extractSendMessages relies on the original
@@ -918,13 +1023,19 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           blocks[idx] = {
             ...tool,
             name: meaningfulName,
+            title: tool.title || prev.title,
+            toolKind: tool.toolKind || prev.toolKind,
             toolId: tool.toolId || prev.toolId,
             content: tool.content || prev.content,
+            diffs: tool.diffs || prev.diffs,
             path: tool.path || prev.path,
             command: tool.command || prev.command,
+            // A patch without a status leaves the card where it was.
+            status: ev.status || prev.status,
           };
         } else {
           blocks.push(tool);
+          bumpLearn(sessionId, "tools");
         }
         return { ...m, blocks, streaming: true };
       }),
@@ -955,7 +1066,11 @@ function bindDesktopEvents() {
         ev.type === "commands" ||
         ev.type === "permission" ||
         ev.type === "models" ||
-        ev.type === "ready"
+        ev.type === "ready" ||
+        ev.type === "plan" ||
+        ev.type === "usage" ||
+        ev.type === "info" ||
+        ev.type === "mode"
       ) {
         applyEvent(ev.sessionId, "", ev);
       }
@@ -1096,6 +1211,15 @@ function bindDesktopEvents() {
 }
 
 const promptAsst = new Map<string, string>();
+/** Per session, since the last review: user turns and tool calls. */
+const learnCounters = new Map<string, { turns: number; tools: number }>();
+const LEARN_EVERY = 10;
+function bumpLearn(sessionId: string, key: "turns" | "tools") {
+  const c = learnCounters.get(sessionId) ?? { turns: 0, tools: 0 };
+  c[key] += 1;
+  learnCounters.set(sessionId, c);
+}
+let viewTouched = false;
 
 export const useHelix = create<HelixState>((set, get) => ({
   sessions: [],
@@ -1112,6 +1236,11 @@ export const useHelix = create<HelixState>((set, get) => ({
   recentFolders: [],
   agents: PRESET_AGENTS,
   agentsPersist: { custom: [], overrides: {}, removed: [] },
+  skillGroups: mergeGroups(EMPTY_GROUPS),
+  groupsPersist: EMPTY_GROUPS,
+  learnPending: [],
+  reviewing: [],
+  deskMemory: "",
   providerColors: {},
   settings: DEFAULT_SETTINGS,
   schedules: [],
@@ -1125,9 +1254,20 @@ export const useHelix = create<HelixState>((set, get) => ({
   cliSessionStatus: "idle",
   cliSessionErrors: [],
 
-  setView: (view) => set({ view, mobileNav: "desk" }),
+  setView: (view) => {
+    viewTouched = true;
+    set({ view, mobileNav: "desk" });
+  },
   setActive: (id) => {
-    set({ activeId: id, view: "focus", mobileNav: "desk" });
+    // Leaving a session marks what was on screen as seen (sidebar unread dot).
+    const prev = get().activeId;
+    const now = Date.now();
+    set((s) => ({
+      activeId: id,
+      view: "focus",
+      mobileNav: "desk",
+      sessions: s.sessions.map((x) => (x.id === prev || x.id === id ? { ...x, seenAt: now } : x)),
+    }));
     // A pane whose history has not been painted yet (including one that
     // only holds a failure note) asks the CLI again on focus.
     void get().hydrateSession(id);
@@ -1163,6 +1303,12 @@ export const useHelix = create<HelixState>((set, get) => ({
       overrides: {},
       removed: [],
     });
+    const groupsRaw = readJson<Partial<GroupsPersist>>(GROUPS_KEY, {});
+    const groupsPersist: GroupsPersist = {
+      custom: Array.isArray(groupsRaw.custom) ? groupsRaw.custom : [],
+      overrides: groupsRaw.overrides && typeof groupsRaw.overrides === "object" ? groupsRaw.overrides : {},
+      removed: Array.isArray(groupsRaw.removed) ? groupsRaw.removed : [],
+    };
     const providerColors = readJson<Record<string, string>>(COLORS_KEY, {});
     const settings = {
       ...DEFAULT_SETTINGS,
@@ -1193,6 +1339,8 @@ export const useHelix = create<HelixState>((set, get) => ({
       customProviders: Array.isArray(prov) ? prov : [],
       agentsPersist,
       agents: mergeAgents(agentsPersist),
+      groupsPersist,
+      skillGroups: mergeGroups(groupsPersist),
       providerColors,
       settings,
       schedules: Array.isArray(schedules) ? schedules : [],
@@ -1202,9 +1350,11 @@ export const useHelix = create<HelixState>((set, get) => ({
         ? get().activeId
         : (desk.activeId ?? sessions[0]?.id ?? null),
       splitIds: live.length ? get().splitIds : (desk.splitIds ?? null),
-      view: live.length
-        ? get().view
-        : (desk.view ?? (sessions.length ? "focus" : "mosaic")),
+      // A view the user already picked while the desk was loading wins.
+      view:
+        live.length || viewTouched
+          ? get().view
+          : (desk.view ?? (sessions.length ? "focus" : "mosaic")),
     });
     // Restored CLI sessions carry only a pointer — refill the ones on screen
     // from the CLI itself. Off-screen panes wait until they are opened, so a
@@ -1217,6 +1367,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     void get().refreshCli();
     void get().refreshLibrary();
     void get().refreshUpdates();
+    void get().refreshLearning();
     void (async () => {
       for (const c of get().customProviders) {
         if (c.apiKey) {
@@ -1481,6 +1632,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     attachments,
     agentId,
     background,
+    sideOf,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
     const settings = get().settings;
@@ -1493,6 +1645,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     const session: Session = {
       id: uid("ses"),
       title: title?.trim() || folderName,
+      titleLocked: Boolean(title?.trim()),
       providerId,
       projectId,
       cwd: path,
@@ -1508,10 +1661,11 @@ export const useHelix = create<HelixState>((set, get) => ({
       messages: [],
       turns: 0,
       agentId,
+      sideOf,
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
-      ...(background
+      ...(background || sideOf
         ? {}
         : {
             activeId: session.id,
@@ -1667,6 +1821,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       sessions: patchSession(s.sessions, id, (ses) => ({
         ...ses,
         title: t.slice(0, 80),
+        titleLocked: true,
         updatedAt: Date.now(),
       })),
     }));
@@ -1867,6 +2022,216 @@ export const useHelix = create<HelixState>((set, get) => ({
     set({ agentsPersist: next, agents: mergeAgents(next) });
   },
 
+  openAgent: (agentId, prompt) => {
+    const st = get();
+    const agent = st.agents.find((a) => a.id === agentId);
+    if (!agent) return null;
+    const running = st.sessions
+      .filter((x) => x.agentId === agentId && !x.archivedAt)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (running) {
+      st.setActive(running.id);
+      if (prompt?.trim()) void st.send(running.id, prompt);
+      return running.id;
+    }
+    return st.createSession({
+      providerId: agent.providerId || st.settings.defaultProviderId || "claude",
+      projectId: "scratch",
+      title: agent.name,
+      agentId: agent.id,
+      model: agent.model,
+      effort: agent.effort,
+      permissionMode: agent.permissionMode,
+      prompt,
+    });
+  },
+
+  addSkillGroup: (g) => {
+    const persist = get().groupsPersist;
+    const taken = new Set([
+      ...get().skillGroups.map((x) => x.id),
+      ...GROUP_CATALOG.map((x) => x.id),
+      ...persist.removed,
+    ]);
+    const id = slugGroupId(g.label || "group", taken);
+    const next: GroupsPersist = {
+      ...persist,
+      custom: [...persist.custom, { ...g, id, builtin: false }],
+    };
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+    return id;
+  },
+
+  updateSkillGroup: (id, patch) => {
+    const persist = get().groupsPersist;
+    const isPreset = GROUP_CATALOG.some((g) => g.id === id);
+    const next: GroupsPersist = isPreset
+      ? {
+          ...persist,
+          overrides: { ...persist.overrides, [id]: { ...persist.overrides[id], ...patch } },
+        }
+      : {
+          ...persist,
+          custom: persist.custom.map((g) => (g.id === id ? { ...g, ...patch } : g)),
+        };
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  removeSkillGroup: (id) => {
+    const persist = get().groupsPersist;
+    const next: GroupsPersist = {
+      ...persist,
+      custom: persist.custom.filter((g) => g.id !== id),
+      removed: [...new Set([...persist.removed, id])],
+    };
+    saveState(GROUPS_KEY, next);
+    set((s) => ({
+      groupsPersist: next,
+      skillGroups: mergeGroups(next),
+      sessions: s.sessions.map((ses) =>
+        ses.skillGroupIds?.includes(id)
+          ? { ...ses, skillGroupIds: ses.skillGroupIds.filter((g) => g !== id) }
+          : ses,
+      ),
+    }));
+  },
+
+  restorePresetGroups: () => {
+    const persist = get().groupsPersist;
+    const presetIds = new Set(GROUP_CATALOG.map((g) => g.id));
+    const next: GroupsPersist = {
+      ...persist,
+      removed: persist.removed.filter((r) => !presetIds.has(r)),
+      overrides: Object.fromEntries(
+        Object.entries(persist.overrides).filter(([k]) => !presetIds.has(k)),
+      ),
+    };
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  assignSkillToGroup: (groupId, skill) => {
+    const next = assignSkill(get().groupsPersist, groupId, skill);
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  unassignSkillFromGroup: (groupId, name) => {
+    const next = unassignSkill(get().groupsPersist, groupId, name);
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  refreshLearning: async () => {
+    const api = westcode()?.learn;
+    if (!api) return;
+    const [pending, memory] = await Promise.all([api.pending(), api.memory()]);
+    set({ learnPending: pending, deskMemory: memory.snapshot });
+  },
+
+  reviewSession: async (sessionId, opts) => {
+    const st = get();
+    const api = westcode()?.learn;
+    const ses = st.sessions.find((x) => x.id === sessionId);
+    if (!api || !ses || st.reviewing.includes(sessionId)) return;
+    if (!(PROVIDER_ORDER as readonly string[]).includes(ses.providerId)) return;
+    const c = learnCounters.get(sessionId) ?? { turns: 0, tools: 0 };
+    const doMemory = opts?.manual || c.turns >= LEARN_EVERY;
+    const doSkill = opts?.manual || c.tools >= LEARN_EVERY;
+    if (!opts?.manual && (st.settings.learning === "off" || (!doMemory && !doSkill))) return;
+    learnCounters.set(sessionId, { turns: doMemory ? 0 : c.turns, tools: doSkill ? 0 : c.tools });
+    const messages = ses.messages
+      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "agent")
+      .slice(-60)
+      .map((m) => ({ role: m.role, text: blocksToPlain(m.blocks).slice(0, 4000) }))
+      .filter((m) => m.text.trim());
+    if (messages.length < 2) {
+      if (opts?.manual) {
+        set((s) => ({
+          sessions: patchSession(s.sessions, sessionId, (x) => ({
+            ...x,
+            messages: [...x.messages, systemNote("Nothing to learn from yet — this session is too short.")],
+          })),
+        }));
+      }
+      return;
+    }
+    set((s) => ({ reviewing: [...s.reviewing, sessionId] }));
+    try {
+      const r = await api.review({
+        sessionId,
+        providerId: ses.providerId,
+        cwd: ses.cwd,
+        model: ses.model,
+        messages,
+        doMemory,
+        doSkill,
+      });
+      const staged = r.staged ?? [];
+      if (get().settings.learning === "auto") {
+        for (const p of staged) await api.decide(p.id, "approve");
+      }
+      await get().refreshLearning();
+      const summary = staged.length
+        ? `${get().settings.learning === "auto" ? "Learned" : "Proposed"}: ${staged
+            .map((p) => (p.kind === "skill" ? `${p.action === "update" ? "improve" : "new"} skill ${p.name}` : `remember (${p.target}) “${(p.text ?? "").slice(0, 60)}”`))
+            .join("; ")}${get().settings.learning === "auto" ? "." : " — review in Library → Learned."}`
+        : r.ok
+          ? opts?.manual
+            ? "Reviewed this session: nothing worth keeping."
+            : ""
+          : `Review failed: ${r.error ?? "unknown error"}`;
+      if (summary) {
+        set((s) => ({
+          sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, systemNote(summary)] })),
+        }));
+      }
+    } finally {
+      set((s) => ({ reviewing: s.reviewing.filter((x) => x !== sessionId) }));
+    }
+  },
+
+  decideProposal: async (id, verdict, edited) => {
+    const api = westcode()?.learn;
+    if (!api) return "Needs the desktop app.";
+    const r = await api.decide(id, verdict, edited);
+    await get().refreshLearning();
+    if (verdict === "approve") void get().refreshLibrary();
+    return r.ok ? null : (r.error ?? "Failed.");
+  },
+
+  restoreCheckpoint: async (sessionId, sha, label) => {
+    const api = westcode()?.git;
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    if (!api?.restore || !ses) return;
+    const r = await api.restore(ses.cwd, sha);
+    const note: ChatMessage = r.ok
+      ? {
+          ...systemNote(
+            `Files restored to before “${label}”.${r.removed?.length ? ` Removed ${r.removed.length} file${r.removed.length === 1 ? "" : "s"} created after it.` : ""} The conversation is unchanged.`,
+          ),
+          restoreUndo: r.undo,
+        }
+      : systemNote(`Could not restore: ${r.error ?? "unknown error"}`);
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, note] })),
+    }));
+  },
+
+  linkSkillGroup: (sessionId, groupId, linked) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (ses) => {
+        const cur = ses.skillGroupIds ?? [];
+        const ids = linked
+          ? [...new Set([...cur, groupId])]
+          : cur.filter((g) => g !== groupId);
+        return { ...ses, skillGroupIds: ids, updatedAt: Date.now() };
+      }),
+    }));
+  },
+
   setProviderColor: (providerId, color) => {
     const colors = { ...get().providerColors };
     if (color) colors[providerId] = color;
@@ -1991,6 +2356,9 @@ export const useHelix = create<HelixState>((set, get) => ({
     if (!opts?.incoming && !replay) {
       const assigned = personaAssignment(trimmed, get().agents);
       if (assigned) get().setSessionAgent(sessionId, assigned.id);
+      bumpLearn(sessionId, "turns");
+      // A new message from the user wins over a review still running.
+      if (get().reviewing.includes(sessionId)) void westcode()?.learn?.cancel(sessionId);
     }
 
     if (session.status === "running" && !replay) {
@@ -2010,7 +2378,7 @@ export const useHelix = create<HelixState>((set, get) => ({
             id: uid("m"),
             role: "user",
             createdAt: Date.now(),
-            blocks: [{ type: "text", text: trimmed || "Attached files" }],
+            blocks: [{ type: "text", text: opts?.display || trimmed || "Attached files" }],
             attachments: attachments.length ? attachments : undefined,
           };
       set((s) => ({
@@ -2048,7 +2416,7 @@ export const useHelix = create<HelixState>((set, get) => ({
             id: uid("m"),
             role: "user",
             createdAt: Date.now(),
-            blocks: [{ type: "text", text: trimmed || "Attached files" }],
+            blocks: [{ type: "text", text: opts?.display || trimmed || "Attached files" }],
             attachments: attachments.length ? attachments : undefined,
           };
 
@@ -2102,6 +2470,17 @@ export const useHelix = create<HelixState>((set, get) => ({
     // in the message ("Get @Ivy-Ben to build X" → where to delegate).
     const selfAgent = get().agents.find((a) => a.id === latest.agentId);
     const persona = selfAgent ? `${agentPreamble(selfAgent)}\n` : "";
+    const installedSkills = get()
+      .liveAddons.filter((a) => a.kind === "skill" && a.providers.includes(latest.providerId))
+      .map((a) => a.name);
+    const linkedGroups = (latest.skillGroupIds ?? [])
+      .map((gid) => get().skillGroups.find((g) => g.id === gid))
+      .filter((g): g is SkillGroup => Boolean(g))
+      .map((g) => resolveGroup(g, installedSkills));
+    const groupsText = groupPreamble(linkedGroups);
+    // Approved desk memory rides the first turn of each CLI session (a
+    // frozen snapshot — it never changes mid-session).
+    const memoryText = !latest.agentSessionId && get().deskMemory ? `${get().deskMemory}\n` : "";
     const mentioned = extractMentions(outgoing, get().agents).filter(
       (m) => m.agent.id !== latest.agentId,
     );
@@ -2125,8 +2504,8 @@ export const useHelix = create<HelixState>((set, get) => ({
       ? `Incoming work from another WestCode session. Act on it now. When you finish (or if you are blocked), you MUST call westcode_send_message with to="${opts?.incoming?.fromSessionId}" and a short result — the sender is waiting for your reply.`
       : `Incoming status report from another WestCode session. Read it. Do NOT reply unless it assigns you new work or asks a direct question — a completion report is terminal, and acknowledgment ping-pong wastes both sessions.`;
     const preambleText = opts?.incoming
-      ? `${bus}\n${persona}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
-      : `${bus}\n${persona}${mentionNotes}`;
+      ? `${bus}\n${persona}${groupsText}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
+      : `${bus}\n${memoryText}${persona}${groupsText}${mentionNotes}`;
     const promptText = `${preambleText}${outgoing}`;
 
     const api = westcode();
@@ -2156,6 +2535,23 @@ export const useHelix = create<HelixState>((set, get) => ({
     }
 
     promptAsst.set(sessionId, asstId);
+    // Snapshot the folder first (git repos only), so this turn's file
+    // changes can be rolled back from the message.
+    if (userMsg && userMsg.role === "user" && api.git?.checkpoint) {
+      try {
+        const cp = await api.git.checkpoint(latest.cwd, trimmed.slice(0, 60));
+        if (cp.ok && cp.sha) {
+          set((s) => ({
+            sessions: patchSession(s.sessions, sessionId, (ses) => ({
+              ...ses,
+              messages: ses.messages.map((m) => (m.id === userMsg.id ? { ...m, checkpoint: cp.sha } : m)),
+            })),
+          }));
+        }
+      } catch {
+        /* not a repo, or git missing — no checkpoint */
+      }
+    }
     try {
       const historyRaw = latest.messages
         .filter(
@@ -2263,11 +2659,24 @@ export const useHelix = create<HelixState>((set, get) => ({
           ...ses,
           status: "waiting",
           updatedAt: Date.now(),
+          // The turn ended: a thought still open is over, and a tool the
+          // agent never sent a final status for is finished.
           messages: ses.messages.map((m) =>
-            m.id === asstId ? { ...m, streaming: false } : m,
+            m.id === asstId
+              ? {
+                  ...m,
+                  streaming: false,
+                  blocks: closeThinking([...m.blocks]).map((b) =>
+                    b.type === "tool" && b.status === "running"
+                      ? { ...b, status: "done" as const }
+                      : b,
+                  ),
+                }
+              : m,
           ),
         })),
       }));
+      if (!opts?.incoming) void get().reviewSession(sessionId);
       notifyBackground(
         sessionId,
         `${latest.title} finished`,
@@ -2401,6 +2810,10 @@ function runSlash(
     "peers",
     "list-agents",
     "msg",
+    "group",
+    "ungroup",
+    "reflect",
+    "btw",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -2424,6 +2837,76 @@ function runSlash(
       get().customProviders,
     );
     note(`WestCode desk roster\n\n${formatRoster(roster)}`);
+    return true;
+  }
+
+  if (cmd === "btw") {
+    if (!arg) {
+      note("Usage: /btw <question> — asks on the side without touching this session's work.");
+      return true;
+    }
+    const parent = session.sideOf ? (get().sessions.find((x) => x.id === session.sideOf) ?? session) : session;
+    const context = parent.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-12)
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${blocksToPlain(m.blocks).replace(/\s+/g, " ").slice(0, 600)}`)
+      .join("\n");
+    const prompt = `[Side chat]
+This is a side question asked next to another session. The context below is reference only: do not continue that session's plan, todo list or approvals, and do not change files, git state or anything else — read, search and answer. Keep the answer short.
+
+Context from the main session:
+${context || "(nothing yet)"}
+
+Question: ${arg}`;
+    const sideId = get().createSession({
+      providerId: parent.providerId,
+      projectId: parent.projectId,
+      cwd: parent.cwd,
+      model: parent.model,
+      effort: parent.effort,
+      permissionMode: "plan",
+      title: `Side: ${arg.slice(0, 40)}`,
+      sideOf: parent.id,
+    });
+    set((s) => ({
+      sessions: patchSession(s.sessions, parent.id, (x) => ({ ...x, sideOpen: sideId, updatedAt: Date.now() })),
+    }));
+    void get().send(sideId, prompt, { display: arg });
+    return true;
+  }
+
+  if (cmd === "reflect") {
+    note("Reviewing this session for skills and memory worth keeping…");
+    void get().reviewSession(sessionId, { manual: true });
+    return true;
+  }
+
+  if (cmd === "group" || cmd === "ungroup") {
+    const groups = get().skillGroups;
+    const linked = new Set(session.skillGroupIds ?? []);
+    if (!arg) {
+      const lines = groups
+        .map((g) => `${linked.has(g.id) ? "●" : "○"} ${g.label} (/group ${g.id}) — ${g.skills.length} skills`)
+        .join("\n");
+      note(`Skill groups — ● linked to this session\n\n${lines}\n\nEdit groups in Library → Groups.`);
+      return true;
+    }
+    const g = matchGroup(arg, groups);
+    if (!g) {
+      note(`No skill group matching “${arg}”. Type /group to list them.`);
+      return true;
+    }
+    const on = cmd === "group";
+    get().linkSkillGroup(sessionId, g.id, on);
+    const installed = get()
+      .liveAddons.filter((a) => a.kind === "skill" && a.providers.includes(session.providerId))
+      .map((a) => a.name);
+    const r = resolveGroup(g, installed);
+    note(
+      on
+        ? `Linked ${g.label}: ${r.available.length} of ${g.skills.length} skills installed for this provider${r.available.length ? ` (${r.available.join(", ")})` : ""}.${r.missing.length ? `\nNot installed: ${r.missing.map((m) => m.name).join(", ")} — install them from Library.` : ""}`
+        : `Unlinked ${g.label}.`,
+    );
     return true;
   }
 
@@ -2615,4 +3098,9 @@ function runSlash(
   }
 
   return false;
+}
+
+// Dev/E2E handle on the store (never in a production build).
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as unknown as { __helix: typeof useHelix }).__helix = useHelix;
 }

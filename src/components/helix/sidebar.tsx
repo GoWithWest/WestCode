@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, Blocks, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { Archive, ArchiveRestore, Blocks, CircleDashed, Hammer, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { dotActivity, dotStateFor } from "@/lib/dots";
+import type { Session } from "@/lib/types";
+import { AgentAvatar } from "./agents-view";
+import { westcode } from "@/lib/desktop";
 import { cliSessionTitle, useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -13,12 +17,14 @@ export function Sidebar() {
   const liveAddons = useHelix((s) => s.liveAddons);
   const setActive = useHelix((s) => s.setActive);
   const setView = useHelix((s) => s.setView);
+  const learnPending = useHelix((s) => s.learnPending.length);
   const setNewOpen = useHelix((s) => s.setNewOpen);
   const providers = useAllProviders();
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const q = query.trim().toLowerCase();
-  const pool = sessions.filter((s) => showArchived || !s.archivedAt);
+  // Side chats live in their parent's drawer, not in the list.
+  const pool = sessions.filter((s) => !s.sideOf && (showArchived || !s.archivedAt));
   const archivedCount = sessions.filter((s) => s.archivedAt).length;
   const visible = q
     ? pool.filter(
@@ -98,14 +104,14 @@ export function Sidebar() {
                     }`}
                   >
                     <span className="flex items-center gap-2">
-                      <ProviderDot id={ses.providerId} />
+                      <SessionGlyph session={ses} />
                       <span className="min-w-0 flex-1 truncate text-sm">
                         {ses.title}
                       </span>
                     </span>
-                    <span className="flex items-center justify-between pl-4 text-2xs text-subtle">
-                      <StatusLabel status={ses.status} />
-                      <span className="tabular-nums">
+                    <span className="flex items-center justify-between gap-2 pl-[1.375rem] text-2xs text-subtle">
+                      <SessionState session={ses} unread={!active && ses.updatedAt > (ses.seenAt ?? 0) && ses.status === "waiting"} />
+                      <span className="shrink-0 tabular-nums">
                         {relativeTime(ses.updatedAt, clock)}
                       </span>
                     </span>
@@ -163,9 +169,16 @@ export function Sidebar() {
         >
           <Blocks className="size-3.5" />
           Library
-          <span className="ml-auto text-2xs tabular-nums text-subtle">
-            {liveAddons.length}
-          </span>
+          {learnPending ? (
+            <span
+              className="ml-auto rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-foreground tabular-nums"
+              title={`${learnPending} learning proposal${learnPending === 1 ? "" : "s"} to review`}
+            >
+              {learnPending}
+            </span>
+          ) : (
+            <span className="ml-auto text-2xs tabular-nums text-subtle">{liveAddons.length}</span>
+          )}
         </Button>
         <Button
           variant="ghost"
@@ -180,6 +193,7 @@ export function Sidebar() {
           <Users className="size-3.5" />
           Agents
         </Button>
+        <WestCreateNav active={view === "westcreate"} onOpen={() => setView("westcreate")} />
         <Button
           variant="ghost"
           size="sm"
@@ -320,4 +334,85 @@ function CliSessionList({ query }: { query: string }) {
       ) : null}
     </div>
   );
+}
+
+/** Shown once WestCreate is on this Mac; the dot says whether it is open. */
+function WestCreateNav({ active, onOpen }: { active: boolean; onOpen: () => void }) {
+  const [state, setState] = useState<{ installed: boolean; running: boolean } | null>(null);
+  useEffect(() => {
+    const api = westcode();
+    if (!api?.westcreate) return;
+    let dead = false;
+    const tick = () =>
+      void api.westcreate!()
+        .then((s) => !dead && setState({ installed: s.installed, running: s.running }))
+        .catch(() => {});
+    tick();
+    const t = window.setInterval(tick, 30_000);
+    return () => {
+      dead = true;
+      window.clearInterval(t);
+    };
+  }, []);
+  if (!state?.installed) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className={active ? "w-full justify-start bg-muted/60" : "w-full justify-start text-muted-foreground"}
+      onClick={onOpen}
+    >
+      <Hammer className="size-3.5" />
+      WestCreate
+      <span
+        className={state.running ? "ml-auto size-1.5 rounded-full bg-success" : "ml-auto size-1.5 rounded-full bg-subtle"}
+        aria-label={state.running ? "WestCreate is open" : "WestCreate is closed"}
+      />
+    </Button>
+  );
+}
+
+/** Persona character for agent sessions, provider dot otherwise. */
+function SessionGlyph({ session }: { session: Session }) {
+  const agent = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
+  const clock = useHelix((s) => s.clock);
+  if (agent) return <AgentAvatar agent={agent} state={dotStateFor(session, clock)} size={16} />;
+  return (
+    <span className="grid size-4 shrink-0 place-items-center">
+      <ProviderDot id={session.providerId} />
+    </span>
+  );
+}
+
+/**
+ * One line on where a session stands (Claude/Grok sidebar style): needs
+ * approval (amber), working (live activity), unread result (blue), error.
+ */
+function SessionState({ session, unread }: { session: Session; unread: boolean }) {
+  if (session.permission) {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1.5 font-medium text-warn">
+        <span className="size-1.5 shrink-0 rounded-full bg-warn" />
+        <span className="truncate">Needs approval</span>
+      </span>
+    );
+  }
+  if (session.status === "running") {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-muted-foreground">
+        <CircleDashed className="size-3 shrink-0 animate-spin" />
+        <span className="truncate">{dotActivity(session)}</span>
+      </span>
+    );
+  }
+  if (session.status === "error") return <StatusLabel status="error" />;
+  if (unread) {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-medium text-accent">
+        <span className="size-1.5 rounded-full bg-[#4d9bff]" />
+        New reply
+      </span>
+    );
+  }
+  return <span className="text-subtle">{session.status === "waiting" ? "Your turn" : "Idle"}</span>;
 }

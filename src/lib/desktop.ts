@@ -43,10 +43,20 @@ export type SessionEvent = {
     | "models"
     | "ready"
     | "user"
+    | "plan"
+    | "usage"
+    | "info"
+    | "mode"
     | "noop";
   text?: string;
   toolId?: string;
   name?: string;
+  title?: string;
+  toolKind?: string;
+  diffs?: { path: string; oldText: string; newText: string }[];
+  plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
+  usage?: { used: number; size: number };
+  modeId?: string;
   path?: string;
   command?: string;
   content?: string;
@@ -69,6 +79,127 @@ export type GitStatus = {
   ahead?: number;
   behind?: number;
   remote?: string;
+};
+
+export type GitFile = {
+  path: string;
+  oldPath?: string;
+  kind: "modified" | "new" | "deleted" | "renamed" | "copied" | "untracked" | "conflicted";
+  staged: boolean;
+  submodule: boolean;
+};
+
+export type GitSync = {
+  action: "none" | "fetch" | "pull" | "push" | "publish-branch" | "publish-repo";
+  label: string;
+  disabled?: boolean;
+  ahead?: number;
+  behind?: number;
+};
+
+export type GitChanges = {
+  ok: boolean;
+  error?: string;
+  repo?: boolean;
+  branch?: string | null;
+  upstream?: string | null;
+  ahead?: number;
+  behind?: number;
+  hasUpstream?: boolean;
+  tip?: "valid" | "detached" | "unborn" | "unknown";
+  remotes?: string[];
+  oid?: string | null;
+  operation?: "merge" | "rebase" | "cherry-pick" | null;
+  files?: GitFile[];
+  sync?: GitSync;
+};
+
+export type GitCommit = {
+  sha: string;
+  shortSha: string;
+  summary: string;
+  body: string;
+  author: string;
+  email: string;
+  at: number;
+  parents: string[];
+  refs: string[];
+};
+
+export type GitBridge = {
+  changes: (cwd: string) => Promise<GitChanges>;
+  diff: (cwd: string, file: GitFile) => Promise<{ patch?: string; binary?: boolean; tooLarge?: boolean; ok?: boolean; error?: string }>;
+  commit: (
+    cwd: string,
+    p: { paths: string[]; oldPaths?: string[]; summary: string; description?: string },
+  ) => Promise<{ ok: boolean; sha?: string; error?: string }>;
+  undo: (cwd: string) => Promise<{ ok: boolean; summary?: string; description?: string; error?: string }>;
+  discard: (cwd: string, files: GitFile[]) => Promise<{ ok: boolean; error?: string }>;
+  branches: (cwd: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    branches: { ref: string; name: string; upstream: string | null; sha: string; remote: boolean }[];
+  }>;
+  checkout: (
+    cwd: string,
+    p: { name: string; remote?: boolean; create?: boolean; startPoint?: string },
+  ) => Promise<{ ok: boolean; error?: string }>;
+  sync: (cwd: string, action: string) => Promise<{ ok: boolean; error?: string }>;
+  log: (cwd: string, p?: { limit?: number; skip?: number }) => Promise<{ ok: boolean; commits: GitCommit[] }>;
+  show: (cwd: string, sha: string) => Promise<{ ok: boolean; patch?: string; error?: string }>;
+  checkpoint?: (cwd: string, label: string) => Promise<{ ok: boolean; sha?: string; error?: string }>;
+  restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; error?: string }>;
+  onProgress: (
+    fn: (p: { cwd: string; title: string; percent: number }) => void,
+  ) => () => void;
+};
+
+export type LearnProposal = {
+  id: string;
+  kind: "skill" | "memory";
+  name?: string;
+  action?: "create" | "update";
+  target?: "user" | "memory";
+  op?: "add" | "replace" | "remove";
+  text?: string;
+  before: string;
+  after: string;
+  diff: string;
+  why: string;
+  origin?: { sessionId?: string };
+  createdAt: number;
+};
+
+export type LearnBridge = {
+  review: (p: {
+    sessionId: string;
+    providerId: string;
+    cwd: string;
+    model: string;
+    messages: { role: string; text: string }[];
+    doMemory: boolean;
+    doSkill: boolean;
+  }) => Promise<{ ok: boolean; error?: string; reply?: string; staged: LearnProposal[] }>;
+  cancel: (origin: string) => Promise<{ ok: boolean }>;
+  pending: () => Promise<LearnProposal[]>;
+  decide: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<{ ok: boolean; error?: string }>;
+  memory: () => Promise<{ user: string; memory: string; snapshot: string }>;
+};
+
+export type WestCreateSnapshot = {
+  ok: boolean;
+  error?: string;
+  installed: boolean;
+  bridge: boolean;
+  running: boolean;
+  mode?: string | null;
+  startedAt?: string | null;
+  registeredWith?: string[];
+  tools?: string[];
+  document?: Record<string, unknown> | null;
+  job?: Record<string, unknown> | null;
+  machine?: Record<string, unknown> | null;
+  view?: string | null;
 };
 
 export type CliUpdate = {
@@ -136,6 +267,10 @@ type WestcodeBridge = {
     snippet: string;
   } | null>;
   gitStatus: (cwd: string) => Promise<GitStatus>;
+  git?: GitBridge;
+  westcreate?: () => Promise<WestCreateSnapshot>;
+  learn?: LearnBridge;
+  openWestcreate?: () => Promise<{ ok: boolean; error?: string }>;
   apiPrompt: (payload: {
     endpoint: string;
     apiKey?: string;

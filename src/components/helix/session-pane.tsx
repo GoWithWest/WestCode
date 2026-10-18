@@ -1,33 +1,56 @@
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, GitBranch, Pencil, Terminal } from "lucide-react";
+import { Code2, Download, Folder, GitBranch, Pencil, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
-import { Button } from "@/components/ui/button";
 import { exportTranscript, lastSnippet } from "@/lib/parse-agent";
 import { relativeTime } from "@/lib/utils";
 import type { Session } from "@/lib/types";
 import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
+import { PermissionCard, PlanCard } from "./session-extras";
+import { AgentAvatar } from "./agents-view";
+import { SourceControlPanel } from "./source-control";
+import { dotStateFor } from "@/lib/dots";
 
-export function SessionPane({
-  session,
-  compact,
-}: {
-  session: Session;
-  compact?: boolean;
-}) {
+export function SessionPane({ session, compact }: { session: Session; compact?: boolean }) {
   const setActive = useHelix((s) => s.setActive);
   const compactPref = useHelix((s) => s.settings.transcriptCompact);
   const provider = useResolvedProvider(session.providerId);
+  const persona = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
+  const agentName = persona?.name ?? provider.short;
+  const [scmOpen, setScmOpen] = useState(false);
+  const side = useHelix((s) =>
+    session.sideOpen ? s.sessions.find((x) => x.id === session.sideOpen) : undefined,
+  );
   const scroller = useRef<HTMLDivElement>(null);
+  // Follow the stream only while the reader is at the bottom; scrolling up
+  // to read earlier work must not be yanked back down by every chunk.
+  const pinned = useRef(true);
 
   useEffect(() => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || !pinned.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [session.messages, session.status]);
+  }, [session.messages, session.status, session.permission]);
+
+  useEffect(() => {
+    pinned.current = true;
+  }, [session.id]);
+
+  // ⌘⇧G toggles source control for the focused pane (not split panes).
+  useEffect(() => {
+    if (compact) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        setScmOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [compact]);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-window">
@@ -41,80 +64,79 @@ export function SessionPane({
             <ProviderChip id={session.providerId} />
             <AgentBadge session={session} />
             <CwdPicker session={session} />
-            <GitChip session={session} />
-            <ExportButton session={session} />
-            <ResumeButton session={session} />
-            <EditorButton session={session} />
+            <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
+            {!compact ? (
+              <>
+                <ExportButton session={session} />
+                <ResumeButton session={session} />
+                <EditorButton session={session} />
+              </>
+            ) : null}
           </div>
         </div>
       </header>
 
-      <div
-        ref={scroller}
-        className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-5"
-      >
-        {session.messages.length === 0 ? (
-          <EmptySession
-            name={provider.short}
-            cwd={session.cwd}
-            model={session.model}
-            effort={effortLabel(session.providerId, session.effort)}
-          />
-        ) : (
-          <MessageList messages={session.messages} compact={compact || compactPref} />
-        )}
-      </div>
-
-      {session.permission ? (
-        <div className="border-t border-border bg-surface px-3 py-3 md:px-4">
-          <p className="text-xs font-medium">
-            {provider.short} wants to run {session.permission.tool}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {(session.permission.options.length
-              ? session.permission.options
-              : [
-                  { optionId: "allow-once", name: "Allow once" },
-                  { optionId: "allow-always", name: "Allow always" },
-                  { optionId: "reject", name: "Reject" },
-                ]
-            ).map((opt) => (
-              <Button
-                key={opt.optionId || opt.name}
-                size="sm"
-                variant={
-                  (opt.kind || opt.optionId || "").toLowerCase().includes("reject")
-                    ? "ghost"
-                    : "default"
-                }
-                onClick={() =>
-                  useHelix
-                    .getState()
-                    .answerPermission(
-                      session.id,
-                      opt.optionId || "allow-once",
-                    )
-                }
-              >
-                {opt.name || opt.optionId}
-              </Button>
-            ))}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            ref={scroller}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            }}
+            className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-5 md:px-5"
+          >
+            {session.messages.length === 0 ? (
+              <EmptySession
+                name={provider.short}
+                cwd={session.cwd}
+                model={session.model}
+                effort={effortLabel(session.providerId, session.effort)}
+              />
+            ) : (
+              <MessageList messages={session.messages} compact={compact || compactPref} sessionId={session.id} />
+            )}
           </div>
-        </div>
-      ) : null}
 
-      <Composer key={session.id} session={session} />
+          <div className="flex flex-col gap-2 pb-2 empty:hidden">
+            <PermissionCard session={session} agentName={agentName} />
+            {!session.permission ? <PlanCard session={session} /> : null}
+          </div>
+
+          <Composer key={session.id} session={session} />
+        </div>
+        {scmOpen ? (
+          <SourceControlPanel session={session} onClose={() => setScmOpen(false)} />
+        ) : null}
+        {!scmOpen && side ? (
+          <aside
+            aria-label="Side chat"
+            className="flex h-full min-h-0 w-[min(26rem,45vw)] shrink-0 flex-col border-l border-border bg-surface"
+          >
+            <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+              <span className="truncate text-xs font-medium">Side chat · read-only</span>
+              <button
+                type="button"
+                aria-label="Close side chat"
+                onClick={() =>
+                  useHelix.setState((st) => ({
+                    sessions: st.sessions.map((x) => (x.id === session.id ? { ...x, sideOpen: undefined } : x)),
+                  }))
+                }
+                className="text-subtle hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+            <SessionPane session={side} compact />
+          </aside>
+        ) : null}
+      </div>
     </section>
   );
 }
 
-function SessionTitle({
-  session,
-  onFocus,
-}: {
-  session: Session;
-  onFocus: () => void;
-}) {
+function SessionTitle({ session, onFocus }: { session: Session; onFocus: () => void }) {
   const rename = useHelix((s) => s.renameSession);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
@@ -171,15 +193,12 @@ function SessionTitle({
 
 function AgentBadge({ session }: { session: Session }) {
   const agents = useHelix((s) => s.agents);
+  const clock = useHelix((s) => s.clock);
   const agent = agents.find((a) => a.id === session.agentId);
   if (!agent) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs font-medium">
-      <img
-        src={`/avatars/${agent.avatar}.svg`}
-        alt=""
-        className="size-3.5 rounded-full"
-      />
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 py-0.5 pr-2 pl-0.5 text-2xs font-medium">
+      <AgentAvatar agent={agent} state={dotStateFor(session, clock)} size={18} />
       {agent.name}
     </span>
   );
@@ -275,7 +294,15 @@ function CwdPicker({ session }: { session: Session }) {
   );
 }
 
-function GitChip({ session }: { session: Session }) {
+function GitChip({
+  session,
+  open,
+  onToggle,
+}: {
+  session: Session;
+  open: boolean;
+  onToggle: () => void;
+}) {
   const [git, setGit] = useState<GitStatus | null>(null);
   const api = westcode();
   const status = session.status;
@@ -311,17 +338,32 @@ function GitChip({ session }: { session: Session }) {
     ? `https://github.com/${gh[1]}/compare/${encodeURIComponent(git.branch ?? "")}?expand=1`
     : null;
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs">
-      <GitBranch className="size-3" />
-      <span className="max-w-28 truncate font-medium">{git.branch}</span>
-      {git.files ? (
-        <span className="tabular-nums">
-          <span className="text-claude">+{git.adds}</span>{" "}
-          <span className="text-danger">−{git.dels}</span>
-        </span>
-      ) : (
-        <span className="text-subtle">clean</span>
-      )}
+    <span
+      className={
+        open
+          ? "inline-flex items-center gap-1.5 rounded-full border border-border-strong bg-muted px-2 py-0.5 text-2xs"
+          : "inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs"
+      }
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label="Source control"
+        title="Changes, commit, branches and history (⌘⇧G)"
+        className="inline-flex items-center gap-1.5 hover:text-foreground"
+      >
+        <GitBranch className="size-3" />
+        <span className="max-w-28 truncate font-medium">{git.branch}</span>
+        {git.files ? (
+          <span className="tabular-nums">
+            <span className="text-claude">+{git.adds}</span>{" "}
+            <span className="text-danger">−{git.dels}</span>
+          </span>
+        ) : (
+          <span className="text-subtle">clean</span>
+        )}
+      </button>
       {git.ahead ? <span className="text-subtle">↑{git.ahead}</span> : null}
       {git.behind ? <span className="text-subtle">↓{git.behind}</span> : null}
       {compare && (git.ahead || git.files) ? (
@@ -353,24 +395,16 @@ function EmptySession({
     <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
       <p className="text-sm font-medium">{name} is ready</p>
       <p className="max-w-xs text-xs text-muted-foreground">
-        {model} · {effort} · {cwd}. Attach files with +, @ another session, or
-        type / for commands.
+        {model} · {effort} · {cwd}. Attach files with +, @ another session, or type / for commands.
       </p>
     </div>
   );
 }
 
-export function SessionCard({
-  session,
-  onOpen,
-}: {
-  session: Session;
-  onOpen: () => void;
-}) {
+export function SessionCard({ session, onOpen }: { session: Session; onOpen: () => void }) {
   const clock = useHelix((s) => s.clock);
   const last = session.messages[session.messages.length - 1];
   const snippet = last ? lastSnippet(last.blocks) : "New session";
-  const provider = useResolvedProvider(session.providerId);
 
   return (
     <button

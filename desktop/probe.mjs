@@ -1,9 +1,8 @@
 import { execFile } from "node:child_process";
-import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 import { childEnv, which } from "./path.mjs";
+import { scanSkills } from "./skills-scan.mjs";
 
 const exec = promisify(execFile);
 
@@ -162,22 +161,18 @@ export async function probeAll() {
 }
 
 const PER_KIND_CAP = 80;
+// Skill lists are long (plugins ship dozens each) and skill groups resolve
+// against them, so skills get a much higher cap than plugins/connectors.
+const SKILL_CAP = 1000;
 
-function collectSkillDirs(dir, id, spec, push) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+function pushScanned(id, push) {
+  for (const s of scanSkills(id, homedir())) {
     push({
-      id: `${id}-skill-${e.name}`,
+      id: `${id}-skill-${s.name}`,
       kind: "skill",
-      name: e.name,
-      source: spec.name,
-      summary: `Installed skill in ${dir}`,
+      name: s.name,
+      source: s.source,
+      summary: s.description || `Installed skill (${s.source})`,
       providers: [id],
     });
   }
@@ -194,7 +189,8 @@ export async function listAddons(id) {
   function push(addon) {
     const key = `${addon.kind}:${addon.name.toLowerCase()}`;
     if (seen.has(key)) return;
-    if (addons.filter((a) => a.kind === addon.kind).length >= PER_KIND_CAP) return;
+    const cap = addon.kind === "skill" ? SKILL_CAP : PER_KIND_CAP;
+    if (addons.filter((a) => a.kind === addon.kind).length >= cap) return;
     seen.add(key);
     addons.push(addon);
   }
@@ -273,10 +269,12 @@ export async function listAddons(id) {
   } else if (id === "claude") {
     await collect(["mcp", "list"], "connector");
     await collect(["plugin", "list"], "plugin");
-    collectSkillDirs(join(homedir(), ".claude", "skills"), id, spec, push);
+    pushScanned(id, push);
   } else if (id === "codex") {
     await collect(["mcp", "list"], "connector");
     await collect(["features", "list"], "plugin");
+    pushScanned(id, push);
   }
+  if (id === "grok") pushScanned(id, push);
   return addons;
 }

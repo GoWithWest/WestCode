@@ -25,3 +25,6 @@ desktop/icon.iconset/
 .output/
 ._*
 WestCode_Logo.zip
+
+test-results/
+playwright-report/

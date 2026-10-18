@@ -9,8 +9,11 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl } from "./acp-host.mjs";
+import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews } from "./acp-host.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
+import * as gitOps from "./git.mjs";
+import * as westcreate from "./westcreate.mjs";
+import * as learn from "./learn.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -271,6 +274,7 @@ app.whenReady().then(async () => {
   });
   installMenu();
   startScheduler();
+  westcreate.refreshGrokRegistration(which("grok"));
   // Quick entry: summon WestCode and open the New Session dialog from
   // anywhere (mirrors the desktop-assistant global-hotkey pattern).
   const hotkeyOk = globalShortcut.register("CommandOrControl+Shift+Space", () => {
@@ -519,6 +523,45 @@ ipcMain.handle("registry:search", async (_e, { q }) => {
   }
 });
 
+// ---- Learning loop (learn.mjs): reviews stage proposals; the user decides.
+ipcMain.handle("learn:review", async (_e, p = {}) => {
+  if (!PROVIDERS[p.providerId]) return { ok: false, error: "Reviews run on Claude, Grok or Codex sessions." };
+  const before = new Set(learn.listPending().map((r) => r.id));
+  const prompt = learn.reviewPrompt({
+    transcript: learn.digest(Array.isArray(p.messages) ? p.messages : []),
+    doSkill: p.doSkill !== false,
+    doMemory: Boolean(p.doMemory),
+    skills: learn.listSkills(),
+  });
+  let dir = p.cwd;
+  try {
+    dir = repoDir(p.cwd);
+  } catch {
+    dir = homedir();
+  }
+  const r = await runReview({
+    providerId: p.providerId,
+    cwd: dir,
+    model: p.model,
+    prompt,
+    doMemory: Boolean(p.doMemory),
+    doSkill: p.doSkill !== false,
+    origin: p.sessionId,
+  });
+  const staged = learn.listPending().filter((x) => !before.has(x.id));
+  return { ...r, staged };
+});
+ipcMain.handle("learn:cancel", (_e, origin) => {
+  cancelReviews(String(origin || ""));
+  return { ok: true };
+});
+ipcMain.handle("learn:pending", () => learn.listPending());
+ipcMain.handle("learn:decide", (_e, p = {}) => learn.decide(String(p.id || ""), p.verdict === "approve" ? "approve" : "reject", p.edited));
+ipcMain.handle("learn:memory", () => ({ user: learn.readMemory("user"), memory: learn.readMemory("memory"), snapshot: learn.memorySnapshot() }));
+
+ipcMain.handle("westcreate:snapshot", () => westcreate.snapshot());
+ipcMain.handle("westcreate:open", () => westcreate.openApp());
+
 ipcMain.handle("cli:probe", () => probeAll());
 ipcMain.handle("cli:library", (_e, providerId) => listAddons(providerId));
 ipcMain.handle("cli:updates", async () => checkUpdates(await probeAll()));
@@ -604,6 +647,40 @@ ipcMain.handle("git:status", async (_e, cwd) => {
   const remote = await git(dir, ["remote", "get-url", "origin"]);
   return { repo: true, branch, adds, dels, files, ahead, behind, remote: remote || "" };
 });
+
+// ---- Source control panel (GitHub Desktop's Changes / History / Sync).
+function repoDir(cwd) {
+  const dir = typeof cwd === "string" && cwd.startsWith("~/") ? join(homedir(), cwd.slice(2)) : cwd;
+  if (typeof dir !== "string" || !dir || !existsSync(dir)) throw new Error(`Folder ${cwd} does not exist.`);
+  return dir;
+}
+function gitHandler(name, fn) {
+  ipcMain.handle(name, async (_e, payload = {}) => {
+    try {
+      return await fn(repoDir(payload.cwd), payload);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+}
+gitHandler("git:changes", (dir) => gitOps.status(dir).then((st) => ({ ok: true, ...st, sync: gitOps.syncAction(st) })));
+gitHandler("git:diff", (dir, p) => gitOps.fileDiff(dir, p.file || {}));
+gitHandler("git:commit", (dir, p) => gitOps.commit(dir, p));
+gitHandler("git:undo", (dir) => gitOps.undoCommit(dir));
+gitHandler("git:discard", (dir, p) =>
+  gitOps.discard(dir, Array.isArray(p.files) ? p.files : [], (path) => shell.trashItem(path)),
+);
+gitHandler("git:branches", (dir) => gitOps.branches(dir));
+gitHandler("git:checkout", (dir, p) => gitOps.checkout(dir, p));
+gitHandler("git:sync", (dir, p) =>
+  gitOps.sync(dir, String(p.action || ""), (progress) =>
+    win?.webContents.send("git:progress", { cwd: p.cwd, ...progress }),
+  ),
+);
+gitHandler("git:log", (dir, p) => gitOps.log(dir, p));
+gitHandler("git:show", (dir, p) => gitOps.commitFiles(dir, p.sha));
+gitHandler("git:checkpoint", (dir, p) => gitOps.checkpoint(dir, String(p.label || "turn").slice(0, 80)));
+gitHandler("git:restore", (dir, p) => gitOps.restoreCheckpoint(dir, p.sha));
 
 // App state (sessions, library, agents, providers, colors…) persists in
 // ~/.westcode/state.json so it survives app replacement — the packaged

@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { deskDir } from "./desk-paths.mjs";
+import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate, modelsFrom } from "./acp-map.mjs";
+import { cliHasWestcreate, sessionServer } from "./westcreate.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let deskUrl = "";
@@ -14,7 +16,7 @@ export function setDeskUrl(url) {
   deskUrl = url || "";
 }
 
-function deskMcp(sessionId) {
+function deskMcp(sessionId, providerId) {
   const nodeBin = which("node") || process.execPath;
   const env = [
     { name: "WESTCODE_FROM_SESSION", value: sessionId },
@@ -24,7 +26,7 @@ function deskMcp(sessionId) {
   if (nodeBin === process.execPath) {
     env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
   }
-  return [
+  const servers = [
     {
       type: "stdio",
       name: "westcode",
@@ -33,6 +35,28 @@ function deskMcp(sessionId) {
       env,
     },
   ];
+  // WestCreate's bridge, so every session can drive it — unless this CLI
+  // already registered it itself (one server per name).
+  if (!cliHasWestcreate(providerId)) {
+    const wc = sessionServer(which("node"), process.execPath);
+    if (wc) servers.push(wc);
+  }
+  return servers;
+}
+
+/** The learning reviewer's only extra tools: read skills/memory, propose. */
+function learnMcp(sessionId, opts) {
+  const nodeBin = which("node") || process.execPath;
+  const env = [
+    { name: "WESTCODE_LEARN_SESSION", value: String(opts.origin || sessionId) },
+    { name: "WESTCODE_LEARN_MEMORY", value: opts.doMemory ? "1" : "0" },
+    { name: "WESTCODE_LEARN_SKILLS", value: opts.doSkill === false ? "0" : "1" },
+  ];
+  for (const k of ["WESTCODE_HOME", "WESTCODE_USER_HOME"]) {
+    if (process.env[k]) env.push({ name: k, value: process.env[k] });
+  }
+  if (nodeBin === process.execPath) env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
+  return [{ type: "stdio", name: "westcode-learn", command: nodeBin, args: [join(here, "learn-mcp.mjs")], env }];
 }
 
 function expandHome(p) {
@@ -49,7 +73,14 @@ function npmCacheEnv(env) {
 }
 
 export function mapModel(providerId, label) {
-  const t = String(label || "").toLowerCase().trim();
+  const raw = String(label || "").trim();
+  const t = raw.toLowerCase();
+  // An id the CLI itself reported (or a full model name) goes through as is:
+  // only friendly labels are mapped. Otherwise picking "Grok 4.7" from the
+  // live list would silently run grok-4.6.
+  if (providerId === "grok" && /^grok-[\w.-]+$/.test(t)) return t;
+  if (providerId === "claude" && /^(default|opus|sonnet|haiku|fable|best|opusplan)(\[1m\])?$|^claude-[\w.-]+(\[1m\])?$/.test(t)) return t;
+  if (providerId === "codex" && /^(gpt|o\d|codex)[\w.-]*$/.test(t)) return t;
   if (providerId === "grok") {
     if (t.includes("4.5") || t === "grok-4.5") return "grok-4.5";
     if (t.includes("4.6") || t === "grok-4.6" || t.includes("grok")) return "grok-4.6";
@@ -191,6 +222,8 @@ class AcpSession {
      * on the desk), and a failed load must not become a blank new session.
      */
     this.readOnly = false;
+    /** Learning reviewer: {doMemory, doSkill, origin}; reads and proposes only. */
+    this.reviewer = null;
   }
 
   takeReplay() {
@@ -317,7 +350,11 @@ class AcpSession {
     await this._authenticate(init);
 
     // A history read needs no tools and must not join the desk bus.
-    const mcpServers = this.readOnly ? [] : deskMcp(this.id);
+    const mcpServers = this.reviewer
+      ? learnMcp(this.id, this.reviewer)
+      : this.readOnly
+        ? []
+        : deskMcp(this.id, this.providerId);
     const resumeId = this.resumeId;
     if (resumeId) {
       // session/load replays the whole transcript as session/update
@@ -341,7 +378,7 @@ class AcpSession {
           this.agentSessionId =
             loaded?.sessionId || loaded?.session_id || resumeId;
           this.resumed = true;
-          this._emitModels(init);
+          this._emitModels(init, loaded);
           this.emit({ type: "ready", agentSessionId: this.agentSessionId });
           return this.agentSessionId;
         } catch (err) {
@@ -370,7 +407,7 @@ class AcpSession {
     this.agentSessionId = created?.sessionId || created?.session_id || this.id;
     this.resumed = false;
 
-    this._emitModels(init);
+    this._emitModels(init, created);
     this.emit({ type: "ready", agentSessionId: this.agentSessionId });
     return this.agentSessionId;
   }
@@ -398,19 +435,10 @@ class AcpSession {
     }
   }
 
-  _emitModels(init) {
-    const models =
-      init?._meta?.modelState?.availableModels ||
-      init?._meta?.availableModels ||
-      [];
+  _emitModels(init, session) {
+    const models = modelsFrom(init, session);
     if (!models.length) return;
-    this.emit({
-      type: "models",
-      models: models.map((m) => ({
-        id: m.modelId || m.id,
-        label: m.name || m.modelId || m.id,
-      })),
-    });
+    this.emit({ type: "models", models });
   }
 
   async prompt(text, history = []) {
@@ -589,6 +617,22 @@ class AcpSession {
         this.reply(msg.id, { outcome: { outcome: "cancelled" } });
         return;
       }
+      if (this.reviewer) {
+        // The reviewer reads and proposes; it never edits or runs anything.
+        const call = params.toolCall || {};
+        const blob = `${call.title || ""} ${call.name || ""} ${JSON.stringify(call._meta || {})}`.toLowerCase();
+        const k = String(call.kind || "").toLowerCase();
+        const allowed = /westcode[-_]learn|westcode_skill|westcode_memory/.test(blob) || ["read", "search", "think"].includes(k);
+        const opts = params.options || [];
+        const reject =
+          opts.find((o) => /reject/i.test(`${o.kind || ""} ${o.optionId || ""}`))?.optionId || "reject";
+        this.reply(msg.id, {
+          outcome: allowed
+            ? { outcome: "selected", optionId: pickAllowOption(opts) }
+            : { outcome: "selected", optionId: reject },
+        });
+        return;
+      }
       const kind = String(params.toolCall?.kind || "").toLowerCase();
       // ACP declares the tool kind — trust it first; the title regex is only
       // a fallback for adapters that omit kind.
@@ -611,10 +655,15 @@ class AcpSession {
         });
         return;
       }
+      const call = params.toolCall || {};
+      const diffs = contentDiffs(call.content);
       this.emit({
         type: "permission",
         rpcId: msg.id,
-        tool: params.toolCall?.title || params.toolCall?.kind || "tool",
+        tool: call.title || call.kind || "tool",
+        toolKind: typeof call.kind === "string" ? call.kind : undefined,
+        command: typeof call.rawInput?.command === "string" ? call.rawInput.command : undefined,
+        diffs: diffs.length ? diffs : undefined,
         options: params.options || [],
       });
       return;
@@ -640,7 +689,7 @@ class AcpSession {
         );
       return;
     }
-    if (method === "fs/write_text_file" && this.readOnly) {
+    if (method === "fs/write_text_file" && (this.readOnly || this.reviewer)) {
       // Showing history must never touch the user's files.
       this.write({
         jsonrpc: "2.0",
@@ -675,89 +724,6 @@ class AcpSession {
       outcome: { outcome: "selected", optionId },
     });
   }
-}
-
-/** Event types that belong to a transcript, so session/load can replay them. */
-const TRANSCRIPT_EVENTS = new Set(["user", "text", "thought", "tool"]);
-
-function mapUpdate(params, opts = {}) {
-  const u = params.update || params;
-  const kind = u.sessionUpdate || u.session_update || "";
-  if (opts.replay && (kind === "user_message_chunk" || kind === "user_message")) {
-    return { type: "user", text: extractText(u) };
-  }
-  if (kind === "available_commands_update" || u.availableCommands) {
-    const list = u.availableCommands || u.available_commands || [];
-    return {
-      type: "commands",
-      commands: list
-        .map((c) => ({
-          cmd: String(c.name || c.command || "").replace(/^\//, ""),
-          hint: c.description || c.hint || "",
-          kind: c.kind === "skill" ? "skill" : "builtin",
-        }))
-        .filter((c) => c.cmd),
-    };
-  }
-  if (
-    kind === "user_message_chunk" ||
-    kind === "user_message" ||
-    kind === "session_info_update" ||
-    kind === "current_mode_update"
-  ) {
-    return { type: "noop" };
-  }
-  if (kind === "agent_thought_chunk") {
-    return { type: "thought", text: extractText(u) };
-  }
-  if (kind === "agent_message_chunk") {
-    return { type: "text", text: extractText(u) };
-  }
-  if (kind === "tool_call" || kind === "tool_call_update") {
-    const raw = u.rawInput || {};
-    let content = "";
-    if (Array.isArray(u.content)) {
-      content = u.content
-        .map((b) => b.text || "")
-        .filter(Boolean)
-        .join("\n");
-    } else if (typeof u.content === "string") {
-      content = u.content;
-    }
-    const status =
-      u.status === "failed" || u.status === "error"
-        ? "error"
-        : u.status === "completed" || u.status === "done" || kind === "tool_call_update"
-          ? "done"
-          : "running";
-    return {
-      type: "tool",
-      toolId: u.toolCallId || u.tool_call_id || u.id,
-      // toolName first: dedupe logic (extractSendMessages) must recognize the
-      // raw tool id; a prettified title is only a display fallback. An update
-      // patch with no name fields sends "" so the renderer keeps the recorded
-      // name instead of overwriting it with a generic one.
-      name:
-        u.toolName ||
-        u.title ||
-        (kind === "tool_call" ? u.kind || "Tool" : ""),
-      path: u.locations?.[0]?.path || raw.path,
-      command: raw.command,
-      content,
-      status: kind === "tool_call" && !u.status ? "running" : status,
-    };
-  }
-  const text = extractText(u);
-  if (text) return { type: "text", text };
-  return { type: "noop" };
-}
-
-function extractText(u) {
-  if (u.content && typeof u.content === "object" && typeof u.content.text === "string") {
-    return u.content.text;
-  }
-  if (typeof u.text === "string") return u.text;
-  return "";
 }
 
 const sessions = new Map();
@@ -831,6 +797,7 @@ export function ensureSession(opts, emit) {
     emit,
   );
   s.resumeId = opts.agentSessionId || null;
+  s.reviewer = opts.reviewer || null;
   s.readOnly = Boolean(opts.readOnly && s.resumeId);
   sessions.set(opts.sessionId, s);
   return s;
@@ -946,4 +913,42 @@ export function dropSession(id) {
 export function stopAll() {
   for (const s of sessions.values()) s.stop();
   sessions.clear();
+}
+
+/**
+ * Review a finished session: a fresh, restricted session of the same CLI
+ * gets the transcript and the learning tools, and stages proposals. Returns
+ * {ok, reply} — the proposals themselves are on disk (learn.mjs).
+ */
+export async function runReview({ providerId, cwd, model, prompt, doMemory, doSkill, origin }) {
+  const id = `review:${origin || "session"}:${Date.now()}`;
+  let reply = "";
+  const s = ensureSession(
+    {
+      sessionId: id,
+      providerId,
+      cwd,
+      model,
+      effort: "low",
+      permissionMode: "ask",
+      reviewer: { doMemory, doSkill, origin },
+    },
+    (ev) => {
+      if (ev.type === "text") reply += ev.text || "";
+    },
+  );
+  try {
+    await s.prompt(prompt, []);
+    return { ok: true, reply: reply.trim() };
+  } catch (err) {
+    return { ok: false, error: err.message, reply: reply.trim() };
+  } finally {
+    dropSession(id);
+  }
+}
+
+export function cancelReviews(origin) {
+  for (const [id, s] of sessions) {
+    if (id.startsWith(`review:${origin}:`)) s.cancel();
+  }
 }
