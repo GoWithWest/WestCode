@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Circle, CircleDot, ShieldQuestion } from "lucide-react";
+import { Check, ChevronDown, Circle, CircleDot, Layers, ShieldQuestion, Target } from "lucide-react";
+import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -158,7 +159,7 @@ export function PermissionCard({ session, agentName }: { session: Session; agent
   if (!p) return null;
   return (
     <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
-      <div className="rounded-xl border border-warn/40 bg-surface shadow-window">
+      <div id="permission-card" className="rounded-xl border border-warn/40 bg-surface shadow-window">
         <div className="flex items-start gap-2.5 px-3.5 pt-3">
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-warn" />
           <div className="min-w-0 flex-1">
@@ -216,4 +217,115 @@ function verbFor(kind?: string) {
     default:
       return "use a tool";
   }
+}
+
+/** Background tasks and subagents the agent started (Claude Code). */
+export function TasksCard({ session }: { session: Session }) {
+  const tasks = (session.tasks ?? []).filter((t) => t.state === "running" || Date.now() - session.updatedAt < 60_000);
+  const [open, setOpen] = useState(true);
+  if (!tasks.length) return null;
+  const running = tasks.filter((t) => t.state === "running").length;
+  return (
+    <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
+      <div className="rounded-xl border border-border bg-surface">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        >
+          <Layers className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">
+            {running ? `${running} running in the background` : "Background work finished"}
+          </span>
+          <ChevronDown className={cn("size-3.5 shrink-0 text-subtle transition-transform", !open && "-rotate-90")} />
+        </button>
+        {open ? (
+          <ul className="flex flex-col gap-0.5 border-t border-border px-3 py-2">
+            {tasks.map((t) => (
+              <li key={t.id} className="flex items-center gap-2 py-0.5 text-xs">
+                {t.state === "running" ? (
+                  <CircleDot className="size-3.5 shrink-0 animate-pulse" />
+                ) : t.state === "completed" ? (
+                  <Check className="size-3.5 shrink-0 text-success" />
+                ) : (
+                  <Circle className="size-3.5 shrink-0 text-subtle" />
+                )}
+                <span className="shrink-0 text-2xs text-subtle">{t.kind === "subagent" ? "Subagent" : "Task"}</span>
+                <span className="min-w-0 flex-1 truncate" title={t.summary ?? t.description}>
+                  {t.description ?? t.id}
+                  {t.summary ? <span className="text-subtle"> — {t.summary}</span> : null}
+                </span>
+                {t.state === "running" && t.kind === "background" ? (
+                  <button
+                    type="button"
+                    onClick={() => void westcode()?.stopTask?.(session.id, t.id)}
+                    className="shrink-0 text-2xs text-muted-foreground hover:text-danger"
+                  >
+                    Stop
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Goal mode: what the agent is working toward, how far along, and Stop. */
+export function GoalCard({ session }: { session: Session }) {
+  const g = session.goal;
+  const stop = useHelix((s) => s.stopGoal);
+  if (!g) return null;
+  const live = g.status === "active" || g.status === "judging";
+  const label =
+    g.status === "judging"
+      ? "Checking whether the goal is met…"
+      : g.status === "active"
+        ? `Working toward it · turn ${g.turns} of ${g.budget}`
+        : g.status === "done"
+          ? "Goal met"
+          : g.status === "blocked"
+            ? "Blocked — needs you"
+            : "Stopped";
+  return (
+    <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
+      <div
+        className={cn(
+          "flex items-start gap-2.5 rounded-xl border bg-surface px-3 py-2",
+          g.status === "done" ? "border-success/40" : g.status === "blocked" ? "border-warn/40" : "border-border",
+        )}
+      >
+        <Target className={cn("mt-0.5 size-4 shrink-0", g.status === "done" ? "text-success" : live ? "text-foreground" : "text-subtle")} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-medium" title={g.text}>
+            {g.text}
+          </p>
+          <p className="text-2xs text-muted-foreground">
+            {label}
+            {g.reason ? ` · ${g.reason}` : ""}
+          </p>
+        </div>
+        {live ? (
+          <button type="button" onClick={() => stop(session.id)} className="shrink-0 text-2xs text-muted-foreground hover:text-foreground">
+            Stop goal
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() =>
+              useHelix.setState((st) => ({
+                sessions: st.sessions.map((x) => (x.id === session.id ? { ...x, goal: undefined } : x)),
+              }))
+            }
+            className="shrink-0 text-2xs text-muted-foreground hover:text-foreground"
+          >
+            Dismiss
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }

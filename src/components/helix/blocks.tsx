@@ -9,6 +9,7 @@ import {
   FilePen,
   FileSearch,
   FileText,
+  Eye,
   Globe,
   History,
   Search,
@@ -27,6 +28,7 @@ import type { Attachment, Block, ChatMessage, FileDiff, ToolBlock } from "@/lib/
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ProviderDot, useResolvedProvider } from "./provider";
+import { PREVIEWABLE, SessionIdContext, usePreview } from "./preview-context";
 
 type Detail = "normal" | "thinking" | "verbose";
 
@@ -34,18 +36,34 @@ export function MessageList({
   messages,
   compact,
   sessionId,
+  awaiting,
+  queuedIds,
 }: {
   messages: ChatMessage[];
   compact?: boolean;
   sessionId?: string;
+  /** The tool the agent is waiting on your approval for, if any. */
+  awaiting?: string;
+  /** Messages sent while the agent was busy, not read yet. */
+  queuedIds?: string[];
 }) {
   const detail = useHelix((s) => s.settings.transcriptDetail ?? "normal");
   return (
-    <div className={cn("mx-auto flex w-full max-w-3xl flex-col", compact ? "gap-4" : "gap-6")}>
-      {messages.map((m) => (
-        <Message key={m.id} message={m} compact={compact} detail={detail} sessionId={sessionId} />
-      ))}
-    </div>
+    <SessionIdContext.Provider value={sessionId}>
+      <div className={cn("mx-auto flex w-full max-w-3xl flex-col", compact ? "gap-4" : "gap-6")}>
+        {messages.map((m) => (
+          <Message
+            key={m.id}
+            message={m}
+            compact={compact}
+            detail={detail}
+            sessionId={sessionId}
+            awaiting={m.streaming ? awaiting : undefined}
+          queued={queuedIds?.includes(m.id)}
+          />
+        ))}
+      </div>
+    </SessionIdContext.Provider>
   );
 }
 
@@ -54,11 +72,15 @@ const Message = memo(function Message({
   compact,
   detail,
   sessionId,
+  awaiting,
+  queued,
 }: {
   message: ChatMessage;
   compact?: boolean;
   detail: Detail;
   sessionId?: string;
+  awaiting?: string;
+  queued?: boolean;
 }) {
   if (message.role === "system") {
     const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
@@ -74,7 +96,11 @@ const Message = memo(function Message({
           {message.restoreUndo && sessionId ? (
             <button
               type="button"
-              onClick={() => void useHelix.getState().restoreCheckpoint(sessionId, message.restoreUndo!, "the restore")}
+              onClick={() =>
+                void useHelix
+                  .getState()
+                  .restoreCheckpoint(sessionId, message.restoreUndo!, "the restore")
+              }
               className="ml-2 font-medium text-foreground underline underline-offset-2"
             >
               Undo
@@ -92,6 +118,7 @@ const Message = memo(function Message({
   if (message.role === "user") {
     const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
     return (
+      <div className="flex flex-col items-end gap-1">
       <div className="group/user flex items-center justify-end gap-2">
         {message.checkpoint && sessionId ? (
           <button
@@ -104,7 +131,9 @@ const Message = memo(function Message({
                   "Restore the folder's files to how they were before this message? Changes made after it are undone (you can undo the restore).",
                 )
               ) {
-                void useHelix.getState().restoreCheckpoint(sessionId, message.checkpoint!, text.slice(0, 50));
+                void useHelix
+                  .getState()
+                  .restoreCheckpoint(sessionId, message.checkpoint!, text.slice(0, 50));
               }
             }}
             className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-subtle opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100"
@@ -123,6 +152,26 @@ const Message = memo(function Message({
           {text}
         </div>
       </div>
+      {queued && sessionId ? (
+        <div className="flex items-center gap-2 text-2xs text-subtle">
+          <span>Queued — the agent reads it after this turn</span>
+          <button
+            type="button"
+            onClick={() => useHelix.getState().steerNow(sessionId, message.id)}
+            className="font-medium text-foreground hover:underline"
+          >
+            Send now
+          </button>
+          <button
+            type="button"
+            onClick={() => useHelix.getState().unqueue(sessionId, message.id)}
+            className="hover:text-foreground"
+          >
+            Remove
+          </button>
+        </div>
+      ) : null}
+      </div>
     );
   }
 
@@ -138,6 +187,7 @@ const Message = memo(function Message({
           detail={detail}
         />
       ) : null}
+      {awaiting ? <AwaitingApproval tool={awaiting} /> : null}
       {reply.map((b, i) =>
         b.type === "text" ? (
           <Markdown key={`${message.id}-r-${i}`} text={b.text} compact={compact} />
@@ -200,6 +250,27 @@ export function Shimmer({ children, className }: { children: string; className?:
     >
       {thinking ? `${verb}…` : children}
     </span>
+  );
+}
+
+/** Inline marker while the agent is blocked on your OK (card is below). */
+function AwaitingApproval({ tool }: { tool: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        document
+          .getElementById("permission-card")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" })
+      }
+      className="flex w-fit max-w-full items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-1.5 text-left text-xs text-warn"
+    >
+      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-warn" />
+      <span className="min-w-0 truncate">
+        Waiting for your approval:{" "}
+        <span className="font-mono">{tool.replace(/`/g, "").slice(0, 80)}</span>
+      </span>
+    </button>
   );
 }
 
@@ -266,7 +337,12 @@ function Activity({
         <div className="ml-1 flex flex-col gap-0.5 border-l border-border pl-3">
           {blocks.map((b, i) =>
             b.type === "tool" ? (
-              <ToolRow key={b.toolId ?? `t${i}`} tool={b} compact={compact} verbose={detail === "verbose"} />
+              <ToolRow
+                key={b.toolId ?? `t${i}`}
+                tool={b}
+                compact={compact}
+                verbose={detail === "verbose"}
+              />
             ) : b.type === "think" ? (
               <ThoughtRow key={`k${i}`} block={b} defaultOpen={detail !== "normal"} />
             ) : b.text.trim() ? (
@@ -296,8 +372,14 @@ function ThoughtRow({
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
       >
         <Brain className="size-3.5 shrink-0" />
-        {live ? <Shimmer>Thinking</Shimmer> : <span>Thought for {formatSeconds(block.ms ?? 0)}</span>}
-        <ChevronRight className={cn("size-3 opacity-60 transition-transform", open && "rotate-90")} />
+        {live ? (
+          <Shimmer>Thinking</Shimmer>
+        ) : (
+          <span>Thought for {formatSeconds(block.ms ?? 0)}</span>
+        )}
+        <ChevronRight
+          className={cn("size-3 opacity-60 transition-transform", open && "rotate-90")}
+        />
       </button>
       {open ? (
         <p className="mt-1 ml-5 whitespace-pre-wrap text-xs leading-relaxed text-subtle italic">
@@ -324,38 +406,67 @@ function ToolRow({
   const open = userOpen ?? Boolean(verbose && hasBody);
   const stats = tool.diffs?.length ? statsForDiffs(tool.diffs) : null;
   const running = tool.status === "running";
+  const preview = usePreview();
 
+  const canPreview = Boolean(
+    preview &&
+    tool.status === "done" &&
+    tool.path &&
+    PREVIEWABLE.test(tool.path) &&
+    kind !== "read",
+  );
   return (
     <div>
-      <button
-        type="button"
-        disabled={!hasBody}
-        onClick={() => setUserOpen(!open)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-sm py-1 text-left text-xs text-muted-foreground enabled:hover:text-foreground"
-      >
-        <Icon className={cn("size-3.5 shrink-0", tool.status === "error" && "text-danger")} />
-        {running ? (
-          <Shimmer className="min-w-0 truncate">{toolLabel(tool)}</Shimmer>
-        ) : (
-          <span className="min-w-0 truncate font-mono text-[11.5px]">{toolLabel(tool)}</span>
-        )}
-        {stats ? (
-          <span className="shrink-0 font-mono text-2xs tabular-nums">
-            <span className="text-success">+{stats.adds}</span>{" "}
-            <span className="text-danger">−{stats.dels}</span>
-          </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={!hasBody}
+          onClick={() => setUserOpen(!open)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left text-xs text-muted-foreground enabled:hover:text-foreground"
+        >
+          <Icon className={cn("size-3.5 shrink-0", tool.status === "error" && "text-danger")} />
+          {running ? (
+            <Shimmer className="min-w-0 truncate">{toolLabel(tool)}</Shimmer>
+          ) : (
+            <span className="min-w-0 truncate font-mono text-[11.5px]">{toolLabel(tool)}</span>
+          )}
+          {stats ? (
+            <span className="shrink-0 font-mono text-2xs tabular-nums">
+              <span className="text-success">+{stats.adds}</span>{" "}
+              <span className="text-danger">−{stats.dels}</span>
+            </span>
+          ) : null}
+          {tool.status === "error" ? (
+            <span className="shrink-0 text-2xs text-danger">failed</span>
+          ) : null}
+
+          {hasBody ? (
+            <ChevronRight
+              className={cn(
+                "ml-auto size-3 shrink-0 opacity-50 transition-transform",
+                open && "rotate-90",
+              )}
+            />
+          ) : null}
+        </button>
+        {canPreview ? (
+          <button
+            type="button"
+            onClick={() => preview!({ path: tool.path })}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-2xs text-foreground hover:bg-muted"
+          >
+            <Eye className="size-3" /> Preview
+          </button>
         ) : null}
-        {tool.status === "error" ? <span className="shrink-0 text-2xs text-danger">failed</span> : null}
-        {hasBody ? (
-          <ChevronRight
-            className={cn("ml-auto size-3 shrink-0 opacity-50 transition-transform", open && "rotate-90")}
-          />
-        ) : null}
-      </button>
+      </div>
       {open ? (
         <div className="mt-1 mb-2 flex flex-col gap-2">
-          {tool.diffs?.map((d, i) => <DiffView key={`${d.path}-${i}`} diff={d} compact={compact} />)}
-          {tool.content && !tool.diffs?.length ? <Output text={tool.content} kind={kind} compact={compact} /> : null}
+          {tool.diffs?.map((d, i) => (
+            <DiffView key={`${d.path}-${i}`} diff={d} compact={compact} />
+          ))}
+          {tool.content && !tool.diffs?.length ? (
+            <Output text={tool.content} kind={kind} compact={compact} />
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -421,7 +532,12 @@ export function DiffRows({
 }) {
   const name = path?.split("/").slice(-2).join("/");
   return (
-    <div className={cn("overflow-hidden rounded-md border border-border bg-background/60", fill && "flex min-h-0 flex-col")}>
+    <div
+      className={cn(
+        "overflow-hidden rounded-md border border-border bg-background/60",
+        fill && "flex min-h-0 flex-col",
+      )}
+    >
       {name ? (
         <div className="flex items-center gap-2 border-b border-border px-2.5 py-1 font-mono text-2xs text-muted-foreground">
           <FileSearch className="size-3" />
@@ -463,7 +579,11 @@ export function DiffRows({
                     <span
                       className={cn(
                         "mr-1.5 select-none",
-                        r.kind === "add" ? "text-success" : r.kind === "del" ? "text-danger" : "text-subtle",
+                        r.kind === "add"
+                          ? "text-success"
+                          : r.kind === "del"
+                            ? "text-danger"
+                            : "text-subtle",
                       )}
                     >
                       {r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "}
@@ -486,7 +606,12 @@ function AgentNote({ message, compact }: { message: ChatMessage; compact?: boole
   const who = useResolvedProvider(message.fromProviderId ?? "claude");
   const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
   return (
-    <div className={cn("rounded-xl border border-border bg-surface px-3.5 py-2.5", compact && "px-3 py-2")}>
+    <div
+      className={cn(
+        "rounded-xl border border-border bg-surface px-3.5 py-2.5",
+        compact && "px-3 py-2",
+      )}
+    >
       <p className="mb-1.5 flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
         <Send className="size-3" />
         <ProviderDot id={message.fromProviderId ?? "claude"} />
@@ -498,7 +623,9 @@ function AgentNote({ message, compact }: { message: ChatMessage; compact?: boole
           </>
         ) : null}
       </p>
-      <p className={cn("whitespace-pre-wrap text-sm leading-relaxed", compact && "text-xs")}>{text}</p>
+      <p className={cn("whitespace-pre-wrap text-sm leading-relaxed", compact && "text-xs")}>
+        {text}
+      </p>
     </div>
   );
 }
@@ -542,7 +669,12 @@ export const Markdown = memo(function Markdown({
         remarkPlugins={[remarkGfm]}
         components={{
           a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent underline underline-offset-2"
+            >
               {children}
             </a>
           ),
@@ -550,7 +682,11 @@ export const Markdown = memo(function Markdown({
             const lang = /language-([\w-]+)/.exec(className ?? "")?.[1];
             const body = String(children ?? "");
             if (!lang && !body.includes("\n")) {
-              return <code className="rounded-xs bg-muted px-1 py-0.5 font-mono text-[0.85em]">{children}</code>;
+              return (
+                <code className="rounded-xs bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  {children}
+                </code>
+              );
             }
             return <CodeBlock lang={lang} body={body.replace(/\n$/, "")} />;
           },
@@ -565,10 +701,23 @@ export const Markdown = memo(function Markdown({
 
 function CodeBlock({ lang, body }: { lang?: string; body: string }) {
   const [copied, setCopied] = useState(false);
+  const preview = usePreview();
+  const canPreview = preview && (lang === "html" || lang === "svg") && body.length > 40;
   return (
     <div className="group/code my-2 overflow-hidden rounded-lg border border-border bg-background/70">
       <div className="flex items-center justify-between border-b border-border px-3 py-1 text-2xs text-subtle">
         <span className="font-mono">{lang ?? "text"}</span>
+        <span className="flex-1" />
+        {canPreview ? (
+          <button
+            type="button"
+            onClick={() => preview!({ code: body, lang })}
+            className="mr-3 inline-flex items-center gap-1 opacity-70 hover:opacity-100"
+            aria-label="Preview this code"
+          >
+            <Eye className="size-3" /> Preview
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => {

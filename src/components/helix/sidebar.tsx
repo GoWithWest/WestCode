@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, Blocks, CircleDashed, Hammer, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { Archive, ArchiveRestore, Blocks, Brain, CircleDashed, Hammer, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
 import { dotActivity, dotStateFor } from "@/lib/dots";
 import type { Session } from "@/lib/types";
 import { AgentAvatar } from "./agents-view";
@@ -169,16 +169,7 @@ export function Sidebar() {
         >
           <Blocks className="size-3.5" />
           Library
-          {learnPending ? (
-            <span
-              className="ml-auto rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-foreground tabular-nums"
-              title={`${learnPending} learning proposal${learnPending === 1 ? "" : "s"} to review`}
-            >
-              {learnPending}
-            </span>
-          ) : (
-            <span className="ml-auto text-2xs tabular-nums text-subtle">{liveAddons.length}</span>
-          )}
+          <span className="ml-auto text-2xs tabular-nums text-subtle">{liveAddons.length}</span>
         </Button>
         <Button
           variant="ghost"
@@ -192,6 +183,23 @@ export function Sidebar() {
         >
           <Users className="size-3.5" />
           Agents
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={view === "memory" ? "w-full justify-start bg-muted/60" : "w-full justify-start text-muted-foreground"}
+          onClick={() => setView("memory")}
+        >
+          <Brain className="size-3.5" />
+          Memory
+          {learnPending ? (
+            <span
+              className="ml-auto rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-foreground tabular-nums"
+              title={`${learnPending} learning proposal${learnPending === 1 ? "" : "s"} to review`}
+            >
+              {learnPending}
+            </span>
+          ) : null}
         </Button>
         <WestCreateNav active={view === "westcreate"} onOpen={() => setView("westcreate")} />
         <Button

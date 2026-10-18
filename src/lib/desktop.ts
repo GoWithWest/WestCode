@@ -47,6 +47,8 @@ export type SessionEvent = {
     | "usage"
     | "info"
     | "mode"
+    | "task"
+    | "caps"
     | "noop";
   text?: string;
   toolId?: string;
@@ -57,6 +59,9 @@ export type SessionEvent = {
   plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
   usage?: { used: number; size: number };
   modeId?: string;
+  suggestion?: string | null;
+  task?: { id: string; kind: "background" | "subagent"; description?: string; state: string; summary?: string };
+  steering?: boolean;
   path?: string;
   command?: string;
   content?: string;
@@ -147,6 +152,8 @@ export type GitBridge = {
   sync: (cwd: string, action: string) => Promise<{ ok: boolean; error?: string }>;
   log: (cwd: string, p?: { limit?: number; skip?: number }) => Promise<{ ok: boolean; commits: GitCommit[] }>;
   show: (cwd: string, sha: string) => Promise<{ ok: boolean; patch?: string; error?: string }>;
+  findRepos?: (cwd: string) => Promise<{ ok: boolean; repos: { path: string; name: string; mtime: number }[] }>;
+  init?: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   checkpoint?: (cwd: string, label: string) => Promise<{ ok: boolean; sha?: string; error?: string }>;
   restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; error?: string }>;
   onProgress: (
@@ -182,8 +189,50 @@ export type LearnBridge = {
   }) => Promise<{ ok: boolean; error?: string; reply?: string; staged: LearnProposal[] }>;
   cancel: (origin: string) => Promise<{ ok: boolean }>;
   pending: () => Promise<LearnProposal[]>;
-  decide: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<{ ok: boolean; error?: string }>;
+  decide: (
+    id: string,
+    verdict: "approve" | "reject",
+    edited?: string,
+    opts?: { memoryRepo?: string; memorySync?: boolean },
+  ) => Promise<{ ok: boolean; error?: string; shared?: { ok: boolean; pushed?: boolean; note?: string; error?: string } }>;
   memory: () => Promise<{ user: string; memory: string; snapshot: string }>;
+};
+
+export type MemorySource = {
+  provider: string;
+  kind: "rules" | "memory";
+  label: string;
+  path: string;
+  entries: number | null;
+};
+
+export type RepoInfo = {
+  exists: boolean;
+  repo: boolean;
+  root?: string;
+  remote?: string;
+  lastCommit?: string;
+  unpushed?: number | null;
+};
+
+export type MemoryHubBridge = {
+  state: (memoryRepo?: string) => Promise<{
+    ok: boolean;
+    sources: MemorySource[];
+    repo: RepoInfo | null;
+    detected: { path: string; from: string; remote: string } | null;
+    sync: { provider: string; path: string; synced: boolean }[];
+    facts: string[];
+    local: string;
+  }>;
+  preview: (path: string) => Promise<{ files: string[]; text: string }>;
+  createRepo: (dir?: string) => Promise<{ ok: boolean; dir: string; error?: string }>;
+  pickFolder: () => Promise<string | null>;
+  setRemote: (dir: string, url: string) => Promise<{ ok: boolean; error?: string }>;
+  sync: (
+    enabled: boolean,
+    memoryRepo?: string,
+  ) => Promise<{ ok: boolean; results: { provider: string; path: string; status: string; error?: string }[] }>;
 };
 
 export type WestCreateSnapshot = {
@@ -270,6 +319,20 @@ type WestcodeBridge = {
   git?: GitBridge;
   westcreate?: () => Promise<WestCreateSnapshot>;
   learn?: LearnBridge;
+  judgeGoal?: (p: {
+    sessionId: string;
+    providerId: string;
+    cwd: string;
+    model: string;
+    goal: string;
+    messages: { role: string; text: string }[];
+  }) => Promise<{ ok: boolean; verdict: "done" | "blocked" | "continue"; reason: string }>;
+  memoryHub?: MemoryHubBridge;
+  artifact?: {
+    file: (root: string, file: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    inline: (code: string, lang: string) => Promise<{ ok: boolean; url?: string }>;
+    openExternal: (url: string) => Promise<{ ok: boolean }>;
+  };
   openWestcreate?: () => Promise<{ ok: boolean; error?: string }>;
   apiPrompt: (payload: {
     endpoint: string;
@@ -323,6 +386,8 @@ type WestcodeBridge = {
     text: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   cancel: (sessionId: string) => Promise<{ ok: boolean }>;
+  steer?: (sessionId: string, text: string) => Promise<{ ok: boolean; error?: string }>;
+  stopTask?: (sessionId: string, taskId: string) => Promise<{ ok: boolean; error?: string }>;
   stopSession: (sessionId: string) => Promise<{ ok: boolean }>;
   permission: (payload: {
     sessionId: string;

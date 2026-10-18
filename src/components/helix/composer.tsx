@@ -322,6 +322,12 @@ export function Composer({ session }: { session: Session }) {
                   return;
                 }
               }
+              // Tab takes the agent's predicted next prompt into the box.
+              if (e.key === "Tab" && !e.shiftKey && !value && session.suggestion) {
+                e.preventDefault();
+                setValue(session.suggestion);
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
                 e.preventDefault();
                 submit();
@@ -331,7 +337,9 @@ export function Composer({ session }: { session: Session }) {
             placeholder={
               running
                 ? `Queue a follow-up for ${provider.short}…`
-                : `Message ${provider.short}…  / commands  @ a session`
+                : session.suggestion
+                  ? `${session.suggestion}   ⇥ Tab`
+                  : `Message ${provider.short}…  / commands  @ a session`
             }
             className="w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-sm leading-relaxed text-foreground outline-none placeholder:text-subtle"
           />

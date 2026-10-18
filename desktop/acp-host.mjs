@@ -46,6 +46,7 @@ function deskMcp(sessionId, providerId) {
 
 /** The learning reviewer's only extra tools: read skills/memory, propose. */
 function learnMcp(sessionId, opts) {
+  if (opts.judge) return [];
   const nodeBin = which("node") || process.execPath;
   const env = [
     { name: "WESTCODE_LEARN_SESSION", value: String(opts.origin || sessionId) },
@@ -120,6 +121,18 @@ function permissionFlag(providerId, mode) {
   return "default";
 }
 
+/**
+ * The ACP adapters, pinned to versions WestCode was tested with. Unpinned,
+ * `npx -y` keeps whatever version it first cached in ~/.westcode/npm-cache
+ * forever (users were stuck on claude-agent-acp 0.49 while 0.93 shipped
+ * steering, prompt suggestions and many fixes). A WestCode release bumps
+ * these.
+ */
+export const ADAPTERS = {
+  claude: "@agentclientprotocol/claude-agent-acp@0.93.0",
+  codex: "@agentclientprotocol/codex-acp@2.2.2",
+};
+
 function spawnSpec(providerId, model, effort, opts = {}) {
   const env = childEnv();
   const modelId = mapModel(providerId, model);
@@ -157,7 +170,7 @@ function spawnSpec(providerId, model, effort, opts = {}) {
     }
     return {
       command: npx,
-      args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+      args: ["-y", ADAPTERS.claude],
       env: {
         ...npmCacheEnv(env),
         CLAUDE_CODE_PATH: claude,
@@ -178,7 +191,7 @@ function spawnSpec(providerId, model, effort, opts = {}) {
     if (npx) {
       return {
         command: npx,
-        args: ["-y", "@agentclientprotocol/codex-acp"],
+        args: ["-y", ADAPTERS.codex],
         env: {
           ...npmCacheEnv(env),
           ...(codex ? { CODEX_PATH: codex } : {}),
@@ -344,10 +357,18 @@ class AcpSession {
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: false,
+        // Claude's adapter sends its task plan, predicted next prompt and
+        // background-task updates only to clients that declare the
+        // (JetBrains) AIR extension. Version 1 with asyncTasks only: no
+        // other optional AIR behaviour is requested. Other agents ignore it.
+        _meta: { jetbrains: { air: { version: 1, capabilities: ["asyncTasks"] } } },
       },
     });
 
     await this._authenticate(init);
+    // Claude's adapter can take a message into the running turn.
+    this.canSteer = Boolean(init?._meta?.steering?.supported);
+    if (this.canSteer) this.emit({ type: "caps", steering: true });
 
     // A history read needs no tools and must not join the desk bus.
     const mcpServers = this.reviewer
@@ -453,6 +474,26 @@ class AcpSession {
       sessionId: this.agentSessionId,
       prompt: [{ type: "text", text: body }],
     });
+  }
+
+  /** Inject a message into the running turn (only when the agent supports it). */
+  steer(text) {
+    if (!this.canSteer || !this.agentSessionId || this.dead) return Promise.resolve({ ok: false });
+    return this.rpc("_session/steering", {
+      sessionId: this.agentSessionId,
+      prompt: [{ type: "text", text }],
+    }).then(
+      () => ({ ok: true }),
+      (err) => ({ ok: false, error: err.message }),
+    );
+  }
+
+  stopTask(asyncTaskId) {
+    if (!this.agentSessionId || this.dead) return Promise.resolve({ ok: false });
+    return this.rpc("_session/async_task/stop", { sessionId: this.agentSessionId, asyncTaskId }).then(
+      () => ({ ok: true }),
+      (err) => ({ ok: false, error: err.message }),
+    );
   }
 
   cancel() {
@@ -622,7 +663,9 @@ class AcpSession {
         const call = params.toolCall || {};
         const blob = `${call.title || ""} ${call.name || ""} ${JSON.stringify(call._meta || {})}`.toLowerCase();
         const k = String(call.kind || "").toLowerCase();
-        const allowed = /westcode[-_]learn|westcode_skill|westcode_memory/.test(blob) || ["read", "search", "think"].includes(k);
+        const allowed =
+          !this.reviewer.judge &&
+          (/westcode[-_]learn|westcode_skill|westcode_memory/.test(blob) || ["read", "search", "think"].includes(k));
         const opts = params.options || [];
         const reject =
           opts.find((o) => /reject/i.test(`${o.kind || ""} ${o.optionId || ""}`))?.optionId || "reject";
@@ -950,5 +993,25 @@ export async function runReview({ providerId, cwd, model, prompt, doMemory, doSk
 export function cancelReviews(origin) {
   for (const [id, s] of sessions) {
     if (id.startsWith(`review:${origin}:`)) s.cancel();
+  }
+}
+
+/** One answer from the session's CLI with no tools at all (the goal judge). */
+export async function runOneShot({ providerId, cwd, model, prompt, origin }) {
+  const id = `judge:${origin || "session"}:${Date.now()}`;
+  let reply = "";
+  const s = ensureSession(
+    { sessionId: id, providerId, cwd, model, effort: "low", permissionMode: "ask", reviewer: { judge: true, origin } },
+    (ev) => {
+      if (ev.type === "text") reply += ev.text || "";
+    },
+  );
+  try {
+    await s.prompt(prompt, []);
+    return { ok: true, reply: reply.trim() };
+  } catch (err) {
+    return { ok: false, error: err.message, reply: reply.trim() };
+  } finally {
+    dropSession(id);
   }
 }

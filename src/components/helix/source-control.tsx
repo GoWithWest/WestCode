@@ -18,6 +18,7 @@ import {
 import { parsePatch } from "@/lib/diff";
 import { westcode, type GitChanges, type GitCommit, type GitFile } from "@/lib/desktop";
 import { cn, relativeTime } from "@/lib/utils";
+import { useHelix } from "@/lib/store";
 import type { Session } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { DiffRows } from "./blocks";
@@ -45,7 +46,12 @@ export function SourceControlPanel({
   onClose: () => void;
 }) {
   const api = westcode()?.git;
-  const cwd = session.cwd;
+  // The session's folder, or a repository inside it the user picked.
+  const cwd = session.scmRepo || session.cwd;
+  const pickRepo = (path: string | undefined) =>
+    useHelix.setState((st) => ({
+      sessions: st.sessions.map((x) => (x.id === session.id ? { ...x, scmRepo: path } : x)),
+    }));
   const [state, setState] = useState<GitChanges | null>(null);
   const [tab, setTab] = useState<"changes" | "history">("changes");
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
@@ -125,7 +131,20 @@ export function SourceControlPanel({
   if (state && !state.repo) {
     return (
       <PanelShell onClose={onClose} title="Source control">
-        <p className="p-4 text-xs text-muted-foreground">{cwd} is not a git repository.</p>
+        <RepoPicker
+          folder={session.cwd}
+          onPick={(p) => {
+            setState(null);
+            pickRepo(p);
+          }}
+          onInit={async () => {
+            const r = await api.init?.(session.cwd);
+            if (r && !r.ok) setError(r.error ?? "git init failed");
+            pickRepo(undefined);
+            void refresh();
+          }}
+        />
+        {error ? <p className="px-4 text-2xs text-danger">{error}</p> : null}
       </PanelShell>
     );
   }
@@ -135,6 +154,19 @@ export function SourceControlPanel({
 
   return (
     <PanelShell onClose={onClose} title="Source control">
+      {session.scmRepo && session.scmRepo !== session.cwd ? (
+        <button
+          type="button"
+          onClick={() => {
+            setState(null);
+            pickRepo(undefined);
+          }}
+          className="flex w-full items-center gap-1.5 border-b border-border px-3 py-1.5 text-left text-2xs text-muted-foreground hover:text-foreground"
+        >
+          ← Repositories in {session.cwd.split("/").filter(Boolean).pop()} ·{" "}
+          <span className="truncate font-medium text-foreground">{session.scmRepo.split("/").pop()}</span>
+        </button>
+      ) : null}
       <div className="flex items-center gap-1.5 border-b border-border px-3 py-2">
         <BranchPicker cwd={cwd} current={state?.branch ?? null} onChanged={refresh} />
         {sync && sync.action !== "none" ? (
@@ -393,6 +425,70 @@ export function SourceControlPanel({
       return r;
     });
   }
+}
+
+/** The folder is not a repository: list the ones inside it, or start one. */
+function RepoPicker({
+  folder,
+  onPick,
+  onInit,
+}: {
+  folder: string;
+  onPick: (path: string) => void;
+  onInit: () => void;
+}) {
+  const api = westcode()?.git;
+  const [repos, setRepos] = useState<{ path: string; name: string }[] | null>(null);
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    void api?.findRepos?.(folder).then((r) => setRepos(r.repos ?? []));
+  }, [api, folder]);
+  const shown = (repos ?? []).filter((r) => !q.trim() || r.path.toLowerCase().includes(q.trim().toLowerCase()));
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b border-border px-3 py-3">
+        <p className="text-xs font-medium">This folder is not a git repository</p>
+        <p className="mt-0.5 text-2xs text-muted-foreground">
+          {repos === null
+            ? "Looking for repositories inside it…"
+            : repos.length
+              ? `Pick one of the ${repos.length} repositories inside ${folder.split("/").filter(Boolean).pop()}, or start one here.`
+              : "No repositories inside it. Start one here to track changes."}
+        </p>
+        <div className="mt-2 flex gap-1.5">
+          {repos && repos.length > 6 ? (
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter repositories"
+              className="h-7 min-w-0 flex-1 rounded-md border border-border bg-window px-2 text-xs outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
+            />
+          ) : null}
+          <Button size="sm" variant="outline" onClick={onInit}>
+            <Plus className="size-3.5" />
+            Initialize repository
+          </Button>
+        </div>
+      </div>
+      <ul className="scrollbar-thin min-h-0 flex-1 overflow-y-auto py-1" aria-label="Repositories in this folder">
+        {shown.map((r) => (
+          <li key={r.path}>
+            <button
+              type="button"
+              onClick={() => onPick(r.path)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
+            >
+              <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium">{r.name}</span>
+                <span className="block truncate text-2xs text-subtle">{r.path.slice(folder.length + 1)}</span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function UndoStrip({ sha, onUndo }: { sha: string; onUndo: () => void }) {

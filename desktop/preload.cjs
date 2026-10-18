@@ -30,12 +30,26 @@ contextBridge.exposeInMainWorld("westcode", {
   installSkillFile: (path, name, providers) => ipcRenderer.invoke("skill:install-file", { path, name, providers }),
   gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
   westcreate: () => ipcRenderer.invoke("westcreate:snapshot"),
+  artifact: {
+    file: (root, file) => ipcRenderer.invoke("artifact:file", { root, file }),
+    inline: (code, lang) => ipcRenderer.invoke("artifact:inline", { code, lang }),
+    openExternal: (url) => ipcRenderer.invoke("artifact:open-external", url),
+  },
+  judgeGoal: (payload) => ipcRenderer.invoke("goal:judge", payload),
   learn: {
     review: (payload) => ipcRenderer.invoke("learn:review", payload),
     cancel: (origin) => ipcRenderer.invoke("learn:cancel", origin),
     pending: () => ipcRenderer.invoke("learn:pending"),
-    decide: (id, verdict, edited) => ipcRenderer.invoke("learn:decide", { id, verdict, edited }),
+    decide: (id, verdict, edited, opts) => ipcRenderer.invoke("learn:decide", { id, verdict, edited, ...(opts || {}) }),
     memory: () => ipcRenderer.invoke("learn:memory"),
+  },
+  memoryHub: {
+    state: (memoryRepo) => ipcRenderer.invoke("memory:state", { memoryRepo }),
+    preview: (path) => ipcRenderer.invoke("memory:preview", { path }),
+    createRepo: (dir) => ipcRenderer.invoke("memory:create-repo", { dir }),
+    pickFolder: () => ipcRenderer.invoke("memory:pick-folder"),
+    setRemote: (dir, url) => ipcRenderer.invoke("memory:set-remote", { dir, url }),
+    sync: (enabled, memoryRepo) => ipcRenderer.invoke("memory:sync", { enabled, memoryRepo }),
   },
   openWestcreate: () => ipcRenderer.invoke("westcreate:open"),
   git: {
@@ -49,6 +63,8 @@ contextBridge.exposeInMainWorld("westcode", {
     sync: (cwd, action) => ipcRenderer.invoke("git:sync", { cwd, action }),
     log: (cwd, payload) => ipcRenderer.invoke("git:log", { cwd, ...(payload || {}) }),
     show: (cwd, sha) => ipcRenderer.invoke("git:show", { cwd, sha }),
+    findRepos: (cwd) => ipcRenderer.invoke("git:find-repos", { cwd }),
+    init: (cwd) => ipcRenderer.invoke("git:init", { cwd }),
     checkpoint: (cwd, label) => ipcRenderer.invoke("git:checkpoint", { cwd, label }),
     restore: (cwd, sha) => ipcRenderer.invoke("git:restore", { cwd, sha }),
     onProgress: (fn) => {
@@ -72,6 +88,8 @@ contextBridge.exposeInMainWorld("westcode", {
   openSession: (payload) => ipcRenderer.invoke("session:open", payload),
   prompt: (payload) => ipcRenderer.invoke("session:prompt", payload),
   cancel: (sessionId) => ipcRenderer.invoke("session:cancel", sessionId),
+  steer: (sessionId, text) => ipcRenderer.invoke("session:steer", { sessionId, text }),
+  stopTask: (sessionId, taskId) => ipcRenderer.invoke("session:stop-task", { sessionId, taskId }),
   stopSession: (sessionId) => ipcRenderer.invoke("session:stop", sessionId),
   permission: (payload) => ipcRenderer.invoke("session:permission", payload),
   onEvent: (fn) => {

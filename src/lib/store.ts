@@ -121,6 +121,13 @@ export type AppSettings = {
    * "ask" stages them for approval, "auto" applies them, "off" never reviews.
    */
   learning: "off" | "ask" | "auto";
+  /**
+   * The shared memory store: a git repository (preferred — memory follows
+   * the user) or "" for WestCode's local desk memory.
+   */
+  memoryRepo: string;
+  /** Keep a shared-memory block in every installed CLI's global rules file. */
+  memorySync: boolean;
   /** Appearance: follow the OS, or force dark / light. */
   theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
@@ -138,6 +145,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   transcriptDetail: "normal",
   learning: "ask",
   theme: "dark",
+  memoryRepo: "",
+  memorySync: false,
   launchAtLogin: false,
 };
 
@@ -328,6 +337,15 @@ export type HelixState = {
   /** Review a session now (or when counters fire), staging proposals. */
   reviewSession: (sessionId: string, opts?: { manual?: boolean }) => Promise<void>;
   decideProposal: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<string | null>;
+  /** After a turn: ask the judge and keep going toward the session's goal. */
+  advanceGoal: (sessionId: string) => Promise<void>;
+  stopGoal: (sessionId: string) => void;
+  /** Interrupt the running turn and send this queued message now (steer). */
+  steerNow: (sessionId: string, msgId: string) => void;
+  /** Take a queued message back before the agent reads it. */
+  unqueue: (sessionId: string, msgId: string) => void;
+  /** Preview a file the agent made, or inline html/svg, in the artifact pane. */
+  openArtifact: (sessionId: string, what: { path?: string; code?: string; lang?: string }) => Promise<string | null>;
   /** Put the session's folder back to a checkpoint (undoable). */
   restoreCheckpoint: (sessionId: string, sha: string, label: string) => Promise<void>;
   /** Link (or unlink) a skill group to a session. */
@@ -873,9 +891,28 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     patch((ses) => ({ ...ses, usage: ev.usage }));
     return;
   }
-  if (ev.type === "info" && ev.title) {
-    // The agent's own title for the work, until the user names it.
-    patch((ses) => (ses.titleLocked ? ses : { ...ses, title: ev.title! }));
+  if (ev.type === "info") {
+    // The agent's own title for the work (until the user names it), and its
+    // guess at your next prompt.
+    patch((ses) => ({
+      ...ses,
+      ...(ev.title && !ses.titleLocked ? { title: ev.title } : {}),
+      ...(ev.suggestion !== undefined ? { suggestion: ev.suggestion } : {}),
+    }));
+    return;
+  }
+  if (ev.type === "task" && ev.task) {
+    const t = ev.task;
+    patch((ses) => {
+      const cur = ses.tasks ?? [];
+      const i = cur.findIndex((x) => x.id === t.id);
+      const tasks = i >= 0 ? cur.map((x, j) => (j === i ? { ...x, ...t, description: t.description ?? x.description } : x)) : [...cur, t];
+      return { ...ses, tasks: tasks.slice(-30) };
+    });
+    return;
+  }
+  if (ev.type === "caps") {
+    patch((ses) => ({ ...ses, canSteer: Boolean(ev.steering) }));
     return;
   }
   if (ev.type === "mode" && ev.modeId) {
@@ -1070,7 +1107,9 @@ function bindDesktopEvents() {
         ev.type === "plan" ||
         ev.type === "usage" ||
         ev.type === "info" ||
-        ev.type === "mode"
+        ev.type === "mode" ||
+        ev.type === "task" ||
+        ev.type === "caps"
       ) {
         applyEvent(ev.sessionId, "", ev);
       }
@@ -2196,10 +2235,121 @@ export const useHelix = create<HelixState>((set, get) => ({
   decideProposal: async (id, verdict, edited) => {
     const api = westcode()?.learn;
     if (!api) return "Needs the desktop app.";
-    const r = await api.decide(id, verdict, edited);
+    const st = get().settings;
+    const r = await api.decide(id, verdict, edited, { memoryRepo: st.memoryRepo || undefined, memorySync: st.memorySync });
     await get().refreshLearning();
     if (verdict === "approve") void get().refreshLibrary();
     return r.ok ? null : (r.error ?? "Failed.");
+  },
+
+  advanceGoal: async (sessionId) => {
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    const g = ses?.goal;
+    const api = westcode();
+    if (!ses || !g || g.status !== "active" || !api?.judgeGoal) return;
+    const patchGoal = (goal: Partial<NonNullable<Session["goal"]>>) =>
+      set((s) => ({
+        sessions: patchSession(s.sessions, sessionId, (x) => (x.goal ? { ...x, goal: { ...x.goal, ...goal } } : x)),
+      }));
+    if (g.turns >= g.budget) {
+      patchGoal({ status: "stopped", reason: `Used its ${g.budget}-turn budget.` });
+      return;
+    }
+    patchGoal({ status: "judging" });
+    const messages = ses.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-10)
+      .map((m) => ({ role: m.role, text: blocksToPlain(m.blocks).slice(0, 3000) }));
+    const v = await api.judgeGoal({ sessionId, providerId: ses.providerId, cwd: ses.cwd, model: ses.model, goal: g.text, messages });
+    // The user may have stopped the goal while the judge ran.
+    if (get().sessions.find((x) => x.id === sessionId)?.goal?.status !== "judging") return;
+    if (v.verdict === "continue") {
+      patchGoal({ status: "active", turns: g.turns + 1, reason: v.reason });
+      void get().send(
+        sessionId,
+        `Continue toward the goal: ${g.text}${v.reason ? `\nNext, per the review: ${v.reason}` : ""}`,
+        { display: `Continue toward the goal${v.reason ? ` — ${v.reason}` : ""}` },
+      );
+    } else {
+      patchGoal({ status: v.verdict, reason: v.reason });
+    }
+  },
+
+  stopGoal: (sessionId) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => (x.goal ? { ...x, goal: { ...x.goal, status: "stopped", reason: "Stopped by you." } } : x)),
+    }));
+  },
+
+  steerNow: (sessionId, msgId) => {
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    const item = ses?.queued?.find((q) => q.msgId === msgId);
+    if (!ses || !item) return;
+    // The agent can take it into the running turn: no interruption at all.
+    const api = westcode();
+    if (ses.canSteer && ses.status === "running" && api?.steer) {
+      void api.steer(sessionId, item.text).then((r) => {
+        if (r.ok) {
+          set((s) => ({
+            sessions: patchSession(s.sessions, sessionId, (x) => ({
+              ...x,
+              queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
+            })),
+          }));
+        } else {
+          interruptAndSend();
+        }
+      });
+      return;
+    }
+    interruptAndSend();
+    function interruptAndSend() {
+    // Cancel the running turn the way stop() does (its late events must not
+    // land on the new turn), but keep the rest of the queue.
+    abortBySession.get(sessionId)?.abort();
+    abortBySession.delete(sessionId);
+    promptAsst.delete(sessionId);
+    void westcode()?.cancel(sessionId);
+    void westcode()?.stopSession(sessionId);
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        status: "waiting",
+        permission: null,
+        queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
+        messages: x.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+      })),
+    }));
+    queueMicrotask(() => {
+      void get().send(sessionId, item!.text, { incoming: item!.incoming, replay: true, replayOf: item!.msgId });
+    });
+    }
+  },
+
+  unqueue: (sessionId, msgId) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
+        messages: x.messages.filter((m) => m.id !== msgId),
+      })),
+    }));
+  },
+
+  openArtifact: async (sessionId, what) => {
+    const api = westcode()?.artifact;
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    if (!api || !ses) return "Previews need the WestCode desktop app.";
+    const r = what.path ? await api.file(ses.cwd, what.path) : await api.inline(what.code ?? "", what.lang ?? "html");
+    if (!r.ok || !r.url) return r.ok ? "No preview." : ((r as { error?: string }).error ?? "No preview.");
+    const title = what.path ? what.path.split("/").pop()! : `${(what.lang ?? "html").toUpperCase()} from the reply`;
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        artifact: { title, url: r.url!, path: what.path, markdown: /\.(md|markdown)$/i.test(what.path ?? "") },
+      })),
+    }));
+    return null;
   },
 
   restoreCheckpoint: async (sessionId, sha, label) => {
@@ -2435,6 +2585,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...ses,
         status: "running",
         updatedAt: Date.now(),
+        suggestion: null,
         turns: ses.turns + 1,
         messages: userMsg
           ? [...ses.messages, userMsg, asstMsg]
@@ -2480,7 +2631,10 @@ export const useHelix = create<HelixState>((set, get) => ({
     const groupsText = groupPreamble(linkedGroups);
     // Approved desk memory rides the first turn of each CLI session (a
     // frozen snapshot — it never changes mid-session).
-    const memoryText = !latest.agentSessionId && get().deskMemory ? `${get().deskMemory}\n` : "";
+    const repoLine = get().settings.memoryRepo
+      ? `[Shared memory] Durable memories for this user live in the git repository ${get().settings.memoryRepo}: one Markdown file per fact (frontmatter name/description/type), add a line to its index or TIMELINE.md if it has one, then commit and push. Check it before work that may depend on earlier decisions.\n`
+      : "";
+    const memoryText = !latest.agentSessionId && (get().deskMemory || repoLine) ? `${repoLine}${get().deskMemory}\n` : "";
     const mentioned = extractMentions(outgoing, get().agents).filter(
       (m) => m.agent.id !== latest.agentId,
     );
@@ -2677,6 +2831,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         })),
       }));
       if (!opts?.incoming) void get().reviewSession(sessionId);
+      void get().advanceGoal(sessionId);
       notifyBackground(
         sessionId,
         `${latest.title} finished`,
@@ -2814,6 +2969,7 @@ function runSlash(
     "ungroup",
     "reflect",
     "btw",
+    "goal",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -2837,6 +2993,37 @@ function runSlash(
       get().customProviders,
     );
     note(`WestCode desk roster\n\n${formatRoster(roster)}`);
+    return true;
+  }
+
+  if (cmd === "goal") {
+    // Grok has its own /goal; let the CLI run it.
+    if (session.slashCommands?.some((c) => c.cmd === "goal")) return false;
+    if (!arg) {
+      const g = session.goal;
+      note(
+        g
+          ? `Goal: ${g.text}\nStatus: ${g.status} · turn ${g.turns}/${g.budget}${g.reason ? `\n${g.reason}` : ""}`
+          : "Usage: /goal <what done looks like> — WestCode keeps the agent working until a judge says it is done or blocked. /goal stop ends it.",
+      );
+      return true;
+    }
+    if (/^(stop|off|clear|cancel)$/i.test(arg)) {
+      get().stopGoal(sessionId);
+      note("Goal stopped.");
+      return true;
+    }
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        goal: { text: arg, turns: 1, budget: 20, status: "active" },
+      })),
+    }));
+    void get().send(
+      sessionId,
+      `Goal: ${arg}\nWork toward this goal. Keep going across turns until it is met; say clearly what is done and what is left at the end of each turn.`,
+      { display: `🎯 ${arg}` },
+    );
     return true;
   }
 

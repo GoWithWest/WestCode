@@ -9,11 +9,15 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews } from "./acp-host.mjs";
+import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews, runOneShot } from "./acp-host.mjs";
+import { judgePrompt, parseVerdict } from "./goal.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 import * as gitOps from "./git.mjs";
 import * as westcreate from "./westcreate.mjs";
 import * as learn from "./learn.mjs";
+import * as memoryHub from "./memory-hub.mjs";
+import * as memoryFlow from "./memory-flow.mjs";
+import * as artifacts from "./artifact-server.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -551,13 +555,61 @@ ipcMain.handle("learn:review", async (_e, p = {}) => {
   const staged = learn.listPending().filter((x) => !before.has(x.id));
   return { ...r, staged };
 });
+ipcMain.handle("goal:judge", async (_e, p = {}) => {
+  if (!PROVIDERS[p.providerId]) return { ok: false, verdict: "blocked", reason: "Goals run on Claude, Grok or Codex sessions." };
+  let dir = homedir();
+  try {
+    dir = repoDir(p.cwd);
+  } catch {
+    /* keep home */
+  }
+  const r = await runOneShot({
+    providerId: p.providerId,
+    cwd: dir,
+    model: p.model,
+    prompt: judgePrompt(String(p.goal || ""), learn.digest(Array.isArray(p.messages) ? p.messages : [], 8)),
+    origin: p.sessionId,
+  });
+  return r.ok ? { ok: true, ...parseVerdict(r.reply) } : { ok: false, verdict: "continue", reason: r.error || "" };
+});
+
 ipcMain.handle("learn:cancel", (_e, origin) => {
   cancelReviews(String(origin || ""));
   return { ok: true };
 });
 ipcMain.handle("learn:pending", () => learn.listPending());
-ipcMain.handle("learn:decide", (_e, p = {}) => learn.decide(String(p.id || ""), p.verdict === "approve" ? "approve" : "reject", p.edited));
+ipcMain.handle("learn:decide", (_e, p = {}) => memoryFlow.decideAndShare(p));
+ipcMain.handle("memory:state", (_e, p = {}) => memoryFlow.memoryState(p.memoryRepo));
+ipcMain.handle("memory:preview", (_e, p = {}) => memoryHub.preview(String(p.path || "")));
+ipcMain.handle("memory:create-repo", async (_e, p = {}) => {
+  const dir = String(p.dir || join(homedir(), "memory"));
+  return { ...(await memoryHub.createRepo(dir)), dir };
+});
+ipcMain.handle("memory:pick-folder", async () => {
+  const res = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"], title: "Memory repository folder" });
+  return res.canceled ? null : res.filePaths[0];
+});
+ipcMain.handle("memory:set-remote", (_e, p = {}) => memoryHub.setRemote(String(p.dir || ""), String(p.url || "")));
+ipcMain.handle("memory:sync", async (_e, p = {}) =>
+  p.enabled ? { ok: true, results: await memoryFlow.syncAllRules(p.memoryRepo) } : { ok: true, results: memoryHub.unsyncRules() },
+);
 ipcMain.handle("learn:memory", () => ({ user: learn.readMemory("user"), memory: learn.readMemory("memory"), snapshot: learn.memorySnapshot() }));
+
+// ---- Artifact previews (sandboxed local server, session folders only).
+ipcMain.handle("artifact:file", async (_e, p = {}) => {
+  try {
+    const root = repoDir(p.root);
+    const file = String(p.file || "").startsWith("/") ? String(p.file) : join(root, String(p.file || ""));
+    return { ok: true, url: await artifacts.previewUrl(root, file) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle("artifact:inline", async (_e, p = {}) => ({ ok: true, url: await artifacts.inlineUrl(String(p.code || ""), p.lang === "svg" ? "svg" : "html") }));
+ipcMain.handle("artifact:open-external", (_e, url) => {
+  if (/^http:\/\/127\.0\.0\.1:\d+\//.test(String(url))) void shell.openExternal(String(url));
+  return { ok: true };
+});
 
 ipcMain.handle("westcreate:snapshot", () => westcreate.snapshot());
 ipcMain.handle("westcreate:open", () => westcreate.openApp());
@@ -679,6 +731,8 @@ gitHandler("git:sync", (dir, p) =>
 );
 gitHandler("git:log", (dir, p) => gitOps.log(dir, p));
 gitHandler("git:show", (dir, p) => gitOps.commitFiles(dir, p.sha));
+gitHandler("git:find-repos", (dir) => gitOps.findRepos(dir).then((repos) => ({ ok: true, repos })));
+gitHandler("git:init", (dir) => gitOps.initRepo(dir));
 gitHandler("git:checkpoint", (dir, p) => gitOps.checkpoint(dir, String(p.label || "turn").slice(0, 80)));
 gitHandler("git:restore", (dir, p) => gitOps.restoreCheckpoint(dir, p.sha));
 
@@ -1044,6 +1098,15 @@ ipcMain.handle("session:open", async (_e, payload) => {
     // prompt spawns the pane's own agent and resumes from agentSessionId.
     dropSession(readerId);
   }
+});
+
+ipcMain.handle("session:steer", async (_e, { sessionId, text }) => {
+  const s = getSession(sessionId);
+  return s ? s.steer(String(text || "")) : { ok: false };
+});
+ipcMain.handle("session:stop-task", async (_e, { sessionId, taskId }) => {
+  const s = getSession(sessionId);
+  return s ? s.stopTask(String(taskId || "")) : { ok: false };
 });
 
 ipcMain.handle("session:cancel", (_e, sessionId) => {

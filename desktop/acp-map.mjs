@@ -112,7 +112,40 @@ export function mapUpdate(params, opts = {}) {
   }
   if (kind === "session_info_update") {
     const title = typeof u.title === "string" ? u.title.trim() : "";
-    return title ? { type: "info", title } : { type: "noop" };
+    // Claude predicts the user's next prompt here (empty list = no prediction).
+    const ps = u._meta?.promptSuggestions;
+    const suggestion = ps && Array.isArray(ps.suggestions)
+      ? String(ps.suggestions.find((x) => x && String(x.text || "").trim())?.text || "").trim() || null
+      : undefined;
+    if (!title && suggestion === undefined) return { type: "noop" };
+    return { type: "info", ...(title ? { title } : {}), ...(suggestion !== undefined ? { suggestion } : {}) };
+  }
+  if (kind === "async_task_spawned" || kind === "async_task_state_update") {
+    const id = String(u.asyncTaskId || "");
+    if (!id) return { type: "noop" };
+    return {
+      type: "task",
+      task: {
+        id,
+        kind: "background",
+        ...(u.description ? { description: String(u.description) } : {}),
+        state: kind === "async_task_spawned" ? "running" : String(u.state || "running"),
+        ...(u.summary ? { summary: String(u.summary) } : {}),
+      },
+    };
+  }
+  if (kind === "subagent_update") {
+    const id = String(u.sessionId || "");
+    if (!id) return { type: "noop" };
+    return {
+      type: "task",
+      task: {
+        id,
+        kind: "subagent",
+        ...(u.title || u.description ? { description: String(u.title || u.description) } : {}),
+        state: String(u.status || "running"),
+      },
+    };
   }
   if (kind === "current_mode_update") {
     const modeId = u.currentModeId || u.modeId || u.current_mode_id;
