@@ -337,6 +337,10 @@ export type HelixState = {
   /** Review a session now (or when counters fire), staging proposals. */
   reviewSession: (sessionId: string, opts?: { manual?: boolean }) => Promise<void>;
   decideProposal: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<string | null>;
+  /** Interrupt the running turn and send this queued message now (steer). */
+  steerNow: (sessionId: string, msgId: string) => void;
+  /** Take a queued message back before the agent reads it. */
+  unqueue: (sessionId: string, msgId: string) => void;
   /** Preview a file the agent made, or inline html/svg, in the artifact pane. */
   openArtifact: (sessionId: string, what: { path?: string; code?: string; lang?: string }) => Promise<string | null>;
   /** Put the session's folder back to a checkpoint (undoable). */
@@ -884,9 +888,28 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     patch((ses) => ({ ...ses, usage: ev.usage }));
     return;
   }
-  if (ev.type === "info" && ev.title) {
-    // The agent's own title for the work, until the user names it.
-    patch((ses) => (ses.titleLocked ? ses : { ...ses, title: ev.title! }));
+  if (ev.type === "info") {
+    // The agent's own title for the work (until the user names it), and its
+    // guess at your next prompt.
+    patch((ses) => ({
+      ...ses,
+      ...(ev.title && !ses.titleLocked ? { title: ev.title } : {}),
+      ...(ev.suggestion !== undefined ? { suggestion: ev.suggestion } : {}),
+    }));
+    return;
+  }
+  if (ev.type === "task" && ev.task) {
+    const t = ev.task;
+    patch((ses) => {
+      const cur = ses.tasks ?? [];
+      const i = cur.findIndex((x) => x.id === t.id);
+      const tasks = i >= 0 ? cur.map((x, j) => (j === i ? { ...x, ...t, description: t.description ?? x.description } : x)) : [...cur, t];
+      return { ...ses, tasks: tasks.slice(-30) };
+    });
+    return;
+  }
+  if (ev.type === "caps") {
+    patch((ses) => ({ ...ses, canSteer: Boolean(ev.steering) }));
     return;
   }
   if (ev.type === "mode" && ev.modeId) {
@@ -1081,7 +1104,9 @@ function bindDesktopEvents() {
         ev.type === "plan" ||
         ev.type === "usage" ||
         ev.type === "info" ||
-        ev.type === "mode"
+        ev.type === "mode" ||
+        ev.type === "task" ||
+        ev.type === "caps"
       ) {
         applyEvent(ev.sessionId, "", ev);
       }
@@ -2214,6 +2239,61 @@ export const useHelix = create<HelixState>((set, get) => ({
     return r.ok ? null : (r.error ?? "Failed.");
   },
 
+  steerNow: (sessionId, msgId) => {
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    const item = ses?.queued?.find((q) => q.msgId === msgId);
+    if (!ses || !item) return;
+    // The agent can take it into the running turn: no interruption at all.
+    const api = westcode();
+    if (ses.canSteer && ses.status === "running" && api?.steer) {
+      void api.steer(sessionId, item.text).then((r) => {
+        if (r.ok) {
+          set((s) => ({
+            sessions: patchSession(s.sessions, sessionId, (x) => ({
+              ...x,
+              queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
+            })),
+          }));
+        } else {
+          interruptAndSend();
+        }
+      });
+      return;
+    }
+    interruptAndSend();
+    function interruptAndSend() {
+    // Cancel the running turn the way stop() does (its late events must not
+    // land on the new turn), but keep the rest of the queue.
+    abortBySession.get(sessionId)?.abort();
+    abortBySession.delete(sessionId);
+    promptAsst.delete(sessionId);
+    void westcode()?.cancel(sessionId);
+    void westcode()?.stopSession(sessionId);
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        status: "waiting",
+        permission: null,
+        queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
+        messages: x.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+      })),
+    }));
+    queueMicrotask(() => {
+      void get().send(sessionId, item!.text, { incoming: item!.incoming, replay: true, replayOf: item!.msgId });
+    });
+    }
+  },
+
+  unqueue: (sessionId, msgId) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
+        messages: x.messages.filter((m) => m.id !== msgId),
+      })),
+    }));
+  },
+
   openArtifact: async (sessionId, what) => {
     const api = westcode()?.artifact;
     const ses = get().sessions.find((x) => x.id === sessionId);
@@ -2463,6 +2543,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...ses,
         status: "running",
         updatedAt: Date.now(),
+        suggestion: null,
         turns: ses.turns + 1,
         messages: userMsg
           ? [...ses.messages, userMsg, asstMsg]

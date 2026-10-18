@@ -130,8 +130,22 @@ export type Session = {
   seenAt?: number;
   /** Repository the source control panel works on when the folder holds several. */
   scmRepo?: string;
+  /** Claude's prediction of your next prompt (ghost text in the composer). */
+  suggestion?: string | null;
+  /** Background tasks and subagents the agent started this session. */
+  tasks?: AgentTask[];
+  /** The agent takes messages into a running turn (Send now steers). */
+  canSteer?: boolean;
   /** What the artifact pane is previewing (a file the agent made, or inline code). */
   artifact?: { title: string; url: string; path?: string; markdown?: boolean };
+};
+
+export type AgentTask = {
+  id: string;
+  kind: "background" | "subagent";
+  description?: string;
+  state: string;
+  summary?: string;
 };
 
 export type PlanEntry = {

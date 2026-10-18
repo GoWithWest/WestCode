@@ -37,12 +37,15 @@ export function MessageList({
   compact,
   sessionId,
   awaiting,
+  queuedIds,
 }: {
   messages: ChatMessage[];
   compact?: boolean;
   sessionId?: string;
   /** The tool the agent is waiting on your approval for, if any. */
   awaiting?: string;
+  /** Messages sent while the agent was busy, not read yet. */
+  queuedIds?: string[];
 }) {
   const detail = useHelix((s) => s.settings.transcriptDetail ?? "normal");
   return (
@@ -56,6 +59,7 @@ export function MessageList({
             detail={detail}
             sessionId={sessionId}
             awaiting={m.streaming ? awaiting : undefined}
+          queued={queuedIds?.includes(m.id)}
           />
         ))}
       </div>
@@ -69,12 +73,14 @@ const Message = memo(function Message({
   detail,
   sessionId,
   awaiting,
+  queued,
 }: {
   message: ChatMessage;
   compact?: boolean;
   detail: Detail;
   sessionId?: string;
   awaiting?: string;
+  queued?: boolean;
 }) {
   if (message.role === "system") {
     const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
@@ -112,6 +118,7 @@ const Message = memo(function Message({
   if (message.role === "user") {
     const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
     return (
+      <div className="flex flex-col items-end gap-1">
       <div className="group/user flex items-center justify-end gap-2">
         {message.checkpoint && sessionId ? (
           <button
@@ -144,6 +151,26 @@ const Message = memo(function Message({
           {message.attachments?.length ? <AttachmentRow items={message.attachments} /> : null}
           {text}
         </div>
+      </div>
+      {queued && sessionId ? (
+        <div className="flex items-center gap-2 text-2xs text-subtle">
+          <span>Queued — the agent reads it after this turn</span>
+          <button
+            type="button"
+            onClick={() => useHelix.getState().steerNow(sessionId, message.id)}
+            className="font-medium text-foreground hover:underline"
+          >
+            Send now
+          </button>
+          <button
+            type="button"
+            onClick={() => useHelix.getState().unqueue(sessionId, message.id)}
+            className="hover:text-foreground"
+          >
+            Remove
+          </button>
+        </div>
+      ) : null}
       </div>
     );
   }

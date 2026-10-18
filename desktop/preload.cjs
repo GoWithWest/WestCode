@@ -87,6 +87,8 @@ contextBridge.exposeInMainWorld("westcode", {
   openSession: (payload) => ipcRenderer.invoke("session:open", payload),
   prompt: (payload) => ipcRenderer.invoke("session:prompt", payload),
   cancel: (sessionId) => ipcRenderer.invoke("session:cancel", sessionId),
+  steer: (sessionId, text) => ipcRenderer.invoke("session:steer", { sessionId, text }),
+  stopTask: (sessionId, taskId) => ipcRenderer.invoke("session:stop-task", { sessionId, taskId }),
   stopSession: (sessionId) => ipcRenderer.invoke("session:stop", sessionId),
   permission: (payload) => ipcRenderer.invoke("session:permission", payload),
   onEvent: (fn) => {

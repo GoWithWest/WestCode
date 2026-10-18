@@ -9,7 +9,7 @@ import type { Session } from "@/lib/types";
 import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
-import { PermissionCard, PlanCard } from "./session-extras";
+import { PermissionCard, PlanCard, TasksCard } from "./session-extras";
 import { AgentAvatar } from "./agents-view";
 import { SourceControlPanel } from "./source-control";
 import { ArtifactPane } from "./artifact-pane";
@@ -104,13 +104,15 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
               />
             ) : (
               <MessageList messages={session.messages} compact={compact || compactPref} sessionId={session.id}
-              awaiting={session.permission?.tool} />
+              awaiting={session.permission?.tool}
+              queuedIds={session.queued?.flatMap((q) => (q.msgId ? [q.msgId] : []))} />
             )}
           </div>
 
           <div className="flex flex-col gap-2 pb-2 empty:hidden">
             <PermissionCard session={session} agentName={agentName} />
             {!session.permission ? <PlanCard session={session} /> : null}
+          {!session.permission ? <TasksCard session={session} /> : null}
           </div>
 
           <Composer key={session.id} session={session} />

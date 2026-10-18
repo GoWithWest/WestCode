@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Circle, CircleDot, ShieldQuestion } from "lucide-react";
+import { Check, ChevronDown, Circle, CircleDot, Layers, ShieldQuestion } from "lucide-react";
+import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -216,4 +217,59 @@ function verbFor(kind?: string) {
     default:
       return "use a tool";
   }
+}
+
+/** Background tasks and subagents the agent started (Claude Code). */
+export function TasksCard({ session }: { session: Session }) {
+  const tasks = (session.tasks ?? []).filter((t) => t.state === "running" || Date.now() - session.updatedAt < 60_000);
+  const [open, setOpen] = useState(true);
+  if (!tasks.length) return null;
+  const running = tasks.filter((t) => t.state === "running").length;
+  return (
+    <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
+      <div className="rounded-xl border border-border bg-surface">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        >
+          <Layers className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">
+            {running ? `${running} running in the background` : "Background work finished"}
+          </span>
+          <ChevronDown className={cn("size-3.5 shrink-0 text-subtle transition-transform", !open && "-rotate-90")} />
+        </button>
+        {open ? (
+          <ul className="flex flex-col gap-0.5 border-t border-border px-3 py-2">
+            {tasks.map((t) => (
+              <li key={t.id} className="flex items-center gap-2 py-0.5 text-xs">
+                {t.state === "running" ? (
+                  <CircleDot className="size-3.5 shrink-0 animate-pulse" />
+                ) : t.state === "completed" ? (
+                  <Check className="size-3.5 shrink-0 text-success" />
+                ) : (
+                  <Circle className="size-3.5 shrink-0 text-subtle" />
+                )}
+                <span className="shrink-0 text-2xs text-subtle">{t.kind === "subagent" ? "Subagent" : "Task"}</span>
+                <span className="min-w-0 flex-1 truncate" title={t.summary ?? t.description}>
+                  {t.description ?? t.id}
+                  {t.summary ? <span className="text-subtle"> — {t.summary}</span> : null}
+                </span>
+                {t.state === "running" && t.kind === "background" ? (
+                  <button
+                    type="button"
+                    onClick={() => void westcode()?.stopTask?.(session.id, t.id)}
+                    className="shrink-0 text-2xs text-muted-foreground hover:text-danger"
+                  >
+                    Stop
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </div>
+  );
 }

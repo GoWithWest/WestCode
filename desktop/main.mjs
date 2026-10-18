@@ -1081,6 +1081,15 @@ ipcMain.handle("session:open", async (_e, payload) => {
   }
 });
 
+ipcMain.handle("session:steer", async (_e, { sessionId, text }) => {
+  const s = getSession(sessionId);
+  return s ? s.steer(String(text || "")) : { ok: false };
+});
+ipcMain.handle("session:stop-task", async (_e, { sessionId, taskId }) => {
+  const s = getSession(sessionId);
+  return s ? s.stopTask(String(taskId || "")) : { ok: false };
+});
+
 ipcMain.handle("session:cancel", (_e, sessionId) => {
   getSession(sessionId)?.cancel();
   return { ok: true };

@@ -47,6 +47,8 @@ export type SessionEvent = {
     | "usage"
     | "info"
     | "mode"
+    | "task"
+    | "caps"
     | "noop";
   text?: string;
   toolId?: string;
@@ -57,6 +59,9 @@ export type SessionEvent = {
   plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
   usage?: { used: number; size: number };
   modeId?: string;
+  suggestion?: string | null;
+  task?: { id: string; kind: "background" | "subagent"; description?: string; state: string; summary?: string };
+  steering?: boolean;
   path?: string;
   command?: string;
   content?: string;
@@ -373,6 +378,8 @@ type WestcodeBridge = {
     text: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   cancel: (sessionId: string) => Promise<{ ok: boolean }>;
+  steer?: (sessionId: string, text: string) => Promise<{ ok: boolean; error?: string }>;
+  stopTask?: (sessionId: string, taskId: string) => Promise<{ ok: boolean; error?: string }>;
   stopSession: (sessionId: string) => Promise<{ ok: boolean }>;
   permission: (payload: {
     sessionId: string;
