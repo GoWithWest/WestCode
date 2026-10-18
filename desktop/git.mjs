@@ -381,6 +381,12 @@ export async function commitFiles(cwd, sha) {
 
 // ------------------------------------------------------------------ checkpoints
 
+// Files the OS makes on its own, never the agent: macOS writes ._* (AppleDouble)
+// and .smbdelete* (a file deleted while still open) onto network shares. They
+// stay out of checkpoints and are never "files created after" one.
+const OS_SCRATCH = /(^|\/)(\._[^/]*|\.smbdelete[^/]*|\.DS_Store)$/;
+const OS_SCRATCH_EXCLUDES = [":(exclude,glob)**/._*", ":(exclude,glob)**/.smbdelete*", ":(exclude,glob)**/.DS_Store"];
+
 /**
  * Snapshot the working tree before an agent turn (Cursor-style checkpoint):
  * a stash commit holding tracked AND untracked files, without touching the
@@ -396,7 +402,7 @@ export async function checkpoint(cwd, label = "turn") {
   const env = { ...process.env, GIT_INDEX_FILE: join(dir, "index") };
   try {
     await runGit(cwd, ["read-tree", "HEAD"], { env });
-    await runGit(cwd, ["add", "-A", "--", "."], { env });
+    await runGit(cwd, ["add", "-A", "--", ".", ...OS_SCRATCH_EXCLUDES], { env });
     const tree = await runGit(cwd, ["write-tree"], { env });
     if (tree.code !== 0) return { ok: false, error: tree.stderr.trim() };
     const commit = await runGit(
@@ -427,15 +433,26 @@ export async function restoreCheckpoint(cwd, sha) {
     const now = await runGit(cwd, ["ls-tree", "-r", "-z", "--name-only", before.sha]);
     const then = await runGit(cwd, ["ls-tree", "-r", "-z", "--name-only", sha]);
     const keep = new Set(then.stdout.split("\0").filter(Boolean));
-    const created = now.stdout.split("\0").filter((p) => p && !keep.has(p));
+    const created = now.stdout.split("\0").filter((p) => p && !keep.has(p) && !OS_SCRATCH.test(p));
     const { rmSync } = await import("node:fs");
-    for (const p of created) rmSync(join(cwd, p), { force: true });
+    // One file the share will not let go of (EBUSY over SMB) must not sink
+    // the whole restore: report it and put the rest back.
+    const removed = [];
+    const skipped = [];
+    for (const p of created) {
+      try {
+        rmSync(join(cwd, p), { force: true });
+        removed.push(p);
+      } catch {
+        skipped.push(p);
+      }
+    }
     const r = await runGit(cwd, ["checkout", sha, "--", "."]);
     if (r.code !== 0) return { ok: false, error: r.stderr.trim() };
     // checkout writes the index too; put the index back to HEAD so nothing
     // looks staged that the user did not stage.
     await runGit(cwd, ["reset", "-q"]);
-    return { ok: true, undo: before.sha, removed: created };
+    return { ok: true, undo: before.sha, removed, skipped };
   });
 }
 

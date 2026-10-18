@@ -155,7 +155,7 @@ export type GitBridge = {
   findRepos?: (cwd: string) => Promise<{ ok: boolean; repos: { path: string; name: string; mtime: number }[] }>;
   init?: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   checkpoint?: (cwd: string, label: string) => Promise<{ ok: boolean; sha?: string; error?: string }>;
-  restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; error?: string }>;
+  restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; skipped?: string[]; error?: string }>;
   onProgress: (
     fn: (p: { cwd: string; title: string; percent: number }) => void,
   ) => () => void;

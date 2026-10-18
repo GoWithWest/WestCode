@@ -2360,7 +2360,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     const note: ChatMessage = r.ok
       ? {
           ...systemNote(
-            `Files restored to before “${label}”.${r.removed?.length ? ` Removed ${r.removed.length} file${r.removed.length === 1 ? "" : "s"} created after it.` : ""} The conversation is unchanged.`,
+            `Files restored to before “${label}”.${r.removed?.length ? ` Removed ${r.removed.length} file${r.removed.length === 1 ? "" : "s"} created after it.` : ""}${r.skipped?.length ? ` Could not remove ${r.skipped.join(", ")} (in use) — delete ${r.skipped.length === 1 ? "it" : "them"} by hand.` : ""} The conversation is unchanged.`,
           ),
           restoreUndo: r.undo,
         }
