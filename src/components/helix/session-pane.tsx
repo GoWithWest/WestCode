@@ -3,7 +3,6 @@ import { Code2, Download, Folder, GitBranch, Pencil, Terminal } from "lucide-rea
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
-import { Button } from "@/components/ui/button";
 import { exportTranscript, lastSnippet } from "@/lib/parse-agent";
 import { relativeTime } from "@/lib/utils";
 import type { Session } from "@/lib/types";
@@ -11,6 +10,8 @@ import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
 import { PermissionCard, PlanCard } from "./session-extras";
+import { AgentAvatar } from "./agents-view";
+import { dotStateFor } from "@/lib/dots";
 
 export function SessionPane({
   session,
@@ -152,15 +153,12 @@ function SessionTitle({
 
 function AgentBadge({ session }: { session: Session }) {
   const agents = useHelix((s) => s.agents);
+  const clock = useHelix((s) => s.clock);
   const agent = agents.find((a) => a.id === session.agentId);
   if (!agent) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs font-medium">
-      <img
-        src={`/avatars/${agent.avatar}.svg`}
-        alt=""
-        className="size-3.5 rounded-full"
-      />
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 py-0.5 pr-2 pl-0.5 text-2xs font-medium">
+      <AgentAvatar agent={agent} state={dotStateFor(session, clock)} size={18} />
       {agent.name}
     </span>
   );

@@ -4,6 +4,8 @@
  * read like teammates. Users can edit, delete, and add their own.
  */
 
+import type { DotLook } from "./dots";
+
 export type AgentProfile = {
   id: string;
   /** Human name shown in the roster and used for @mentions (e.g. Oz). */
@@ -13,6 +15,10 @@ export type AgentProfile = {
   /** Full working brief injected into the session prompt. */
   brief: string;
   avatar: string;
+  /** The bot character (shape, colour, accessory). Absent = preset/derived. */
+  look?: Partial<DotLook>;
+  /** "portrait" keeps the old illustrated avatar instead of the character. */
+  avatarStyle?: "dot" | "portrait";
   builtin?: boolean;
   /** Runtime the agent's sessions use ("" / undefined = follow the desk). */
   providerId?: string;

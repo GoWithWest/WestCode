@@ -2860,3 +2860,8 @@ function runSlash(
 
   return false;
 }
+
+// Dev/E2E handle on the store (never in a production build).
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as unknown as { __helix: typeof useHelix }).__helix = useHelix;
+}

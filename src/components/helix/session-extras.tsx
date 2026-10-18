@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, Circle, CircleDot, ShieldQuestion } from "lucide-react";
 import { useHelix } from "@/lib/store";
 import type { Session } from "@/lib/types";
@@ -128,13 +128,17 @@ export function UsageRing({ session }: { session: Session }) {
 export function PermissionCard({ session, agentName }: { session: Session; agentName: string }) {
   const answer = useHelix((s) => s.answerPermission);
   const p = session.permission;
-  const options = p?.options.length
-    ? p.options
-    : [
-        { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
-        { optionId: "allow-always", name: "Always allow", kind: "allow_always" },
-        { optionId: "reject", name: "Deny", kind: "reject_once" },
-      ];
+  const options = useMemo(
+    () =>
+      p?.options.length
+        ? p.options
+        : [
+            { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+            { optionId: "allow-always", name: "Always allow", kind: "allow_always" },
+            { optionId: "reject", name: "Deny", kind: "reject_once" },
+          ],
+    [p],
+  );
 
   useEffect(() => {
     if (!p) return;
