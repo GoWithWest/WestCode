@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { deskDir } from "./desk-paths.mjs";
-import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate } from "./acp-map.mjs";
+import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate, modelsFrom } from "./acp-map.mjs";
 import { cliHasWestcreate, sessionServer } from "./westcreate.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -73,7 +73,14 @@ function npmCacheEnv(env) {
 }
 
 export function mapModel(providerId, label) {
-  const t = String(label || "").toLowerCase().trim();
+  const raw = String(label || "").trim();
+  const t = raw.toLowerCase();
+  // An id the CLI itself reported (or a full model name) goes through as is:
+  // only friendly labels are mapped. Otherwise picking "Grok 4.7" from the
+  // live list would silently run grok-4.6.
+  if (providerId === "grok" && /^grok-[\w.-]+$/.test(t)) return t;
+  if (providerId === "claude" && /^(default|opus|sonnet|haiku|fable|best|opusplan)(\[1m\])?$|^claude-[\w.-]+(\[1m\])?$/.test(t)) return t;
+  if (providerId === "codex" && /^(gpt|o\d|codex)[\w.-]*$/.test(t)) return t;
   if (providerId === "grok") {
     if (t.includes("4.5") || t === "grok-4.5") return "grok-4.5";
     if (t.includes("4.6") || t === "grok-4.6" || t.includes("grok")) return "grok-4.6";
@@ -371,7 +378,7 @@ class AcpSession {
           this.agentSessionId =
             loaded?.sessionId || loaded?.session_id || resumeId;
           this.resumed = true;
-          this._emitModels(init);
+          this._emitModels(init, loaded);
           this.emit({ type: "ready", agentSessionId: this.agentSessionId });
           return this.agentSessionId;
         } catch (err) {
@@ -400,7 +407,7 @@ class AcpSession {
     this.agentSessionId = created?.sessionId || created?.session_id || this.id;
     this.resumed = false;
 
-    this._emitModels(init);
+    this._emitModels(init, created);
     this.emit({ type: "ready", agentSessionId: this.agentSessionId });
     return this.agentSessionId;
   }
@@ -428,19 +435,10 @@ class AcpSession {
     }
   }
 
-  _emitModels(init) {
-    const models =
-      init?._meta?.modelState?.availableModels ||
-      init?._meta?.availableModels ||
-      [];
+  _emitModels(init, session) {
+    const models = modelsFrom(init, session);
     if (!models.length) return;
-    this.emit({
-      type: "models",
-      models: models.map((m) => ({
-        id: m.modelId || m.id,
-        label: m.name || m.modelId || m.id,
-      })),
-    });
+    this.emit({ type: "models", models });
   }
 
   async prompt(text, history = []) {

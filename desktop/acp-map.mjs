@@ -164,3 +164,35 @@ export function mapUpdate(params, opts = {}) {
 
 /** Event types that belong to a transcript, so session/load can replay them. */
 export const TRANSCRIPT_EVENTS = new Set(["user", "text", "thought", "tool"]);
+
+/**
+ * The models a session offers. Grok sends them as `models.availableModels`
+ * (initialize _meta and session/new); Claude's adapter sends a `model`
+ * select in session/new `configOptions`.
+ */
+export function modelsFrom(init, session) {
+  const lists = [
+    session?.models?.availableModels,
+    init?._meta?.modelState?.availableModels,
+    init?._meta?.availableModels,
+  ];
+  for (const list of lists) {
+    if (Array.isArray(list) && list.length) {
+      return list
+        .map((m) => ({ id: String(m.modelId || m.id || ""), label: String(m.name || m.modelId || m.id || "") }))
+        .filter((m) => m.id);
+    }
+  }
+  const opt = (session?.configOptions || []).find(
+    (o) => o && (o.category === "model" || o.id === "model") && Array.isArray(o.options),
+  );
+  if (opt) {
+    return opt.options
+      .map((o) => ({
+        id: String(o.value ?? o.id ?? ""),
+        label: o.value === "default" && o.description ? `Default (${o.description})` : String(o.name || o.value || ""),
+      }))
+      .filter((m) => m.id);
+  }
+  return [];
+}

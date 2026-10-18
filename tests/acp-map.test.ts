@@ -117,3 +117,49 @@ describe("Grok (grok agent stdio) recording", () => {
     expect(read.status).toBe("done");
   });
 });
+
+// @ts-expect-error — plain .mjs module from the Electron side
+import { modelsFrom } from "../desktop/acp-map.mjs";
+// @ts-expect-error — plain .mjs module from the Electron side
+import { mapModel } from "../desktop/acp-host.mjs";
+
+describe("models", () => {
+  it("reads Claude's model select from session/new configOptions", () => {
+    const session = {
+      configOptions: [
+        { id: "mode", category: "mode", options: [{ value: "default", name: "Manual" }] },
+        {
+          id: "model",
+          category: "model",
+          options: [
+            { value: "default", name: "Default (recommended)", description: "Opus 5.5" },
+            { value: "opus", name: "Opus 5.5" },
+            { value: "sonnet", name: "Sonnet 5.5" },
+          ],
+        },
+      ],
+    };
+    expect(modelsFrom({}, session)).toEqual([
+      { id: "default", label: "Default (Opus 5.5)" },
+      { id: "opus", label: "Opus 5.5" },
+      { id: "sonnet", label: "Sonnet 5.5" },
+    ]);
+  });
+  it("reads Grok's availableModels, preferring session/new", () => {
+    const init = { _meta: { modelState: { availableModels: [{ modelId: "grok-4.6", name: "Grok 4.6" }] } } };
+    const session = { models: { availableModels: [{ modelId: "grok-4.7", name: "Grok 4.7" }] } };
+    expect(modelsFrom(init, session)).toEqual([{ id: "grok-4.7", label: "Grok 4.7" }]);
+    expect(modelsFrom(init, {})).toEqual([{ id: "grok-4.6", label: "Grok 4.6" }]);
+  });
+  it("passes ids the CLI reported straight through, maps only friendly labels", () => {
+    expect(mapModel("grok", "grok-4.7")).toBe("grok-4.7");
+    expect(mapModel("grok", "grok-4.7-build-fast")).toBe("grok-4.7-build-fast");
+    expect(mapModel("grok", "Grok 4.5")).toBe("grok-4.5");
+    expect(mapModel("claude", "default")).toBe("default");
+    expect(mapModel("claude", "opus[1m]")).toBe("opus[1m]");
+    expect(mapModel("claude", "claude-fable-5-1")).toBe("claude-fable-5-1");
+    expect(mapModel("claude", "claude-fable-5[1m]")).toBe("claude-fable-5[1m]");
+    expect(mapModel("claude", "Sonnet")).toBe("sonnet");
+    expect(mapModel("codex", "gpt-6.1-sol")).toBe("gpt-6.1-sol");
+  });
+});
