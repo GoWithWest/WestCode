@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, Blocks, Hammer, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { Archive, ArchiveRestore, Blocks, CircleDashed, Hammer, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { dotActivity, dotStateFor } from "@/lib/dots";
+import type { Session } from "@/lib/types";
+import { AgentAvatar } from "./agents-view";
 import { westcode } from "@/lib/desktop";
 import { cliSessionTitle, useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
@@ -101,14 +104,14 @@ export function Sidebar() {
                     }`}
                   >
                     <span className="flex items-center gap-2">
-                      <ProviderDot id={ses.providerId} />
+                      <SessionGlyph session={ses} />
                       <span className="min-w-0 flex-1 truncate text-sm">
                         {ses.title}
                       </span>
                     </span>
-                    <span className="flex items-center justify-between pl-4 text-2xs text-subtle">
-                      <StatusLabel status={ses.status} />
-                      <span className="tabular-nums">
+                    <span className="flex items-center justify-between gap-2 pl-[1.375rem] text-2xs text-subtle">
+                      <SessionState session={ses} unread={!active && ses.updatedAt > (ses.seenAt ?? 0) && ses.status === "waiting"} />
+                      <span className="shrink-0 tabular-nums">
                         {relativeTime(ses.updatedAt, clock)}
                       </span>
                     </span>
@@ -367,4 +370,49 @@ function WestCreateNav({ active, onOpen }: { active: boolean; onOpen: () => void
       />
     </Button>
   );
+}
+
+/** Persona character for agent sessions, provider dot otherwise. */
+function SessionGlyph({ session }: { session: Session }) {
+  const agent = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
+  const clock = useHelix((s) => s.clock);
+  if (agent) return <AgentAvatar agent={agent} state={dotStateFor(session, clock)} size={16} />;
+  return (
+    <span className="grid size-4 shrink-0 place-items-center">
+      <ProviderDot id={session.providerId} />
+    </span>
+  );
+}
+
+/**
+ * One line on where a session stands (Claude/Grok sidebar style): needs
+ * approval (amber), working (live activity), unread result (blue), error.
+ */
+function SessionState({ session, unread }: { session: Session; unread: boolean }) {
+  if (session.permission) {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1.5 font-medium text-warn">
+        <span className="size-1.5 shrink-0 rounded-full bg-warn" />
+        <span className="truncate">Needs approval</span>
+      </span>
+    );
+  }
+  if (session.status === "running") {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-muted-foreground">
+        <CircleDashed className="size-3 shrink-0 animate-spin" />
+        <span className="truncate">{dotActivity(session)}</span>
+      </span>
+    );
+  }
+  if (session.status === "error") return <StatusLabel status="error" />;
+  if (unread) {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-medium text-accent">
+        <span className="size-1.5 rounded-full bg-[#4d9bff]" />
+        New reply
+      </span>
+    );
+  }
+  return <span className="text-subtle">{session.status === "waiting" ? "Your turn" : "Idle"}</span>;
 }
