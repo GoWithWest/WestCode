@@ -121,6 +121,8 @@ export type AppSettings = {
    * "ask" stages them for approval, "auto" applies them, "off" never reviews.
    */
   learning: "off" | "ask" | "auto";
+  /** Appearance: follow the OS, or force dark / light. */
+  theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
 };
@@ -135,6 +137,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   transcriptCompact: false,
   transcriptDetail: "normal",
   learning: "ask",
+  theme: "dark",
   launchAtLogin: false,
 };
 

@@ -58,6 +58,48 @@
   --motion-slow: 400ms;
 }
 
+/* Light theme: same tokens, light values. Applied by data-theme on <html>
+   (Settings → Appearance: System / Dark / Light). */
+:root[data-theme="light"] {
+  --color-background: #f1f0eb;
+  --color-foreground: #1f1e1d;
+  --color-surface: #ffffff;
+  --color-surface-2: #f7f6f2;
+  --color-muted: #ebe9e3;
+  --color-muted-foreground: #5d5b56;
+  --color-subtle: #8b8881;
+  --color-accent: #2a2926;
+  --color-accent-foreground: #faf9f5;
+  --color-border: rgb(31 30 29 / 0.1);
+  --color-border-strong: rgb(31 30 29 / 0.2);
+  --color-ring: rgb(31 30 29 / 0.35);
+  --color-desktop: #e9e7e1;
+  --color-menubar: rgb(250 249 245 / 0.86);
+  --color-window: #faf9f5;
+  --color-claude: #c2653f;
+  --color-codex: #4b7a61;
+  --color-cursor: #5c6b7d;
+  --color-grok: #2a2926;
+  --color-danger: #b23f37;
+  --color-success: #3c7a58;
+  --color-warn: #a2741f;
+  --shadow-window: 0 24px 48px -20px rgb(31 30 29 / 0.25), 0 0 0 1px rgb(31 30 29 / 0.06);
+  color-scheme: light;
+}
+:root[data-theme="light"] ::selection {
+  background: rgb(31 30 29 / 0.14);
+}
+:root[data-theme="light"] .scrollbar-thin {
+  scrollbar-color: rgb(31 30 29 / 0.18) transparent;
+}
+:root[data-theme="light"] .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgb(31 30 29 / 0.18);
+  background-clip: padding-box;
+}
+:root:not([data-theme="light"]) {
+  color-scheme: dark;
+}
+
 @layer base {
   html,
   body,
