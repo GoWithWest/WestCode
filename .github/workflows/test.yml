@@ -72,3 +72,12 @@ jobs:
             "$APP/Contents/MacOS/WestCode" "$APP/Contents/Resources/app/.output/server/index.mjs" &
           for i in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/" -o /tmp/index.html && break; sleep 0.5; done
           grep -qi "westcode" /tmp/index.html
+          echo "WESTCODE_APP=$PWD/$APP/Contents/MacOS/WestCode" >> "$GITHUB_ENV"
+      - name: Drive the packaged app (Playwright + Electron)
+        run: npx playwright test -c playwright.electron.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: electron-mac
+          path: test-results/
+          retention-days: 7
