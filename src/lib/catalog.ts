@@ -180,6 +180,13 @@ const GENERIC_SLASH: SlashCmd[] = [
 ];
 
 const BUS_SLASH: SlashCmd[] = [
+  {
+    cmd: "group",
+    args: "[name]",
+    hint: "Link a skill group (Web Design, Motion…) to this session",
+    kind: "builtin",
+  },
+  { cmd: "ungroup", args: "<name>", hint: "Unlink a skill group", kind: "builtin" },
   { cmd: "agents", hint: "List other sessions on this desk", kind: "builtin" },
   {
     cmd: "msg",

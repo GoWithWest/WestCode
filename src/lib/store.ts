@@ -27,6 +27,21 @@ import {
   type AgentProfile,
 } from "./agents";
 import { blocksToPlain, extractSendMessages } from "./parse-agent";
+import {
+  EMPTY_GROUPS,
+  GROUPS_KEY,
+  assignSkill,
+  groupPreamble,
+  matchGroup,
+  mergeGroups,
+  resolveGroup,
+  slugGroupId,
+  unassignSkill,
+  type GroupsPersist,
+  type SkillGroup,
+  type SkillRef,
+} from "./skill-groups";
+import { GROUP_CATALOG } from "./skill-group-catalog";
 import { deskPreamble, formatRoster } from "./prompts";
 import {
   PROVIDER_ORDER,
@@ -214,6 +229,8 @@ export type HelixState = {
   recentFolders: RecentFolder[];
   agents: AgentProfile[];
   agentsPersist: AgentsPersist;
+  skillGroups: SkillGroup[];
+  groupsPersist: GroupsPersist;
   providerColors: Record<string, string>;
   settings: AppSettings;
   schedules: ScheduledTask[];
@@ -271,6 +288,14 @@ export type HelixState = {
   updateAgent: (id: string, patch: Partial<AgentProfile>) => void;
   removeAgent: (id: string) => void;
   restorePresetAgents: () => void;
+  addSkillGroup: (g: Omit<SkillGroup, "id" | "builtin">) => string;
+  updateSkillGroup: (id: string, patch: Partial<Pick<SkillGroup, "label" | "description" | "icon">>) => void;
+  removeSkillGroup: (id: string) => void;
+  restorePresetGroups: () => void;
+  assignSkillToGroup: (groupId: string, skill: SkillRef) => void;
+  unassignSkillFromGroup: (groupId: string, name: string) => void;
+  /** Link (or unlink) a skill group to a session. */
+  linkSkillGroup: (sessionId: string, groupId: string, linked: boolean) => void;
   setProviderColor: (providerId: string, color: string) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
   addSchedule: (t: Omit<ScheduledTask, "id" | "lastRun">) => void;
@@ -1112,6 +1137,8 @@ export const useHelix = create<HelixState>((set, get) => ({
   recentFolders: [],
   agents: PRESET_AGENTS,
   agentsPersist: { custom: [], overrides: {}, removed: [] },
+  skillGroups: mergeGroups(EMPTY_GROUPS),
+  groupsPersist: EMPTY_GROUPS,
   providerColors: {},
   settings: DEFAULT_SETTINGS,
   schedules: [],
@@ -1163,6 +1190,12 @@ export const useHelix = create<HelixState>((set, get) => ({
       overrides: {},
       removed: [],
     });
+    const groupsRaw = readJson<Partial<GroupsPersist>>(GROUPS_KEY, {});
+    const groupsPersist: GroupsPersist = {
+      custom: Array.isArray(groupsRaw.custom) ? groupsRaw.custom : [],
+      overrides: groupsRaw.overrides && typeof groupsRaw.overrides === "object" ? groupsRaw.overrides : {},
+      removed: Array.isArray(groupsRaw.removed) ? groupsRaw.removed : [],
+    };
     const providerColors = readJson<Record<string, string>>(COLORS_KEY, {});
     const settings = {
       ...DEFAULT_SETTINGS,
@@ -1193,6 +1226,8 @@ export const useHelix = create<HelixState>((set, get) => ({
       customProviders: Array.isArray(prov) ? prov : [],
       agentsPersist,
       agents: mergeAgents(agentsPersist),
+      groupsPersist,
+      skillGroups: mergeGroups(groupsPersist),
       providerColors,
       settings,
       schedules: Array.isArray(schedules) ? schedules : [],
@@ -1867,6 +1902,96 @@ export const useHelix = create<HelixState>((set, get) => ({
     set({ agentsPersist: next, agents: mergeAgents(next) });
   },
 
+  addSkillGroup: (g) => {
+    const persist = get().groupsPersist;
+    const taken = new Set([
+      ...get().skillGroups.map((x) => x.id),
+      ...GROUP_CATALOG.map((x) => x.id),
+      ...persist.removed,
+    ]);
+    const id = slugGroupId(g.label || "group", taken);
+    const next: GroupsPersist = {
+      ...persist,
+      custom: [...persist.custom, { ...g, id, builtin: false }],
+    };
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+    return id;
+  },
+
+  updateSkillGroup: (id, patch) => {
+    const persist = get().groupsPersist;
+    const isPreset = GROUP_CATALOG.some((g) => g.id === id);
+    const next: GroupsPersist = isPreset
+      ? {
+          ...persist,
+          overrides: { ...persist.overrides, [id]: { ...persist.overrides[id], ...patch } },
+        }
+      : {
+          ...persist,
+          custom: persist.custom.map((g) => (g.id === id ? { ...g, ...patch } : g)),
+        };
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  removeSkillGroup: (id) => {
+    const persist = get().groupsPersist;
+    const next: GroupsPersist = {
+      ...persist,
+      custom: persist.custom.filter((g) => g.id !== id),
+      removed: [...new Set([...persist.removed, id])],
+    };
+    saveState(GROUPS_KEY, next);
+    set((s) => ({
+      groupsPersist: next,
+      skillGroups: mergeGroups(next),
+      sessions: s.sessions.map((ses) =>
+        ses.skillGroupIds?.includes(id)
+          ? { ...ses, skillGroupIds: ses.skillGroupIds.filter((g) => g !== id) }
+          : ses,
+      ),
+    }));
+  },
+
+  restorePresetGroups: () => {
+    const persist = get().groupsPersist;
+    const presetIds = new Set(GROUP_CATALOG.map((g) => g.id));
+    const next: GroupsPersist = {
+      ...persist,
+      removed: persist.removed.filter((r) => !presetIds.has(r)),
+      overrides: Object.fromEntries(
+        Object.entries(persist.overrides).filter(([k]) => !presetIds.has(k)),
+      ),
+    };
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  assignSkillToGroup: (groupId, skill) => {
+    const next = assignSkill(get().groupsPersist, groupId, skill);
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  unassignSkillFromGroup: (groupId, name) => {
+    const next = unassignSkill(get().groupsPersist, groupId, name);
+    saveState(GROUPS_KEY, next);
+    set({ groupsPersist: next, skillGroups: mergeGroups(next) });
+  },
+
+  linkSkillGroup: (sessionId, groupId, linked) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (ses) => {
+        const cur = ses.skillGroupIds ?? [];
+        const ids = linked
+          ? [...new Set([...cur, groupId])]
+          : cur.filter((g) => g !== groupId);
+        return { ...ses, skillGroupIds: ids, updatedAt: Date.now() };
+      }),
+    }));
+  },
+
   setProviderColor: (providerId, color) => {
     const colors = { ...get().providerColors };
     if (color) colors[providerId] = color;
@@ -2102,6 +2227,14 @@ export const useHelix = create<HelixState>((set, get) => ({
     // in the message ("Get @Ivy-Ben to build X" → where to delegate).
     const selfAgent = get().agents.find((a) => a.id === latest.agentId);
     const persona = selfAgent ? `${agentPreamble(selfAgent)}\n` : "";
+    const installedSkills = get()
+      .liveAddons.filter((a) => a.kind === "skill" && a.providers.includes(latest.providerId))
+      .map((a) => a.name);
+    const linkedGroups = (latest.skillGroupIds ?? [])
+      .map((gid) => get().skillGroups.find((g) => g.id === gid))
+      .filter((g): g is SkillGroup => Boolean(g))
+      .map((g) => resolveGroup(g, installedSkills));
+    const groupsText = groupPreamble(linkedGroups);
     const mentioned = extractMentions(outgoing, get().agents).filter(
       (m) => m.agent.id !== latest.agentId,
     );
@@ -2125,8 +2258,8 @@ export const useHelix = create<HelixState>((set, get) => ({
       ? `Incoming work from another WestCode session. Act on it now. When you finish (or if you are blocked), you MUST call westcode_send_message with to="${opts?.incoming?.fromSessionId}" and a short result — the sender is waiting for your reply.`
       : `Incoming status report from another WestCode session. Read it. Do NOT reply unless it assigns you new work or asks a direct question — a completion report is terminal, and acknowledgment ping-pong wastes both sessions.`;
     const preambleText = opts?.incoming
-      ? `${bus}\n${persona}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
-      : `${bus}\n${persona}${mentionNotes}`;
+      ? `${bus}\n${persona}${groupsText}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
+      : `${bus}\n${persona}${groupsText}${mentionNotes}`;
     const promptText = `${preambleText}${outgoing}`;
 
     const api = westcode();
@@ -2401,6 +2534,8 @@ function runSlash(
     "peers",
     "list-agents",
     "msg",
+    "group",
+    "ungroup",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -2424,6 +2559,35 @@ function runSlash(
       get().customProviders,
     );
     note(`WestCode desk roster\n\n${formatRoster(roster)}`);
+    return true;
+  }
+
+  if (cmd === "group" || cmd === "ungroup") {
+    const groups = get().skillGroups;
+    const linked = new Set(session.skillGroupIds ?? []);
+    if (!arg) {
+      const lines = groups
+        .map((g) => `${linked.has(g.id) ? "●" : "○"} ${g.label} (/group ${g.id}) — ${g.skills.length} skills`)
+        .join("\n");
+      note(`Skill groups — ● linked to this session\n\n${lines}\n\nEdit groups in Library → Groups.`);
+      return true;
+    }
+    const g = matchGroup(arg, groups);
+    if (!g) {
+      note(`No skill group matching “${arg}”. Type /group to list them.`);
+      return true;
+    }
+    const on = cmd === "group";
+    get().linkSkillGroup(sessionId, g.id, on);
+    const installed = get()
+      .liveAddons.filter((a) => a.kind === "skill" && a.providers.includes(session.providerId))
+      .map((a) => a.name);
+    const r = resolveGroup(g, installed);
+    note(
+      on
+        ? `Linked ${g.label}: ${r.available.length} of ${g.skills.length} skills installed for this provider${r.available.length ? ` (${r.available.join(", ")})` : ""}.${r.missing.length ? `\nNot installed: ${r.missing.map((m) => m.name).join(", ")} — install them from Library.` : ""}`
+        : `Unlinked ${g.label}.`,
+    );
     return true;
   }
 
