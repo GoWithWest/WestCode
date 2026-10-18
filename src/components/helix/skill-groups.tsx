@@ -240,7 +240,7 @@ function GroupCard({
                   type="button"
                   aria-label={`Remove ${s.name} from ${group.label}`}
                   onClick={() => unassign(group.id, s.name)}
-                  className="text-subtle opacity-0 group-hover/skill:opacity-100 hover:text-foreground focus-visible:opacity-100"
+                  className="-my-1 -mr-1 grid size-6 place-items-center rounded-sm text-subtle opacity-0 group-hover/skill:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100"
                 >
                   <X className="size-3.5" />
                 </button>
