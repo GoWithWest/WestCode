@@ -295,6 +295,8 @@ export type HelixState = {
   updateAgent: (id: string, patch: Partial<AgentProfile>) => void;
   removeAgent: (id: string) => void;
   restorePresetAgents: () => void;
+  /** Focus the session running this agent, or start one; optionally send. */
+  openAgent: (agentId: string, prompt?: string) => string | null;
   addSkillGroup: (g: Omit<SkillGroup, "id" | "builtin">) => string;
   updateSkillGroup: (id: string, patch: Partial<Pick<SkillGroup, "label" | "description" | "icon">>) => void;
   removeSkillGroup: (id: string) => void;
@@ -1968,6 +1970,30 @@ export const useHelix = create<HelixState>((set, get) => ({
     };
     persistAgents(next);
     set({ agentsPersist: next, agents: mergeAgents(next) });
+  },
+
+  openAgent: (agentId, prompt) => {
+    const st = get();
+    const agent = st.agents.find((a) => a.id === agentId);
+    if (!agent) return null;
+    const running = st.sessions
+      .filter((x) => x.agentId === agentId && !x.archivedAt)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (running) {
+      st.setActive(running.id);
+      if (prompt?.trim()) void st.send(running.id, prompt);
+      return running.id;
+    }
+    return st.createSession({
+      providerId: agent.providerId || st.settings.defaultProviderId || "claude",
+      projectId: "scratch",
+      title: agent.name,
+      agentId: agent.id,
+      model: agent.model,
+      effort: agent.effort,
+      permissionMode: agent.permissionMode,
+      prompt,
+    });
   },
 
   addSkillGroup: (g) => {

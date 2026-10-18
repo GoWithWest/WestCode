@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { deskDir } from "./desk-paths.mjs";
 import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate } from "./acp-map.mjs";
+import { cliHasWestcreate, sessionServer } from "./westcreate.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let deskUrl = "";
@@ -15,7 +16,7 @@ export function setDeskUrl(url) {
   deskUrl = url || "";
 }
 
-function deskMcp(sessionId) {
+function deskMcp(sessionId, providerId) {
   const nodeBin = which("node") || process.execPath;
   const env = [
     { name: "WESTCODE_FROM_SESSION", value: sessionId },
@@ -25,7 +26,7 @@ function deskMcp(sessionId) {
   if (nodeBin === process.execPath) {
     env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
   }
-  return [
+  const servers = [
     {
       type: "stdio",
       name: "westcode",
@@ -34,6 +35,13 @@ function deskMcp(sessionId) {
       env,
     },
   ];
+  // WestCreate's bridge, so every session can drive it — unless this CLI
+  // already registered it itself (one server per name).
+  if (!cliHasWestcreate(providerId)) {
+    const wc = sessionServer(which("node"), process.execPath);
+    if (wc) servers.push(wc);
+  }
+  return servers;
 }
 
 function expandHome(p) {
@@ -318,7 +326,7 @@ class AcpSession {
     await this._authenticate(init);
 
     // A history read needs no tools and must not join the desk bus.
-    const mcpServers = this.readOnly ? [] : deskMcp(this.id);
+    const mcpServers = this.readOnly ? [] : deskMcp(this.id, this.providerId);
     const resumeId = this.resumeId;
     if (resumeId) {
       // session/load replays the whole transcript as session/update

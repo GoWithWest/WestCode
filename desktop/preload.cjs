@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("westcode", {
   saveText: (defaultName, content) => ipcRenderer.invoke("fs:saveText", { defaultName, content }),
   installSkillFile: (path, name, providers) => ipcRenderer.invoke("skill:install-file", { path, name, providers }),
   gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
+  westcreate: () => ipcRenderer.invoke("westcreate:snapshot"),
+  openWestcreate: () => ipcRenderer.invoke("westcreate:open"),
   git: {
     changes: (cwd) => ipcRenderer.invoke("git:changes", { cwd }),
     diff: (cwd, file) => ipcRenderer.invoke("git:diff", { cwd, file }),

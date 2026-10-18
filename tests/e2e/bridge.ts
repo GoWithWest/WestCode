@@ -34,7 +34,8 @@ export type BridgeOpts = {
   skills?: Record<string, string[]>;
   /** Milliseconds between emitted events. */
   pace?: number;
-  westcreate?: Record<string, unknown> | null;
+  /** "live" routes to desktop/westcreate.mjs (see exposeWestcreate). */
+  westcreate?: Record<string, unknown> | null | "live";
 };
 
 export async function installBridge(page: Page, opts: BridgeOpts = {}) {
@@ -100,7 +101,13 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
       onScheduleFire: () => () => {},
       cliSessions: async () => ({ ok: true, sessions: [], errors: [] }),
       openSession: async () => ({ ok: true, history: [] }),
-      westcreate: o.westcreate === undefined ? undefined : async () => o.westcreate,
+      westcreate:
+        o.westcreate === "live"
+          ? () => (window as unknown as { __westcreate: () => Promise<unknown> }).__westcreate()
+          : o.westcreate === undefined
+            ? undefined
+            : async () => o.westcreate,
+      openWestcreate: ok,
       // Real git: each call goes to desktop/git.mjs in the test process.
       git: {
         changes: (cwd: string) => w.__git("changes", { cwd }),
@@ -201,4 +208,12 @@ export async function exposeGit(page: Page) {
     }
     return { ok: false, error: `unknown ${method}` };
   });
+}
+
+/** Route window.westcode.westcreate to the real read-only client. */
+export async function exposeWestcreate(page: Page, home: string) {
+  process.env.WESTCREATE_HOME = home;
+  // @ts-expect-error — plain .mjs module from the Electron side
+  const wc = await import("../../desktop/westcreate.mjs");
+  await page.exposeFunction("__westcreate", () => wc.snapshot());
 }

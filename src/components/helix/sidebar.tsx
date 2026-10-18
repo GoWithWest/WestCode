@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, Blocks, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { Archive, ArchiveRestore, Blocks, Hammer, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { westcode } from "@/lib/desktop";
 import { cliSessionTitle, useHelix } from "@/lib/store";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -180,6 +181,7 @@ export function Sidebar() {
           <Users className="size-3.5" />
           Agents
         </Button>
+        <WestCreateNav active={view === "westcreate"} onOpen={() => setView("westcreate")} />
         <Button
           variant="ghost"
           size="sm"
@@ -319,5 +321,41 @@ function CliSessionList({ query }: { query: string }) {
         </button>
       ) : null}
     </div>
+  );
+}
+
+/** Shown once WestCreate is on this Mac; the dot says whether it is open. */
+function WestCreateNav({ active, onOpen }: { active: boolean; onOpen: () => void }) {
+  const [state, setState] = useState<{ installed: boolean; running: boolean } | null>(null);
+  useEffect(() => {
+    const api = westcode();
+    if (!api?.westcreate) return;
+    let dead = false;
+    const tick = () =>
+      void api.westcreate!()
+        .then((s) => !dead && setState({ installed: s.installed, running: s.running }))
+        .catch(() => {});
+    tick();
+    const t = window.setInterval(tick, 30_000);
+    return () => {
+      dead = true;
+      window.clearInterval(t);
+    };
+  }, []);
+  if (!state?.installed) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className={active ? "w-full justify-start bg-muted/60" : "w-full justify-start text-muted-foreground"}
+      onClick={onOpen}
+    >
+      <Hammer className="size-3.5" />
+      WestCreate
+      <span
+        className={state.running ? "ml-auto size-1.5 rounded-full bg-success" : "ml-auto size-1.5 rounded-full bg-subtle"}
+        aria-label={state.running ? "WestCreate is open" : "WestCreate is closed"}
+      />
+    </Button>
   );
 }

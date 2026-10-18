@@ -6,6 +6,7 @@ export type LayoutView =
   | "providers"
   | "library"
   | "agents"
+  | "westcreate"
   | "settings";
 
 export type Attachment = {
