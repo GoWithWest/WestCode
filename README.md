@@ -46,8 +46,6 @@ npm run dev        # web preview only (no CLI spawning in a browser)
 npm run dist       # signed DMG/ZIP into release/ (Developer ID cert required)
 ```
 
-Tests: `npm test` (unit: ACP mapping against recorded Claude/Grok sessions, the git engine against real repositories, WestCreate client, learning loop, skill groups) and `npm run test:e2e` (Playwright: the real renderer with a scripted desktop bridge). `.github/workflows/test.yml` runs both on Ubuntu, and the unit tests plus an unsigned app build on macOS, for every branch and PR.
-
 CI (`.github/workflows/build.yml`) typechecks, lints, then builds a **signed + notarized + stapled** DMG/ZIP on every push to main and publishes it to GitHub Releases (requires the `MAC_CERT_P12`/`APPLE_API_*` repo secrets; unsigned dev artifact otherwise).
 
 Note: building from a folder synced by iCloud/cloud file providers breaks codesign (`com.apple.provenance` stamping) — `npm run dist` therefore packages via `/tmp/westcode-release` and copies the DMG/ZIP back.

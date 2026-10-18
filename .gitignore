@@ -28,3 +28,16 @@ WestCode_Logo.zip
 
 test-results/
 playwright-report/
+
+# Internal: never published (agent settings, notes, tests and test tooling)
+.claude/
+CLAUDE.md
+AGENTS.md
+NOTES*.md
+notes/
+tests/
+playwright.config.ts
+playwright.electron.config.ts
+vitest.config.ts
+.github/workflows/test.yml
+*.local.md
