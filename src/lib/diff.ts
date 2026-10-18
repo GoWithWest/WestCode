@@ -100,3 +100,54 @@ export function statsForDiffs(diffs: { oldText: string; newText: string }[] | un
   }
   return { adds, dels };
 }
+
+export type PatchFile = { path: string; oldPath?: string; rows: DiffRow[]; binary?: boolean };
+
+/** Parse `git diff` / `git show` unified output into per-file rows. */
+export function parsePatch(patch: string): PatchFile[] {
+  const files: PatchFile[] = [];
+  let cur: PatchFile | null = null;
+  let a = 0;
+  let b = 0;
+  for (const line of patch.replace(/\r\n/g, "\n").split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const m = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
+      cur = { path: m?.[2] ?? line.slice(11), rows: [] };
+      if (m && m[1] !== m[2]) cur.oldPath = m[1];
+      files.push(cur);
+      continue;
+    }
+    if (!cur) {
+      if (line.startsWith("--- ") || line.startsWith("@@")) {
+        cur = { path: "", rows: [] };
+        files.push(cur);
+      } else continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const p = line.slice(4).replace(/^b\//, "");
+      if (p !== "/dev/null") cur.path = p;
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      const p = line.slice(4).replace(/^a\//, "");
+      if (!cur.path && p !== "/dev/null") cur.path = p;
+      continue;
+    }
+    if (/^Binary files /.test(line)) {
+      cur.binary = true;
+      continue;
+    }
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (h) {
+      const prevA = a;
+      a = Number(h[1]);
+      b = Number(h[2]);
+      if (cur.rows.length && a - prevA > 0) cur.rows.push({ kind: "gap", skipped: a - prevA });
+      continue;
+    }
+    if (line.startsWith("+")) cur.rows.push({ kind: "add", text: line.slice(1), b: b++ });
+    else if (line.startsWith("-")) cur.rows.push({ kind: "del", text: line.slice(1), a: a++ });
+    else if (line.startsWith(" ")) cur.rows.push({ kind: "same", text: line.slice(1), a: a++, b: b++ });
+  }
+  return files.filter((f) => f.path || f.rows.length);
+}

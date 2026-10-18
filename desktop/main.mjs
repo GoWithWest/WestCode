@@ -11,6 +11,7 @@ import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
 import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl } from "./acp-host.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
+import * as gitOps from "./git.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -604,6 +605,38 @@ ipcMain.handle("git:status", async (_e, cwd) => {
   const remote = await git(dir, ["remote", "get-url", "origin"]);
   return { repo: true, branch, adds, dels, files, ahead, behind, remote: remote || "" };
 });
+
+// ---- Source control panel (GitHub Desktop's Changes / History / Sync).
+function repoDir(cwd) {
+  const dir = typeof cwd === "string" && cwd.startsWith("~/") ? join(homedir(), cwd.slice(2)) : cwd;
+  if (typeof dir !== "string" || !dir || !existsSync(dir)) throw new Error(`Folder ${cwd} does not exist.`);
+  return dir;
+}
+function gitHandler(name, fn) {
+  ipcMain.handle(name, async (_e, payload = {}) => {
+    try {
+      return await fn(repoDir(payload.cwd), payload);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+}
+gitHandler("git:changes", (dir) => gitOps.status(dir).then((st) => ({ ok: true, ...st, sync: gitOps.syncAction(st) })));
+gitHandler("git:diff", (dir, p) => gitOps.fileDiff(dir, p.file || {}));
+gitHandler("git:commit", (dir, p) => gitOps.commit(dir, p));
+gitHandler("git:undo", (dir) => gitOps.undoCommit(dir));
+gitHandler("git:discard", (dir, p) =>
+  gitOps.discard(dir, Array.isArray(p.files) ? p.files : [], (path) => shell.trashItem(path)),
+);
+gitHandler("git:branches", (dir) => gitOps.branches(dir));
+gitHandler("git:checkout", (dir, p) => gitOps.checkout(dir, p));
+gitHandler("git:sync", (dir, p) =>
+  gitOps.sync(dir, String(p.action || ""), (progress) =>
+    win?.webContents.send("git:progress", { cwd: p.cwd, ...progress }),
+  ),
+);
+gitHandler("git:log", (dir, p) => gitOps.log(dir, p));
+gitHandler("git:show", (dir, p) => gitOps.commitFiles(dir, p.sha));
 
 // App state (sessions, library, agents, providers, colors…) persists in
 // ~/.westcode/state.json so it survives app replacement — the packaged
