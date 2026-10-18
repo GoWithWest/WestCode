@@ -9,8 +9,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ProviderDot } from "./provider";
 import { GroupsPanel, SkillGroupAssign } from "./skill-groups";
+import { LearnedPanel } from "./learned-panel";
 
-type LibraryTab = AddonKind | "group";
+type LibraryTab = AddonKind | "group" | "learned";
 
 const KIND_TABS: { id: AddonKind; label: string }[] = [
   { id: "skill", label: "Skills" },
@@ -20,6 +21,7 @@ const KIND_TABS: { id: AddonKind; label: string }[] = [
 
 const TABS: { id: LibraryTab; label: string }[] = [
   { id: "group", label: "Groups" },
+  { id: "learned", label: "Learned" },
   { id: "skill", label: "Skills" },
   { id: "plugin", label: "Plugins" },
   { id: "connector", label: "Connectors" },
@@ -31,6 +33,7 @@ export function LibraryView() {
   const live = useHelix((s) => s.liveAddons);
   const libraryStatus = useHelix((s) => s.libraryStatus);
   const refreshLibrary = useHelix((s) => s.refreshLibrary);
+  const pendingCount = useHelix((s) => s.learnPending.length);
   const [tab, setTab] = useState<LibraryTab>("group");
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
@@ -122,7 +125,7 @@ export function LibraryView() {
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-1.5">
+        <div className={cn("mt-5 flex flex-wrap items-center gap-1.5", (tab === "group" || tab === "learned") && "hidden")}>
           {(["all", ...PROVIDER_ORDER] as const).map((id) => (
             <button
               key={id}
@@ -153,6 +156,11 @@ export function LibraryView() {
               )}
             >
               {t.label}
+              {t.id === "learned" && pendingCount ? (
+                <span className="ml-1.5 rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-foreground tabular-nums">
+                  {pendingCount}
+                </span>
+              ) : null}
             </button>
           ))}
           <input
@@ -163,7 +171,8 @@ export function LibraryView() {
           />
         </div>
         {tab === "group" ? <GroupsPanel query={query} /> : null}
-        {tab !== "group" ? (
+        {tab === "learned" ? <LearnedPanel /> : null}
+        {tab !== "group" && tab !== "learned" ? (
           <>
             <p className="mt-2 text-2xs text-subtle">
               {installedCount} installed · {items.length} in this list

@@ -14,6 +14,7 @@ export function Sidebar() {
   const liveAddons = useHelix((s) => s.liveAddons);
   const setActive = useHelix((s) => s.setActive);
   const setView = useHelix((s) => s.setView);
+  const learnPending = useHelix((s) => s.learnPending.length);
   const setNewOpen = useHelix((s) => s.setNewOpen);
   const providers = useAllProviders();
   const [query, setQuery] = useState("");
@@ -164,9 +165,16 @@ export function Sidebar() {
         >
           <Blocks className="size-3.5" />
           Library
-          <span className="ml-auto text-2xs tabular-nums text-subtle">
-            {liveAddons.length}
-          </span>
+          {learnPending ? (
+            <span
+              className="ml-auto rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-foreground tabular-nums"
+              title={`${learnPending} learning proposal${learnPending === 1 ? "" : "s"} to review`}
+            >
+              {learnPending}
+            </span>
+          ) : (
+            <span className="ml-auto text-2xs tabular-nums text-subtle">{liveAddons.length}</span>
+          )}
         </Button>
         <Button
           variant="ghost"

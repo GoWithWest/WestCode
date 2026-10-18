@@ -50,7 +50,10 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
     const skills = o.skills ?? {};
     (window as unknown as { __westcode: unknown }).__westcode = { calls, saved };
     const ok = async () => ({ ok: true, output: "" });
-    const w = window as unknown as { __git: (method: string, payload: unknown) => Promise<unknown> };
+    const w = window as unknown as {
+      __git: (method: string, payload: unknown) => Promise<unknown>;
+      __learn: (method: string, payload: unknown) => Promise<unknown>;
+    };
     (window as unknown as { westcode: unknown }).westcode = {
       desktop: true,
       probe: async () =>
@@ -108,6 +111,13 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
             ? undefined
             : async () => o.westcreate,
       openWestcreate: ok,
+      learn: {
+        review: (p: unknown) => w.__learn("review", p),
+        cancel: async () => ({ ok: true }),
+        pending: () => w.__learn("pending", {}),
+        decide: (id: string, verdict: string, edited?: string) => w.__learn("decide", { id, verdict, edited }),
+        memory: () => w.__learn("memory", {}),
+      },
       // Real git: each call goes to desktop/git.mjs in the test process.
       git: {
         changes: (cwd: string) => w.__git("changes", { cwd }),
@@ -216,4 +226,25 @@ export async function exposeWestcreate(page: Page, home: string) {
   // @ts-expect-error — plain .mjs module from the Electron side
   const wc = await import("../../desktop/westcreate.mjs");
   await page.exposeFunction("__westcreate", () => wc.snapshot());
+}
+
+/**
+ * Route window.westcode.learn to the real learn.mjs on temp homes. The
+ * reviewer CLI is replaced by `propose`, which stages what a reviewer would.
+ */
+export async function exposeLearn(page: Page, homes: { home: string; user: string }, propose: (p: unknown) => unknown[]) {
+  process.env.WESTCODE_HOME = homes.home;
+  process.env.WESTCODE_USER_HOME = homes.user;
+  // @ts-expect-error — plain .mjs module from the Electron side
+  const learn = await import("../../desktop/learn.mjs");
+  await page.exposeFunction("__learn", async (method: string, p: Record<string, unknown>) => {
+    if (method === "pending") return learn.listPending();
+    if (method === "memory") return { user: learn.readMemory("user"), memory: learn.readMemory("memory"), snapshot: learn.memorySnapshot() };
+    if (method === "decide") return learn.decide(p.id, p.verdict, p.edited);
+    if (method === "review") {
+      const staged = propose(p).map((x) => learn.stage(x, { sessionId: p.sessionId }).record);
+      return { ok: true, reply: "", staged };
+    }
+    return { ok: false };
+  });
 }

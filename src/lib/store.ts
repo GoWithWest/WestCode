@@ -51,6 +51,7 @@ import {
 } from "./providers";
 import {
   westcode,
+  type LearnProposal,
   type CliProbe,
   type CliSession,
   type CliUpdate,
@@ -114,6 +115,12 @@ export type AppSettings = {
    * Cmd/Ctrl+O cycles it.
    */
   transcriptDetail: "normal" | "thinking" | "verbose";
+  /**
+   * The desk learns from finished sessions (Hermes-style): after enough
+   * turns or tool calls a read-only reviewer proposes skills and memory.
+   * "ask" stages them for approval, "auto" applies them, "off" never reviews.
+   */
+  learning: "off" | "ask" | "auto";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
 };
@@ -127,6 +134,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   delegatedAuto: true,
   transcriptCompact: false,
   transcriptDetail: "normal",
+  learning: "ask",
   launchAtLogin: false,
 };
 
@@ -238,6 +246,12 @@ export type HelixState = {
   agentsPersist: AgentsPersist;
   skillGroups: SkillGroup[];
   groupsPersist: GroupsPersist;
+  /** Learning proposals waiting for the user. */
+  learnPending: LearnProposal[];
+  /** Session ids with a review running now. */
+  reviewing: string[];
+  /** Approved desk memory, as injected into new CLI sessions. */
+  deskMemory: string;
   providerColors: Record<string, string>;
   settings: AppSettings;
   schedules: ScheduledTask[];
@@ -303,6 +317,10 @@ export type HelixState = {
   restorePresetGroups: () => void;
   assignSkillToGroup: (groupId: string, skill: SkillRef) => void;
   unassignSkillFromGroup: (groupId: string, name: string) => void;
+  refreshLearning: () => Promise<void>;
+  /** Review a session now (or when counters fire), staging proposals. */
+  reviewSession: (sessionId: string, opts?: { manual?: boolean }) => Promise<void>;
+  decideProposal: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<string | null>;
   /** Link (or unlink) a skill group to a session. */
   linkSkillGroup: (sessionId: string, groupId: string, linked: boolean) => void;
   setProviderColor: (providerId: string, color: string) => void;
@@ -1008,6 +1026,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           };
         } else {
           blocks.push(tool);
+          bumpLearn(sessionId, "tools");
         }
         return { ...m, blocks, streaming: true };
       }),
@@ -1183,6 +1202,14 @@ function bindDesktopEvents() {
 }
 
 const promptAsst = new Map<string, string>();
+/** Per session, since the last review: user turns and tool calls. */
+const learnCounters = new Map<string, { turns: number; tools: number }>();
+const LEARN_EVERY = 10;
+function bumpLearn(sessionId: string, key: "turns" | "tools") {
+  const c = learnCounters.get(sessionId) ?? { turns: 0, tools: 0 };
+  c[key] += 1;
+  learnCounters.set(sessionId, c);
+}
 let viewTouched = false;
 
 export const useHelix = create<HelixState>((set, get) => ({
@@ -1202,6 +1229,9 @@ export const useHelix = create<HelixState>((set, get) => ({
   agentsPersist: { custom: [], overrides: {}, removed: [] },
   skillGroups: mergeGroups(EMPTY_GROUPS),
   groupsPersist: EMPTY_GROUPS,
+  learnPending: [],
+  reviewing: [],
+  deskMemory: "",
   providerColors: {},
   settings: DEFAULT_SETTINGS,
   schedules: [],
@@ -1320,6 +1350,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     void get().refreshCli();
     void get().refreshLibrary();
     void get().refreshUpdates();
+    void get().refreshLearning();
     void (async () => {
       for (const c of get().customProviders) {
         if (c.apiKey) {
@@ -2074,6 +2105,84 @@ export const useHelix = create<HelixState>((set, get) => ({
     set({ groupsPersist: next, skillGroups: mergeGroups(next) });
   },
 
+  refreshLearning: async () => {
+    const api = westcode()?.learn;
+    if (!api) return;
+    const [pending, memory] = await Promise.all([api.pending(), api.memory()]);
+    set({ learnPending: pending, deskMemory: memory.snapshot });
+  },
+
+  reviewSession: async (sessionId, opts) => {
+    const st = get();
+    const api = westcode()?.learn;
+    const ses = st.sessions.find((x) => x.id === sessionId);
+    if (!api || !ses || st.reviewing.includes(sessionId)) return;
+    if (!(PROVIDER_ORDER as readonly string[]).includes(ses.providerId)) return;
+    const c = learnCounters.get(sessionId) ?? { turns: 0, tools: 0 };
+    const doMemory = opts?.manual || c.turns >= LEARN_EVERY;
+    const doSkill = opts?.manual || c.tools >= LEARN_EVERY;
+    if (!opts?.manual && (st.settings.learning === "off" || (!doMemory && !doSkill))) return;
+    learnCounters.set(sessionId, { turns: doMemory ? 0 : c.turns, tools: doSkill ? 0 : c.tools });
+    const messages = ses.messages
+      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "agent")
+      .slice(-60)
+      .map((m) => ({ role: m.role, text: blocksToPlain(m.blocks).slice(0, 4000) }))
+      .filter((m) => m.text.trim());
+    if (messages.length < 2) {
+      if (opts?.manual) {
+        set((s) => ({
+          sessions: patchSession(s.sessions, sessionId, (x) => ({
+            ...x,
+            messages: [...x.messages, systemNote("Nothing to learn from yet — this session is too short.")],
+          })),
+        }));
+      }
+      return;
+    }
+    set((s) => ({ reviewing: [...s.reviewing, sessionId] }));
+    try {
+      const r = await api.review({
+        sessionId,
+        providerId: ses.providerId,
+        cwd: ses.cwd,
+        model: ses.model,
+        messages,
+        doMemory,
+        doSkill,
+      });
+      const staged = r.staged ?? [];
+      if (get().settings.learning === "auto") {
+        for (const p of staged) await api.decide(p.id, "approve");
+      }
+      await get().refreshLearning();
+      const summary = staged.length
+        ? `${get().settings.learning === "auto" ? "Learned" : "Proposed"}: ${staged
+            .map((p) => (p.kind === "skill" ? `${p.action === "update" ? "improve" : "new"} skill ${p.name}` : `remember (${p.target}) “${(p.text ?? "").slice(0, 60)}”`))
+            .join("; ")}${get().settings.learning === "auto" ? "." : " — review in Library → Learned."}`
+        : r.ok
+          ? opts?.manual
+            ? "Reviewed this session: nothing worth keeping."
+            : ""
+          : `Review failed: ${r.error ?? "unknown error"}`;
+      if (summary) {
+        set((s) => ({
+          sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, systemNote(summary)] })),
+        }));
+      }
+    } finally {
+      set((s) => ({ reviewing: s.reviewing.filter((x) => x !== sessionId) }));
+    }
+  },
+
+  decideProposal: async (id, verdict, edited) => {
+    const api = westcode()?.learn;
+    if (!api) return "Needs the desktop app.";
+    const r = await api.decide(id, verdict, edited);
+    await get().refreshLearning();
+    if (verdict === "approve") void get().refreshLibrary();
+    return r.ok ? null : (r.error ?? "Failed.");
+  },
+
   linkSkillGroup: (sessionId, groupId, linked) => {
     set((s) => ({
       sessions: patchSession(s.sessions, sessionId, (ses) => {
@@ -2210,6 +2319,9 @@ export const useHelix = create<HelixState>((set, get) => ({
     if (!opts?.incoming && !replay) {
       const assigned = personaAssignment(trimmed, get().agents);
       if (assigned) get().setSessionAgent(sessionId, assigned.id);
+      bumpLearn(sessionId, "turns");
+      // A new message from the user wins over a review still running.
+      if (get().reviewing.includes(sessionId)) void westcode()?.learn?.cancel(sessionId);
     }
 
     if (session.status === "running" && !replay) {
@@ -2329,6 +2441,9 @@ export const useHelix = create<HelixState>((set, get) => ({
       .filter((g): g is SkillGroup => Boolean(g))
       .map((g) => resolveGroup(g, installedSkills));
     const groupsText = groupPreamble(linkedGroups);
+    // Approved desk memory rides the first turn of each CLI session (a
+    // frozen snapshot — it never changes mid-session).
+    const memoryText = !latest.agentSessionId && get().deskMemory ? `${get().deskMemory}\n` : "";
     const mentioned = extractMentions(outgoing, get().agents).filter(
       (m) => m.agent.id !== latest.agentId,
     );
@@ -2353,7 +2468,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       : `Incoming status report from another WestCode session. Read it. Do NOT reply unless it assigns you new work or asks a direct question — a completion report is terminal, and acknowledgment ping-pong wastes both sessions.`;
     const preambleText = opts?.incoming
       ? `${bus}\n${persona}${groupsText}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
-      : `${bus}\n${persona}${groupsText}${mentionNotes}`;
+      : `${bus}\n${memoryText}${persona}${groupsText}${mentionNotes}`;
     const promptText = `${preambleText}${outgoing}`;
 
     const api = westcode();
@@ -2507,6 +2622,7 @@ export const useHelix = create<HelixState>((set, get) => ({
           ),
         })),
       }));
+      if (!opts?.incoming) void get().reviewSession(sessionId);
       notifyBackground(
         sessionId,
         `${latest.title} finished`,
@@ -2642,6 +2758,7 @@ function runSlash(
     "msg",
     "group",
     "ungroup",
+    "reflect",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -2665,6 +2782,12 @@ function runSlash(
       get().customProviders,
     );
     note(`WestCode desk roster\n\n${formatRoster(roster)}`);
+    return true;
+  }
+
+  if (cmd === "reflect") {
+    note("Reviewing this session for skills and memory worth keeping…");
+    void get().reviewSession(sessionId, { manual: true });
     return true;
   }
 

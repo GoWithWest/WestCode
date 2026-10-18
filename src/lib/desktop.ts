@@ -152,6 +152,38 @@ export type GitBridge = {
   ) => () => void;
 };
 
+export type LearnProposal = {
+  id: string;
+  kind: "skill" | "memory";
+  name?: string;
+  action?: "create" | "update";
+  target?: "user" | "memory";
+  op?: "add" | "replace" | "remove";
+  text?: string;
+  before: string;
+  after: string;
+  diff: string;
+  why: string;
+  origin?: { sessionId?: string };
+  createdAt: number;
+};
+
+export type LearnBridge = {
+  review: (p: {
+    sessionId: string;
+    providerId: string;
+    cwd: string;
+    model: string;
+    messages: { role: string; text: string }[];
+    doMemory: boolean;
+    doSkill: boolean;
+  }) => Promise<{ ok: boolean; error?: string; reply?: string; staged: LearnProposal[] }>;
+  cancel: (origin: string) => Promise<{ ok: boolean }>;
+  pending: () => Promise<LearnProposal[]>;
+  decide: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<{ ok: boolean; error?: string }>;
+  memory: () => Promise<{ user: string; memory: string; snapshot: string }>;
+};
+
 export type WestCreateSnapshot = {
   ok: boolean;
   error?: string;
@@ -235,6 +267,7 @@ type WestcodeBridge = {
   gitStatus: (cwd: string) => Promise<GitStatus>;
   git?: GitBridge;
   westcreate?: () => Promise<WestCreateSnapshot>;
+  learn?: LearnBridge;
   openWestcreate?: () => Promise<{ ok: boolean; error?: string }>;
   apiPrompt: (payload: {
     endpoint: string;

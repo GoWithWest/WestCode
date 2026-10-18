@@ -9,10 +9,11 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl } from "./acp-host.mjs";
+import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews } from "./acp-host.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 import * as gitOps from "./git.mjs";
 import * as westcreate from "./westcreate.mjs";
+import * as learn from "./learn.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -521,6 +522,42 @@ ipcMain.handle("registry:search", async (_e, { q }) => {
     clearTimeout(timer);
   }
 });
+
+// ---- Learning loop (learn.mjs): reviews stage proposals; the user decides.
+ipcMain.handle("learn:review", async (_e, p = {}) => {
+  if (!PROVIDERS[p.providerId]) return { ok: false, error: "Reviews run on Claude, Grok or Codex sessions." };
+  const before = new Set(learn.listPending().map((r) => r.id));
+  const prompt = learn.reviewPrompt({
+    transcript: learn.digest(Array.isArray(p.messages) ? p.messages : []),
+    doSkill: p.doSkill !== false,
+    doMemory: Boolean(p.doMemory),
+    skills: learn.listSkills(),
+  });
+  let dir = p.cwd;
+  try {
+    dir = repoDir(p.cwd);
+  } catch {
+    dir = homedir();
+  }
+  const r = await runReview({
+    providerId: p.providerId,
+    cwd: dir,
+    model: p.model,
+    prompt,
+    doMemory: Boolean(p.doMemory),
+    doSkill: p.doSkill !== false,
+    origin: p.sessionId,
+  });
+  const staged = learn.listPending().filter((x) => !before.has(x.id));
+  return { ...r, staged };
+});
+ipcMain.handle("learn:cancel", (_e, origin) => {
+  cancelReviews(String(origin || ""));
+  return { ok: true };
+});
+ipcMain.handle("learn:pending", () => learn.listPending());
+ipcMain.handle("learn:decide", (_e, p = {}) => learn.decide(String(p.id || ""), p.verdict === "approve" ? "approve" : "reject", p.edited));
+ipcMain.handle("learn:memory", () => ({ user: learn.readMemory("user"), memory: learn.readMemory("memory"), snapshot: learn.memorySnapshot() }));
 
 ipcMain.handle("westcreate:snapshot", () => westcreate.snapshot());
 ipcMain.handle("westcreate:open", () => westcreate.openApp());

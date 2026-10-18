@@ -44,6 +44,21 @@ function deskMcp(sessionId, providerId) {
   return servers;
 }
 
+/** The learning reviewer's only extra tools: read skills/memory, propose. */
+function learnMcp(sessionId, opts) {
+  const nodeBin = which("node") || process.execPath;
+  const env = [
+    { name: "WESTCODE_LEARN_SESSION", value: String(opts.origin || sessionId) },
+    { name: "WESTCODE_LEARN_MEMORY", value: opts.doMemory ? "1" : "0" },
+    { name: "WESTCODE_LEARN_SKILLS", value: opts.doSkill === false ? "0" : "1" },
+  ];
+  for (const k of ["WESTCODE_HOME", "WESTCODE_USER_HOME"]) {
+    if (process.env[k]) env.push({ name: k, value: process.env[k] });
+  }
+  if (nodeBin === process.execPath) env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
+  return [{ type: "stdio", name: "westcode-learn", command: nodeBin, args: [join(here, "learn-mcp.mjs")], env }];
+}
+
 function expandHome(p) {
   if (!p) return process.cwd();
   if (p.startsWith("~/")) return `${homedir()}${p.slice(1)}`;
@@ -200,6 +215,8 @@ class AcpSession {
      * on the desk), and a failed load must not become a blank new session.
      */
     this.readOnly = false;
+    /** Learning reviewer: {doMemory, doSkill, origin}; reads and proposes only. */
+    this.reviewer = null;
   }
 
   takeReplay() {
@@ -326,7 +343,11 @@ class AcpSession {
     await this._authenticate(init);
 
     // A history read needs no tools and must not join the desk bus.
-    const mcpServers = this.readOnly ? [] : deskMcp(this.id, this.providerId);
+    const mcpServers = this.reviewer
+      ? learnMcp(this.id, this.reviewer)
+      : this.readOnly
+        ? []
+        : deskMcp(this.id, this.providerId);
     const resumeId = this.resumeId;
     if (resumeId) {
       // session/load replays the whole transcript as session/update
@@ -598,6 +619,22 @@ class AcpSession {
         this.reply(msg.id, { outcome: { outcome: "cancelled" } });
         return;
       }
+      if (this.reviewer) {
+        // The reviewer reads and proposes; it never edits or runs anything.
+        const call = params.toolCall || {};
+        const blob = `${call.title || ""} ${call.name || ""} ${JSON.stringify(call._meta || {})}`.toLowerCase();
+        const k = String(call.kind || "").toLowerCase();
+        const allowed = /westcode[-_]learn|westcode_skill|westcode_memory/.test(blob) || ["read", "search", "think"].includes(k);
+        const opts = params.options || [];
+        const reject =
+          opts.find((o) => /reject/i.test(`${o.kind || ""} ${o.optionId || ""}`))?.optionId || "reject";
+        this.reply(msg.id, {
+          outcome: allowed
+            ? { outcome: "selected", optionId: pickAllowOption(opts) }
+            : { outcome: "selected", optionId: reject },
+        });
+        return;
+      }
       const kind = String(params.toolCall?.kind || "").toLowerCase();
       // ACP declares the tool kind — trust it first; the title regex is only
       // a fallback for adapters that omit kind.
@@ -654,7 +691,7 @@ class AcpSession {
         );
       return;
     }
-    if (method === "fs/write_text_file" && this.readOnly) {
+    if (method === "fs/write_text_file" && (this.readOnly || this.reviewer)) {
       // Showing history must never touch the user's files.
       this.write({
         jsonrpc: "2.0",
@@ -762,6 +799,7 @@ export function ensureSession(opts, emit) {
     emit,
   );
   s.resumeId = opts.agentSessionId || null;
+  s.reviewer = opts.reviewer || null;
   s.readOnly = Boolean(opts.readOnly && s.resumeId);
   sessions.set(opts.sessionId, s);
   return s;
@@ -877,4 +915,42 @@ export function dropSession(id) {
 export function stopAll() {
   for (const s of sessions.values()) s.stop();
   sessions.clear();
+}
+
+/**
+ * Review a finished session: a fresh, restricted session of the same CLI
+ * gets the transcript and the learning tools, and stages proposals. Returns
+ * {ok, reply} — the proposals themselves are on disk (learn.mjs).
+ */
+export async function runReview({ providerId, cwd, model, prompt, doMemory, doSkill, origin }) {
+  const id = `review:${origin || "session"}:${Date.now()}`;
+  let reply = "";
+  const s = ensureSession(
+    {
+      sessionId: id,
+      providerId,
+      cwd,
+      model,
+      effort: "low",
+      permissionMode: "ask",
+      reviewer: { doMemory, doSkill, origin },
+    },
+    (ev) => {
+      if (ev.type === "text") reply += ev.text || "";
+    },
+  );
+  try {
+    await s.prompt(prompt, []);
+    return { ok: true, reply: reply.trim() };
+  } catch (err) {
+    return { ok: false, error: err.message, reply: reply.trim() };
+  } finally {
+    dropSession(id);
+  }
+}
+
+export function cancelReviews(origin) {
+  for (const [id, s] of sessions) {
+    if (id.startsWith(`review:${origin}:`)) s.cancel();
+  }
 }
