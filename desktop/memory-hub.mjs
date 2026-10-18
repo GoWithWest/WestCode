@@ -73,7 +73,7 @@ export function scanSources() {
   try {
     for (const p of readdirSync(join(h, ".claude", "projects"))) {
       const dir = join(h, ".claude", "projects", p, "memory");
-      if (existsSync(dir)) add("claude", "memory", `Claude Code auto-memory (${p.replace(/^-/, "/").replace(/-/g, "/")})`, dir, mdFiles(dir).length);
+      if (existsSync(dir)) add("claude", "memory", "Claude Code auto-memory", dir, mdFiles(dir).length);
     }
   } catch {
     /* no projects */
@@ -227,7 +227,7 @@ export function rulesTargets() {
 
 export function memoryBlock({ repo, remote, local, facts = [] }) {
   const where = repo
-    ? `- The shared memory store is the git repository \`${repo}\`${remote ? ` (pushed to ${remote})` : ""}.`
+    ? `- The shared memory store is \`${repo}\`, in a git repository${remote ? ` pushed to ${remote}` : ""}.`
     : `- The shared memory store is \`${local}\` (on this computer only — ${"suggest creating a git repository for it so memory follows the user"}).`;
   const how = repo
     ? "- To remember something durable (who the user is, how they want work done, facts about their machines and projects): add one Markdown file per fact there with frontmatter `name`, `description` and `type`; if the folder has an index or TIMELINE.md, add a line to it; then commit and push. Update or remove a memory that turns out wrong."

@@ -60,7 +60,8 @@ export function liveLabel(blocks: Block[]): string {
     if (b.type === "tool" && b.status === "running") return toolLabel(b);
     if (b.type === "think" && b.ms == null) return "Thinking";
   }
-  return "Working";
+  // Between tools the agent is generating: show the thinking label.
+  return "Thinking";
 }
 
 export function toolLabel(t: ToolBlock): string {

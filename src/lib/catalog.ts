@@ -248,9 +248,13 @@ export function filterSlash(
   live?: SlashCmd[],
 ): SlashCmd[] {
   const q = query.replace(/^\//, "").toLowerCase();
-  return slashFor(id, live).filter(
-    (c) => c.cmd.startsWith(q) || c.hint.toLowerCase().includes(q),
-  );
+  // Commands whose name starts with what was typed come first — the top row
+  // is what Enter picks, so "/goa" must land on /goal, not on a skill that
+  // merely mentions "goal" in its description.
+  const all = slashFor(id, live);
+  const byName = all.filter((c) => c.cmd.toLowerCase().startsWith(q));
+  const byHint = all.filter((c) => !byName.includes(c) && c.hint.toLowerCase().includes(q));
+  return [...byName, ...byHint];
 }
 
 export function matchModel(

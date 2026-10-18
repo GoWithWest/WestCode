@@ -92,7 +92,10 @@ export function MemoryView() {
               <p className="text-sm font-medium">Shared memory store</p>
               {usingRepo ? (
                 <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
-                  <span className="truncate font-mono text-foreground">{repo!.root}</span>
+                  <span className="truncate font-mono text-foreground">{settings.memoryRepo}</span>
+                  {repo!.root && repo!.root !== settings.memoryRepo ? (
+                    <span className="truncate text-subtle">in the repository {repo!.root}</span>
+                  ) : null}
                   <span>
                     {repo!.remote ? (
                       <>
@@ -180,7 +183,8 @@ export function MemoryView() {
 
           {settings.memoryRepo && repo && !repo.repo ? (
             <p className="mt-3 text-xs text-danger">
-              {settings.memoryRepo} is not a git repository any more.
+              Git does not see a repository at {settings.memoryRepo}. If this folder is a link into a repository
+              (common on network shares), pick the repository&apos;s own folder instead.
             </p>
           ) : null}
 

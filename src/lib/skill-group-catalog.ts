@@ -590,7 +590,6 @@ export const GROUP_CATALOG: SkillGroup[] = [
       { name: "hyperframes-video-beats" },
       { name: "hyperframes:hyperframes-audio" },
       { name: "hyperframes:music-to-video" },
-      { name: "music-library-links" },
       { name: "remotion-multimedia" },
       { name: "sound-design" },
       { name: "sound-effects" },
@@ -712,7 +711,6 @@ export const GROUP_CATALOG: SkillGroup[] = [
       { name: "data:statistical-analysis" },
       { name: "data:validate-data" },
       { name: "data:write-query" },
-      { name: "dataset-consolidator" },
       { name: "operations:ab-test-spec" },
       { name: "operations:cohort-analysis" },
       { name: "operations:metrics-report" },
@@ -870,17 +868,15 @@ export const GROUP_CATALOG: SkillGroup[] = [
   },
   {
     id: "homelab",
-    label: "Homelab & NAS Ops",
-    description: "Jago's own network: hub registration, NAS/k3s ops, scheduled loops, wish list.",
+    label: "Homelab & Self-hosting",
+    description: "Running your own servers: Cloudflare tunnels and access, runbooks, incident response, scheduled jobs, n8n automations.",
     icon: "server",
     skills: [
-      { name: "anthropic-skills:register-service" },
       { name: "anthropic-skills:schedule" },
       { name: "cloudflare:cloudflare" },
       { name: "cloudflare:cloudflare-one" },
       { name: "devops:incident-response" },
       { name: "operations:runbook" },
-      { name: "wishlist" },
       { name: "haunchen/n8n-skills", source: "https://github.com/haunchen/n8n-skills" },
     ],
   },
@@ -1811,7 +1807,6 @@ export const GROUP_CATALOG: SkillGroup[] = [
       { name: "mattpocock-skills:claude-handoff" },
       { name: "mattpocock-skills:handoff" },
       { name: "playwright-cli" },
-      { name: "wishlist" },
       {
         name: "notion-meeting-intelligence",
         source:

@@ -133,7 +133,11 @@ const Message = memo(function Message({
               ) {
                 void useHelix
                   .getState()
-                  .restoreCheckpoint(sessionId, message.checkpoint!, text.slice(0, 50));
+                  .restoreCheckpoint(
+                    sessionId,
+                    message.checkpoint!,
+                    text.length > 50 ? `${text.slice(0, 50).trimEnd()}…` : text,
+                  );
               }
             }}
             className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-subtle opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100"

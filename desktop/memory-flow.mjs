@@ -11,7 +11,9 @@ export function deskFacts() {
 export async function syncAllRules(repo) {
   const info = repo ? await hub.repoInfo(String(repo)) : { repo: false };
   return hub.syncRules({
-    repo: info.repo ? info.root : null,
+    // The folder the user picked (it may be a subfolder of the repository,
+    // like memory/ next to other files): that is where facts go.
+    repo: info.repo ? String(repo) : null,
     remote: info.remote || "",
     local: join(learn.learnHome(), "memory"),
     facts: deskFacts(),
