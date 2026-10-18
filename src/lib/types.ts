@@ -17,11 +17,18 @@ export type Attachment = {
   text?: string;
 };
 
+export type FileDiff = { path: string; oldText: string; newText: string };
+
 export type ToolBlock = {
   type: "tool";
   /** The agent's own call id — identity, so updates patch the right card. */
   toolId?: string;
   name: string;
+  /** Human label from the agent ("Read calc.py"). */
+  title?: string;
+  /** ACP tool kind: read, edit, delete, move, search, execute, think, fetch, other. */
+  toolKind?: string;
+  diffs?: FileDiff[];
   path?: string;
   command?: string;
   to?: string;
@@ -67,6 +74,9 @@ export type Project = {
 export type PermissionPrompt = {
   rpcId: number;
   tool: string;
+  toolKind?: string;
+  command?: string;
+  diffs?: FileDiff[];
   options: { optionId?: string; kind?: string; name?: string }[];
 };
 
@@ -95,6 +105,19 @@ export type Session = {
   archivedAt?: number;
   /** Skill groups linked to this session (their skills ride every turn). */
   skillGroupIds?: string[];
+  /** The agent's live task list (ACP plan updates). */
+  plan?: PlanEntry[];
+  /** Context window use from the agent (ACP usage_update). */
+  usage?: { used: number; size: number };
+  /** Mode the agent reports it is in (it can leave plan mode by itself). */
+  agentMode?: string;
+  /** The user named this session; agent-suggested titles stop applying. */
+  titleLocked?: boolean;
+};
+
+export type PlanEntry = {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
 };
 
 export type IncomingRef = {

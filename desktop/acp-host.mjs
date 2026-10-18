@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { deskDir } from "./desk-paths.mjs";
+import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate } from "./acp-map.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let deskUrl = "";
@@ -611,10 +612,15 @@ class AcpSession {
         });
         return;
       }
+      const call = params.toolCall || {};
+      const diffs = contentDiffs(call.content);
       this.emit({
         type: "permission",
         rpcId: msg.id,
-        tool: params.toolCall?.title || params.toolCall?.kind || "tool",
+        tool: call.title || call.kind || "tool",
+        toolKind: typeof call.kind === "string" ? call.kind : undefined,
+        command: typeof call.rawInput?.command === "string" ? call.rawInput.command : undefined,
+        diffs: diffs.length ? diffs : undefined,
         options: params.options || [],
       });
       return;
@@ -675,89 +681,6 @@ class AcpSession {
       outcome: { outcome: "selected", optionId },
     });
   }
-}
-
-/** Event types that belong to a transcript, so session/load can replay them. */
-const TRANSCRIPT_EVENTS = new Set(["user", "text", "thought", "tool"]);
-
-function mapUpdate(params, opts = {}) {
-  const u = params.update || params;
-  const kind = u.sessionUpdate || u.session_update || "";
-  if (opts.replay && (kind === "user_message_chunk" || kind === "user_message")) {
-    return { type: "user", text: extractText(u) };
-  }
-  if (kind === "available_commands_update" || u.availableCommands) {
-    const list = u.availableCommands || u.available_commands || [];
-    return {
-      type: "commands",
-      commands: list
-        .map((c) => ({
-          cmd: String(c.name || c.command || "").replace(/^\//, ""),
-          hint: c.description || c.hint || "",
-          kind: c.kind === "skill" ? "skill" : "builtin",
-        }))
-        .filter((c) => c.cmd),
-    };
-  }
-  if (
-    kind === "user_message_chunk" ||
-    kind === "user_message" ||
-    kind === "session_info_update" ||
-    kind === "current_mode_update"
-  ) {
-    return { type: "noop" };
-  }
-  if (kind === "agent_thought_chunk") {
-    return { type: "thought", text: extractText(u) };
-  }
-  if (kind === "agent_message_chunk") {
-    return { type: "text", text: extractText(u) };
-  }
-  if (kind === "tool_call" || kind === "tool_call_update") {
-    const raw = u.rawInput || {};
-    let content = "";
-    if (Array.isArray(u.content)) {
-      content = u.content
-        .map((b) => b.text || "")
-        .filter(Boolean)
-        .join("\n");
-    } else if (typeof u.content === "string") {
-      content = u.content;
-    }
-    const status =
-      u.status === "failed" || u.status === "error"
-        ? "error"
-        : u.status === "completed" || u.status === "done" || kind === "tool_call_update"
-          ? "done"
-          : "running";
-    return {
-      type: "tool",
-      toolId: u.toolCallId || u.tool_call_id || u.id,
-      // toolName first: dedupe logic (extractSendMessages) must recognize the
-      // raw tool id; a prettified title is only a display fallback. An update
-      // patch with no name fields sends "" so the renderer keeps the recorded
-      // name instead of overwriting it with a generic one.
-      name:
-        u.toolName ||
-        u.title ||
-        (kind === "tool_call" ? u.kind || "Tool" : ""),
-      path: u.locations?.[0]?.path || raw.path,
-      command: raw.command,
-      content,
-      status: kind === "tool_call" && !u.status ? "running" : status,
-    };
-  }
-  const text = extractText(u);
-  if (text) return { type: "text", text };
-  return { type: "noop" };
-}
-
-function extractText(u) {
-  if (u.content && typeof u.content === "object" && typeof u.content.text === "string") {
-    return u.content.text;
-  }
-  if (typeof u.text === "string") return u.text;
-  return "";
 }
 
 const sessions = new Map();

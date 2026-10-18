@@ -764,7 +764,12 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
       const known = tools.get(key);
       if (known) {
         if (ev.name) known.name = ev.name;
+        if (ev.title) known.title = ev.title;
+        if (ev.toolKind) known.toolKind = ev.toolKind;
+        if (ev.path) known.path = ev.path;
+        if (ev.command) known.command = ev.command;
         if (ev.content) known.content = ev.content;
+        if (ev.diffs) known.diffs = ev.diffs;
         if (ev.status) known.status = ev.status;
         continue;
       }
@@ -772,6 +777,9 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         type: "tool",
         toolId: ev.toolId,
         name: ev.name || "Tool",
+        title: ev.title || undefined,
+        toolKind: ev.toolKind,
+        diffs: ev.diffs,
         path: ev.path,
         command: ev.command,
         content: ev.content || "",
@@ -812,6 +820,23 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     }));
     return;
   }
+  if (ev.type === "plan" && ev.plan) {
+    patch((ses) => ({ ...ses, plan: ev.plan, updatedAt: Date.now() }));
+    return;
+  }
+  if (ev.type === "usage" && ev.usage) {
+    patch((ses) => ({ ...ses, usage: ev.usage }));
+    return;
+  }
+  if (ev.type === "info" && ev.title) {
+    // The agent's own title for the work, until the user names it.
+    patch((ses) => (ses.titleLocked ? ses : { ...ses, title: ev.title! }));
+    return;
+  }
+  if (ev.type === "mode" && ev.modeId) {
+    patch((ses) => ({ ...ses, agentMode: ev.modeId }));
+    return;
+  }
   if (ev.type === "commands" && ev.commands) {
     patch((ses) => ({ ...ses, slashCommands: ev.commands, updatedAt: Date.now() }));
     return;
@@ -850,7 +875,14 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
   if (ev.type === "permission" && ev.rpcId != null) {
     patch((ses) => ({
       ...ses,
-      permission: { rpcId: ev.rpcId!, tool: ev.tool || "tool", options: ev.options || [] },
+      permission: {
+        rpcId: ev.rpcId!,
+        tool: ev.tool || "tool",
+        toolKind: ev.toolKind,
+        command: ev.command,
+        diffs: ev.diffs,
+        options: ev.options || [],
+      },
       updatedAt: Date.now(),
     }));
     const key = `${sessionId}:${ev.rpcId}`;
@@ -923,17 +955,20 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
               ? b.toolId === ev.toolId || (!b.toolId && b.name === ev.name)
               : b.name === ev.name && b.status === "running"),
         );
-        const tool: Block = {
+        const tool: ToolBlock = {
           type: "tool",
           toolId: ev.toolId,
           name: ev.name || "Tool",
+          title: ev.title || undefined,
+          toolKind: ev.toolKind,
           path: ev.path,
           command: ev.command,
           content: ev.content || "",
+          diffs: ev.diffs,
           status: ev.status || "running",
         };
         if (idx >= 0) {
-          const prev = blocks[idx] as Extract<Block, { type: "tool" }>;
+          const prev = blocks[idx] as ToolBlock;
           // tool_call_update is a PATCH: a completion event often carries only
           // {toolCallId, status}. Never let a fabricated/generic name replace
           // the recorded one — extractSendMessages relies on the original
@@ -943,10 +978,15 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           blocks[idx] = {
             ...tool,
             name: meaningfulName,
+            title: tool.title || prev.title,
+            toolKind: tool.toolKind || prev.toolKind,
             toolId: tool.toolId || prev.toolId,
             content: tool.content || prev.content,
+            diffs: tool.diffs || prev.diffs,
             path: tool.path || prev.path,
             command: tool.command || prev.command,
+            // A patch without a status leaves the card where it was.
+            status: ev.status || prev.status,
           };
         } else {
           blocks.push(tool);
@@ -980,7 +1020,11 @@ function bindDesktopEvents() {
         ev.type === "commands" ||
         ev.type === "permission" ||
         ev.type === "models" ||
-        ev.type === "ready"
+        ev.type === "ready" ||
+        ev.type === "plan" ||
+        ev.type === "usage" ||
+        ev.type === "info" ||
+        ev.type === "mode"
       ) {
         applyEvent(ev.sessionId, "", ev);
       }
@@ -1528,6 +1572,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     const session: Session = {
       id: uid("ses"),
       title: title?.trim() || folderName,
+      titleLocked: Boolean(title?.trim()),
       providerId,
       projectId,
       cwd: path,
@@ -1702,6 +1747,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       sessions: patchSession(s.sessions, id, (ses) => ({
         ...ses,
         title: t.slice(0, 80),
+        titleLocked: true,
         updatedAt: Date.now(),
       })),
     }));
