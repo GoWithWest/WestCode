@@ -49,7 +49,7 @@ test("Library → Groups: add a skill to a group and take it out again", async (
   // The first click can land before React has hydrated the sidebar.
   await expect(async () => {
     await page.getByRole("button", { name: /^Library/ }).first().click();
-    await expect(page.getByRole("heading", { name: "Library" })).toBeVisible({ timeout: 1000 });
+    await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible({ timeout: 1000 });
   }).toPass();
   await page.getByRole("button", { name: /Web Design/ }).first().click();
   await page.getByRole("button", { name: "Add skill" }).click();
