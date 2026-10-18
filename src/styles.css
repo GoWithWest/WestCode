@@ -148,6 +148,106 @@
   }
 }
 
+@layer components {
+  /* Live-work label: a light band sweeps across the text. */
+  .shimmer-text {
+    background: linear-gradient(
+        100deg,
+        var(--color-muted-foreground) 20%,
+        var(--color-foreground) 45%,
+        var(--color-muted-foreground) 70%
+      )
+      0 0 / 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer-sweep 1.8s linear infinite;
+  }
+
+  .prose-west > :first-child {
+    margin-top: 0;
+  }
+  .prose-west > :last-child {
+    margin-bottom: 0;
+  }
+  .prose-west p,
+  .prose-west ul,
+  .prose-west ol,
+  .prose-west blockquote,
+  .prose-west table {
+    margin: 0.6em 0;
+  }
+  .prose-west ul {
+    list-style: disc;
+    padding-left: 1.25em;
+  }
+  .prose-west ol {
+    list-style: decimal;
+    padding-left: 1.4em;
+  }
+  .prose-west li {
+    margin: 0.2em 0;
+  }
+  .prose-west li::marker {
+    color: var(--color-subtle);
+  }
+  .prose-west h1,
+  .prose-west h2,
+  .prose-west h3,
+  .prose-west h4 {
+    margin: 1em 0 0.4em;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .prose-west h1 {
+    font-size: 1.25em;
+  }
+  .prose-west h2 {
+    font-size: 1.12em;
+  }
+  .prose-west h3,
+  .prose-west h4 {
+    font-size: 1em;
+  }
+  .prose-west strong {
+    font-weight: 600;
+  }
+  .prose-west blockquote {
+    border-left: 2px solid var(--color-border-strong);
+    padding-left: 0.8em;
+    color: var(--color-muted-foreground);
+  }
+  .prose-west hr {
+    margin: 1em 0;
+    border-color: var(--color-border);
+  }
+  .prose-west table {
+    display: block;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.92em;
+  }
+  .prose-west th,
+  .prose-west td {
+    border: 1px solid var(--color-border);
+    padding: 0.3em 0.6em;
+    text-align: left;
+  }
+  .prose-west th {
+    background: var(--color-surface-2);
+    font-weight: 600;
+  }
+}
+
+@keyframes shimmer-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -24,7 +24,8 @@
     "electron": "WESTCODE_DEV=1 electron .",
     "build:desktop": "vite build",
     "dist": "npm run build:desktop && electron-builder --mac --publish never -c.directories.output=/tmp/westcode-release && rm -rf release && mkdir -p release && cp /tmp/westcode-release/*.dmg /tmp/westcode-release/*.zip release/",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "build": {
     "appId": "dev.westcode.app",
@@ -90,8 +91,10 @@
     "react-day-picker": "^9.14.0",
     "react-dom": "^19.2.0",
     "react-hook-form": "^7.54.0",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.6.5",
     "recharts": "^2.13.0",
+    "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.3.0",
@@ -102,6 +105,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
+    "@playwright/test": "^1.56.1",
     "@types/node": "^22.16.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

@@ -17,6 +17,7 @@ import type { Attachment, Session } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useResolvedProvider } from "./provider";
 import { ComposerSkillGroups } from "./skill-groups";
+import { UsageRing } from "./session-extras";
 
 type Panel = "mode" | "model" | "effort" | null;
 
@@ -497,6 +498,7 @@ export function Composer({ session }: { session: Session }) {
                   </div>
                 </MetaButton>
                 <ComposerSkillGroups session={session} />
+                <UsageRing session={session} />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">

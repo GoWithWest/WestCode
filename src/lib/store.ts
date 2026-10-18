@@ -108,6 +108,12 @@ export type AppSettings = {
   delegatedAuto: boolean;
   /** Render transcripts in the tighter compact layout everywhere. */
   transcriptCompact: boolean;
+  /**
+   * How much of the agent's work shows: normal (tools collapsed, thinking
+   * summarised), thinking (thoughts open), verbose (everything open).
+   * Cmd/Ctrl+O cycles it.
+   */
+  transcriptDetail: "normal" | "thinking" | "verbose";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
 };
@@ -120,6 +126,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultCwd: "",
   delegatedAuto: true,
   transcriptCompact: false,
+  transcriptDetail: "normal",
   launchAtLogin: false,
 };
 
@@ -799,6 +806,15 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
   return out.filter((m) => m.blocks.some((b) => b.type !== "text" || b.text.trim()));
 }
 
+/** A thought ends when the agent moves on to text or a tool. */
+export function closeThinking(blocks: Block[]): Block[] {
+  const last = blocks[blocks.length - 1];
+  if (last?.type === "think" && last.ms == null && last.startedAt) {
+    blocks[blocks.length - 1] = { ...last, ms: Date.now() - last.startedAt };
+  }
+  return blocks;
+}
+
 function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
   const patch = (fn: (s: Session) => Session) =>
     useHelix.setState((s) => ({
@@ -910,10 +926,10 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
         if (m.id !== asstId) return m;
         const blocks = [...m.blocks];
         const last = blocks[blocks.length - 1];
-        if (last?.type === "think") {
-          blocks[blocks.length - 1] = { type: "think", text: last.text + ev.text };
+        if (last?.type === "think" && last.ms == null) {
+          blocks[blocks.length - 1] = { ...last, text: last.text + ev.text };
         } else {
-          blocks.push({ type: "think", text: ev.text! });
+          blocks.push({ type: "think", text: ev.text!, startedAt: Date.now() });
         }
         return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true };
       }),
@@ -926,7 +942,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       updatedAt: Date.now(),
       messages: ses.messages.map((m) => {
         if (m.id !== asstId) return m;
-        const blocks = [...m.blocks];
+        const blocks = closeThinking([...m.blocks]);
         const last = blocks[blocks.length - 1];
         if (last?.type === "text") {
           blocks[blocks.length - 1] = { type: "text", text: last.text + ev.text };
@@ -944,7 +960,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       updatedAt: Date.now(),
       messages: ses.messages.map((m) => {
         if (m.id !== asstId) return m;
-        const blocks = [...m.blocks];
+        const blocks = closeThinking([...m.blocks]);
         // Match on the agent's call id. Matching on `path` used to work only
         // for tools that HAVE no path (the id was stored there), so a Read or
         // Edit update opened a second card instead of completing the first.
@@ -1165,6 +1181,7 @@ function bindDesktopEvents() {
 }
 
 const promptAsst = new Map<string, string>();
+let viewTouched = false;
 
 export const useHelix = create<HelixState>((set, get) => ({
   sessions: [],
@@ -1196,7 +1213,10 @@ export const useHelix = create<HelixState>((set, get) => ({
   cliSessionStatus: "idle",
   cliSessionErrors: [],
 
-  setView: (view) => set({ view, mobileNav: "desk" }),
+  setView: (view) => {
+    viewTouched = true;
+    set({ view, mobileNav: "desk" });
+  },
   setActive: (id) => {
     set({ activeId: id, view: "focus", mobileNav: "desk" });
     // A pane whose history has not been painted yet (including one that
@@ -1281,9 +1301,11 @@ export const useHelix = create<HelixState>((set, get) => ({
         ? get().activeId
         : (desk.activeId ?? sessions[0]?.id ?? null),
       splitIds: live.length ? get().splitIds : (desk.splitIds ?? null),
-      view: live.length
-        ? get().view
-        : (desk.view ?? (sessions.length ? "focus" : "mosaic")),
+      // A view the user already picked while the desk was loading wins.
+      view:
+        live.length || viewTouched
+          ? get().view
+          : (desk.view ?? (sessions.length ? "focus" : "mosaic")),
     });
     // Restored CLI sessions carry only a pointer — refill the ones on screen
     // from the CLI itself. Off-screen panes wait until they are opened, so a
@@ -2442,8 +2464,20 @@ export const useHelix = create<HelixState>((set, get) => ({
           ...ses,
           status: "waiting",
           updatedAt: Date.now(),
+          // The turn ended: a thought still open is over, and a tool the
+          // agent never sent a final status for is finished.
           messages: ses.messages.map((m) =>
-            m.id === asstId ? { ...m, streaming: false } : m,
+            m.id === asstId
+              ? {
+                  ...m,
+                  streaming: false,
+                  blocks: closeThinking([...m.blocks]).map((b) =>
+                    b.type === "tool" && b.status === "running"
+                      ? { ...b, status: "done" as const }
+                      : b,
+                  ),
+                }
+              : m,
           ),
         })),
       }));

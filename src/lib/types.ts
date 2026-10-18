@@ -44,6 +44,9 @@ export type TextBlock = {
 export type ThinkBlock = {
   type: "think";
   text: string;
+  /** When the agent started this thought, and how long it took once done. */
+  startedAt?: number;
+  ms?: number;
 };
 
 export type Block = TextBlock | ToolBlock | ThinkBlock;
