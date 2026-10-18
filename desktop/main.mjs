@@ -9,7 +9,8 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews } from "./acp-host.mjs";
+import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews, runOneShot } from "./acp-host.mjs";
+import { judgePrompt, parseVerdict } from "./goal.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 import * as gitOps from "./git.mjs";
 import * as westcreate from "./westcreate.mjs";
@@ -554,6 +555,24 @@ ipcMain.handle("learn:review", async (_e, p = {}) => {
   const staged = learn.listPending().filter((x) => !before.has(x.id));
   return { ...r, staged };
 });
+ipcMain.handle("goal:judge", async (_e, p = {}) => {
+  if (!PROVIDERS[p.providerId]) return { ok: false, verdict: "blocked", reason: "Goals run on Claude, Grok or Codex sessions." };
+  let dir = homedir();
+  try {
+    dir = repoDir(p.cwd);
+  } catch {
+    /* keep home */
+  }
+  const r = await runOneShot({
+    providerId: p.providerId,
+    cwd: dir,
+    model: p.model,
+    prompt: judgePrompt(String(p.goal || ""), learn.digest(Array.isArray(p.messages) ? p.messages : [], 8)),
+    origin: p.sessionId,
+  });
+  return r.ok ? { ok: true, ...parseVerdict(r.reply) } : { ok: false, verdict: "continue", reason: r.error || "" };
+});
+
 ipcMain.handle("learn:cancel", (_e, origin) => {
   cancelReviews(String(origin || ""));
   return { ok: true };

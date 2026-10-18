@@ -134,6 +134,8 @@ export type Session = {
   suggestion?: string | null;
   /** Background tasks and subagents the agent started this session. */
   tasks?: AgentTask[];
+  /** Goal mode: keep working toward this until a judge says done or blocked. */
+  goal?: { text: string; turns: number; budget: number; status: "active" | "judging" | "done" | "blocked" | "stopped"; reason?: string };
   /** The agent takes messages into a running turn (Send now steers). */
   canSteer?: boolean;
   /** What the artifact pane is previewing (a file the agent made, or inline code). */

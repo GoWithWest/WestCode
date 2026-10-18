@@ -9,7 +9,7 @@ import type { Session } from "@/lib/types";
 import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
-import { PermissionCard, PlanCard, TasksCard } from "./session-extras";
+import { GoalCard, PermissionCard, PlanCard, TasksCard } from "./session-extras";
 import { AgentAvatar } from "./agents-view";
 import { SourceControlPanel } from "./source-control";
 import { ArtifactPane } from "./artifact-pane";
@@ -113,6 +113,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
             <PermissionCard session={session} agentName={agentName} />
             {!session.permission ? <PlanCard session={session} /> : null}
           {!session.permission ? <TasksCard session={session} /> : null}
+          <GoalCard session={session} />
           </div>
 
           <Composer key={session.id} session={session} />

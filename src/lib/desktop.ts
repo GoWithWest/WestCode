@@ -319,6 +319,14 @@ type WestcodeBridge = {
   git?: GitBridge;
   westcreate?: () => Promise<WestCreateSnapshot>;
   learn?: LearnBridge;
+  judgeGoal?: (p: {
+    sessionId: string;
+    providerId: string;
+    cwd: string;
+    model: string;
+    goal: string;
+    messages: { role: string; text: string }[];
+  }) => Promise<{ ok: boolean; verdict: "done" | "blocked" | "continue"; reason: string }>;
   memoryHub?: MemoryHubBridge;
   artifact?: {
     file: (root: string, file: string) => Promise<{ ok: boolean; url?: string; error?: string }>;

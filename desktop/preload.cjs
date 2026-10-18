@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld("westcode", {
     inline: (code, lang) => ipcRenderer.invoke("artifact:inline", { code, lang }),
     openExternal: (url) => ipcRenderer.invoke("artifact:open-external", url),
   },
+  judgeGoal: (payload) => ipcRenderer.invoke("goal:judge", payload),
   learn: {
     review: (payload) => ipcRenderer.invoke("learn:review", payload),
     cancel: (origin) => ipcRenderer.invoke("learn:cancel", origin),

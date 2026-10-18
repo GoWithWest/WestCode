@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Circle, CircleDot, Layers, ShieldQuestion } from "lucide-react";
+import { Check, ChevronDown, Circle, CircleDot, Layers, ShieldQuestion, Target } from "lucide-react";
 import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import type { Session } from "@/lib/types";
@@ -269,6 +269,62 @@ export function TasksCard({ session }: { session: Session }) {
             ))}
           </ul>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Goal mode: what the agent is working toward, how far along, and Stop. */
+export function GoalCard({ session }: { session: Session }) {
+  const g = session.goal;
+  const stop = useHelix((s) => s.stopGoal);
+  if (!g) return null;
+  const live = g.status === "active" || g.status === "judging";
+  const label =
+    g.status === "judging"
+      ? "Checking whether the goal is met…"
+      : g.status === "active"
+        ? `Working toward it · turn ${g.turns} of ${g.budget}`
+        : g.status === "done"
+          ? "Goal met"
+          : g.status === "blocked"
+            ? "Blocked — needs you"
+            : "Stopped";
+  return (
+    <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
+      <div
+        className={cn(
+          "flex items-start gap-2.5 rounded-xl border bg-surface px-3 py-2",
+          g.status === "done" ? "border-success/40" : g.status === "blocked" ? "border-warn/40" : "border-border",
+        )}
+      >
+        <Target className={cn("mt-0.5 size-4 shrink-0", g.status === "done" ? "text-success" : live ? "text-foreground" : "text-subtle")} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-medium" title={g.text}>
+            {g.text}
+          </p>
+          <p className="text-2xs text-muted-foreground">
+            {label}
+            {g.reason ? ` · ${g.reason}` : ""}
+          </p>
+        </div>
+        {live ? (
+          <button type="button" onClick={() => stop(session.id)} className="shrink-0 text-2xs text-muted-foreground hover:text-foreground">
+            Stop goal
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() =>
+              useHelix.setState((st) => ({
+                sessions: st.sessions.map((x) => (x.id === session.id ? { ...x, goal: undefined } : x)),
+              }))
+            }
+            className="shrink-0 text-2xs text-muted-foreground hover:text-foreground"
+          >
+            Dismiss
+          </button>
+        )}
       </div>
     </div>
   );

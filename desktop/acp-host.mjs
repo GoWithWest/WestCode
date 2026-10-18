@@ -46,6 +46,7 @@ function deskMcp(sessionId, providerId) {
 
 /** The learning reviewer's only extra tools: read skills/memory, propose. */
 function learnMcp(sessionId, opts) {
+  if (opts.judge) return [];
   const nodeBin = which("node") || process.execPath;
   const env = [
     { name: "WESTCODE_LEARN_SESSION", value: String(opts.origin || sessionId) },
@@ -662,7 +663,9 @@ class AcpSession {
         const call = params.toolCall || {};
         const blob = `${call.title || ""} ${call.name || ""} ${JSON.stringify(call._meta || {})}`.toLowerCase();
         const k = String(call.kind || "").toLowerCase();
-        const allowed = /westcode[-_]learn|westcode_skill|westcode_memory/.test(blob) || ["read", "search", "think"].includes(k);
+        const allowed =
+          !this.reviewer.judge &&
+          (/westcode[-_]learn|westcode_skill|westcode_memory/.test(blob) || ["read", "search", "think"].includes(k));
         const opts = params.options || [];
         const reject =
           opts.find((o) => /reject/i.test(`${o.kind || ""} ${o.optionId || ""}`))?.optionId || "reject";
@@ -990,5 +993,25 @@ export async function runReview({ providerId, cwd, model, prompt, doMemory, doSk
 export function cancelReviews(origin) {
   for (const [id, s] of sessions) {
     if (id.startsWith(`review:${origin}:`)) s.cancel();
+  }
+}
+
+/** One answer from the session's CLI with no tools at all (the goal judge). */
+export async function runOneShot({ providerId, cwd, model, prompt, origin }) {
+  const id = `judge:${origin || "session"}:${Date.now()}`;
+  let reply = "";
+  const s = ensureSession(
+    { sessionId: id, providerId, cwd, model, effort: "low", permissionMode: "ask", reviewer: { judge: true, origin } },
+    (ev) => {
+      if (ev.type === "text") reply += ev.text || "";
+    },
+  );
+  try {
+    await s.prompt(prompt, []);
+    return { ok: true, reply: reply.trim() };
+  } catch (err) {
+    return { ok: false, error: err.message, reply: reply.trim() };
+  } finally {
+    dropSession(id);
   }
 }

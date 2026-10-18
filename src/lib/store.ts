@@ -337,6 +337,9 @@ export type HelixState = {
   /** Review a session now (or when counters fire), staging proposals. */
   reviewSession: (sessionId: string, opts?: { manual?: boolean }) => Promise<void>;
   decideProposal: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<string | null>;
+  /** After a turn: ask the judge and keep going toward the session's goal. */
+  advanceGoal: (sessionId: string) => Promise<void>;
+  stopGoal: (sessionId: string) => void;
   /** Interrupt the running turn and send this queued message now (steer). */
   steerNow: (sessionId: string, msgId: string) => void;
   /** Take a queued message back before the agent reads it. */
@@ -2239,6 +2242,45 @@ export const useHelix = create<HelixState>((set, get) => ({
     return r.ok ? null : (r.error ?? "Failed.");
   },
 
+  advanceGoal: async (sessionId) => {
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    const g = ses?.goal;
+    const api = westcode();
+    if (!ses || !g || g.status !== "active" || !api?.judgeGoal) return;
+    const patchGoal = (goal: Partial<NonNullable<Session["goal"]>>) =>
+      set((s) => ({
+        sessions: patchSession(s.sessions, sessionId, (x) => (x.goal ? { ...x, goal: { ...x.goal, ...goal } } : x)),
+      }));
+    if (g.turns >= g.budget) {
+      patchGoal({ status: "stopped", reason: `Used its ${g.budget}-turn budget.` });
+      return;
+    }
+    patchGoal({ status: "judging" });
+    const messages = ses.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-10)
+      .map((m) => ({ role: m.role, text: blocksToPlain(m.blocks).slice(0, 3000) }));
+    const v = await api.judgeGoal({ sessionId, providerId: ses.providerId, cwd: ses.cwd, model: ses.model, goal: g.text, messages });
+    // The user may have stopped the goal while the judge ran.
+    if (get().sessions.find((x) => x.id === sessionId)?.goal?.status !== "judging") return;
+    if (v.verdict === "continue") {
+      patchGoal({ status: "active", turns: g.turns + 1, reason: v.reason });
+      void get().send(
+        sessionId,
+        `Continue toward the goal: ${g.text}${v.reason ? `\nNext, per the review: ${v.reason}` : ""}`,
+        { display: `Continue toward the goal${v.reason ? ` — ${v.reason}` : ""}` },
+      );
+    } else {
+      patchGoal({ status: v.verdict, reason: v.reason });
+    }
+  },
+
+  stopGoal: (sessionId) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => (x.goal ? { ...x, goal: { ...x.goal, status: "stopped", reason: "Stopped by you." } } : x)),
+    }));
+  },
+
   steerNow: (sessionId, msgId) => {
     const ses = get().sessions.find((x) => x.id === sessionId);
     const item = ses?.queued?.find((q) => q.msgId === msgId);
@@ -2789,6 +2831,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         })),
       }));
       if (!opts?.incoming) void get().reviewSession(sessionId);
+      void get().advanceGoal(sessionId);
       notifyBackground(
         sessionId,
         `${latest.title} finished`,
@@ -2926,6 +2969,7 @@ function runSlash(
     "ungroup",
     "reflect",
     "btw",
+    "goal",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -2949,6 +2993,37 @@ function runSlash(
       get().customProviders,
     );
     note(`WestCode desk roster\n\n${formatRoster(roster)}`);
+    return true;
+  }
+
+  if (cmd === "goal") {
+    // Grok has its own /goal; let the CLI run it.
+    if (session.slashCommands?.some((c) => c.cmd === "goal")) return false;
+    if (!arg) {
+      const g = session.goal;
+      note(
+        g
+          ? `Goal: ${g.text}\nStatus: ${g.status} · turn ${g.turns}/${g.budget}${g.reason ? `\n${g.reason}` : ""}`
+          : "Usage: /goal <what done looks like> — WestCode keeps the agent working until a judge says it is done or blocked. /goal stop ends it.",
+      );
+      return true;
+    }
+    if (/^(stop|off|clear|cancel)$/i.test(arg)) {
+      get().stopGoal(sessionId);
+      note("Goal stopped.");
+      return true;
+    }
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        goal: { text: arg, turns: 1, budget: 20, status: "active" },
+      })),
+    }));
+    void get().send(
+      sessionId,
+      `Goal: ${arg}\nWork toward this goal. Keep going across turns until it is met; say clearly what is done and what is left at the end of each turn.`,
+      { display: `🎯 ${arg}` },
+    );
     return true;
   }
 
