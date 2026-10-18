@@ -1,0 +1,74 @@
+name: Test WestCode
+
+# Runs on every pull request and on pushes to non-main branches (main has
+# build.yml, which also builds and releases the app).
+on:
+  pull_request: {}
+  push:
+    branches-ignore: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: Unit tests (lib, ACP mapping, git engine, WestCreate client, learning)
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+          npm test
+      - run: npx playwright install --with-deps chromium
+      - name: End-to-end (renderer + scripted desktop bridge)
+        run: npx playwright test
+        env:
+          CI: "1"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results
+          path: test-results/
+          retention-days: 7
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Unit tests on macOS
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+          npm test
+      - name: Build the app bundle (unsigned)
+        run: npm run build:desktop && npx electron-builder --mac --dir --publish never -c.mac.identity=null
+      - name: Packaged app starts its bundled server
+        run: |
+          APP=$(ls -d dist/mac*/WestCode.app release/mac*/WestCode.app 2>/dev/null | head -1)
+          echo "App: $APP"
+          test -f "$APP/Contents/Resources/app/.output/server/index.mjs"
+          test -f "$APP/Contents/Resources/app/desktop/git.mjs"
+          test -f "$APP/Contents/Resources/app/desktop/learn-mcp.mjs"
+          test -f "$APP/Contents/Resources/app/desktop/westcreate.mjs"
+          PORT=48123
+          ELECTRON_RUN_AS_NODE=1 PORT=$PORT NITRO_PORT=$PORT HOST=127.0.0.1 NITRO_HOST=127.0.0.1 \
+            "$APP/Contents/MacOS/WestCode" "$APP/Contents/Resources/app/.output/server/index.mjs" &
+          for i in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/" -o /tmp/index.html && break; sleep 0.5; done
+          grep -qi "westcode" /tmp/index.html
