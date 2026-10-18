@@ -20,7 +20,8 @@ export function Sidebar() {
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const q = query.trim().toLowerCase();
-  const pool = sessions.filter((s) => showArchived || !s.archivedAt);
+  // Side chats live in their parent's drawer, not in the list.
+  const pool = sessions.filter((s) => !s.sideOf && (showArchived || !s.archivedAt));
   const archivedCount = sessions.filter((s) => s.archivedAt).length;
   const visible = q
     ? pool.filter(

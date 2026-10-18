@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 import { childEnv, which } from "./path.mjs";
 import { scanSkills } from "./skills-scan.mjs";
