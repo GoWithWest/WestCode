@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { HelixMark } from "./mark";
 import { AgentsView } from "./agents-view";
+import { WestCreateView } from "./westcreate-view";
 import { SettingsView } from "./settings-view";
 import { LibraryView } from "./library-view";
 import { Mosaic } from "./mosaic";
@@ -113,6 +114,7 @@ export function HelixApp() {
           {view === "providers" ? <ProvidersView /> : null}
           {view === "library" ? <LibraryView /> : null}
           {view === "agents" ? <AgentsView /> : null}
+          {view === "westcreate" ? <WestCreateView /> : null}
           {view === "settings" ? <SettingsView /> : null}
           {view === "focus" && active ? <SessionPane session={active} /> : null}
           {view === "split" && left && right ? (

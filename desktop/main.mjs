@@ -12,6 +12,7 @@ import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
 import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl } from "./acp-host.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 import * as gitOps from "./git.mjs";
+import * as westcreate from "./westcreate.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -272,6 +273,7 @@ app.whenReady().then(async () => {
   });
   installMenu();
   startScheduler();
+  westcreate.refreshGrokRegistration(which("grok"));
   // Quick entry: summon WestCode and open the New Session dialog from
   // anywhere (mirrors the desktop-assistant global-hotkey pattern).
   const hotkeyOk = globalShortcut.register("CommandOrControl+Shift+Space", () => {
@@ -519,6 +521,9 @@ ipcMain.handle("registry:search", async (_e, { q }) => {
     clearTimeout(timer);
   }
 });
+
+ipcMain.handle("westcreate:snapshot", () => westcreate.snapshot());
+ipcMain.handle("westcreate:open", () => westcreate.openApp());
 
 ipcMain.handle("cli:probe", () => probeAll());
 ipcMain.handle("cli:library", (_e, providerId) => listAddons(providerId));

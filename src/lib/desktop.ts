@@ -152,6 +152,22 @@ export type GitBridge = {
   ) => () => void;
 };
 
+export type WestCreateSnapshot = {
+  ok: boolean;
+  error?: string;
+  installed: boolean;
+  bridge: boolean;
+  running: boolean;
+  mode?: string | null;
+  startedAt?: string | null;
+  registeredWith?: string[];
+  tools?: string[];
+  document?: Record<string, unknown> | null;
+  job?: Record<string, unknown> | null;
+  machine?: Record<string, unknown> | null;
+  view?: string | null;
+};
+
 export type CliUpdate = {
   id: string;
   name: string;
@@ -218,6 +234,8 @@ type WestcodeBridge = {
   } | null>;
   gitStatus: (cwd: string) => Promise<GitStatus>;
   git?: GitBridge;
+  westcreate?: () => Promise<WestCreateSnapshot>;
+  openWestcreate?: () => Promise<{ ok: boolean; error?: string }>;
   apiPrompt: (payload: {
     endpoint: string;
     apiKey?: string;
