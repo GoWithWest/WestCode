@@ -47,8 +47,21 @@ export function HelixApp() {
         if (live.length >= 2) state.setSplit([live[0]!.id, live[1]!.id]);
       }
     });
+    // ⌘O / Ctrl+O cycles how much agent activity shows (Normal → Thinking →
+    // Verbose), the same key Claude Code uses for its transcript views.
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        const st = useHelix.getState();
+        const order = ["normal", "thinking", "verbose"] as const;
+        const cur = order.indexOf(st.settings.transcriptDetail ?? "normal");
+        st.updateSettings({ transcriptDetail: order[(cur + 1) % order.length]! });
+      }
+    };
+    window.addEventListener("keydown", onKey);
     return () => {
       window.clearInterval(id);
+      window.removeEventListener("keydown", onKey);
       offMenu?.();
     };
   }, [tick, restoreState]);

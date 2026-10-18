@@ -10,6 +10,7 @@ import type { Session } from "@/lib/types";
 import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
+import { PermissionCard, PlanCard } from "./session-extras";
 
 export function SessionPane({
   session,
@@ -21,13 +22,22 @@ export function SessionPane({
   const setActive = useHelix((s) => s.setActive);
   const compactPref = useHelix((s) => s.settings.transcriptCompact);
   const provider = useResolvedProvider(session.providerId);
+  const persona = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
+  const agentName = persona?.name ?? provider.short;
   const scroller = useRef<HTMLDivElement>(null);
+  // Follow the stream only while the reader is at the bottom; scrolling up
+  // to read earlier work must not be yanked back down by every chunk.
+  const pinned = useRef(true);
 
   useEffect(() => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || !pinned.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [session.messages, session.status]);
+  }, [session.messages, session.status, session.permission]);
+
+  useEffect(() => {
+    pinned.current = true;
+  }, [session.id]);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-window">
@@ -51,7 +61,11 @@ export function SessionPane({
 
       <div
         ref={scroller}
-        className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-5"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+        className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-5 md:px-5"
       >
         {session.messages.length === 0 ? (
           <EmptySession
@@ -65,43 +79,10 @@ export function SessionPane({
         )}
       </div>
 
-      {session.permission ? (
-        <div className="border-t border-border bg-surface px-3 py-3 md:px-4">
-          <p className="text-xs font-medium">
-            {provider.short} wants to run {session.permission.tool}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {(session.permission.options.length
-              ? session.permission.options
-              : [
-                  { optionId: "allow-once", name: "Allow once" },
-                  { optionId: "allow-always", name: "Allow always" },
-                  { optionId: "reject", name: "Reject" },
-                ]
-            ).map((opt) => (
-              <Button
-                key={opt.optionId || opt.name}
-                size="sm"
-                variant={
-                  (opt.kind || opt.optionId || "").toLowerCase().includes("reject")
-                    ? "ghost"
-                    : "default"
-                }
-                onClick={() =>
-                  useHelix
-                    .getState()
-                    .answerPermission(
-                      session.id,
-                      opt.optionId || "allow-once",
-                    )
-                }
-              >
-                {opt.name || opt.optionId}
-              </Button>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <div className="flex flex-col gap-2 pb-2 empty:hidden">
+        <PermissionCard session={session} agentName={agentName} />
+        {!session.permission ? <PlanCard session={session} /> : null}
+      </div>
 
       <Composer key={session.id} session={session} />
     </section>

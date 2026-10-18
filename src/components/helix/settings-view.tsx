@@ -324,6 +324,36 @@ export function SettingsView() {
               Tighter message layout in every session view, not just split.
             </span>
           </label>
+          <div className="mt-4">
+            <p className="text-xs font-medium">Agent activity</p>
+            <p className="mt-0.5 text-2xs text-muted-foreground">
+              How much of the agent's work shows in a turn. ⌘O cycles it from anywhere.
+            </p>
+            <div className="mt-2 inline-flex rounded-md border border-border p-0.5">
+              {(
+                [
+                  ["normal", "Normal", "Tools in one line, thinking timed"],
+                  ["thinking", "Thinking", "Also show the agent's thoughts"],
+                  ["verbose", "Verbose", "Every tool call and output open"],
+                ] as const
+              ).map(([id, label, hint]) => (
+                <button
+                  key={id}
+                  type="button"
+                  title={hint}
+                  aria-pressed={settings.transcriptDetail === id}
+                  onClick={() => update({ transcriptDetail: id })}
+                  className={
+                    settings.transcriptDetail === id
+                      ? "rounded-sm bg-muted px-3 py-1 text-xs font-medium"
+                      : "rounded-sm px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </section>
       </div>
     </div>
