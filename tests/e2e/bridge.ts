@@ -49,6 +49,7 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
     const skills = o.skills ?? {};
     (window as unknown as { __westcode: unknown }).__westcode = { calls, saved };
     const ok = async () => ({ ok: true, output: "" });
+    const w = window as unknown as { __git: (method: string, payload: unknown) => Promise<unknown> };
     (window as unknown as { westcode: unknown }).westcode = {
       desktop: true,
       probe: async () =>
@@ -100,6 +101,20 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
       cliSessions: async () => ({ ok: true, sessions: [], errors: [] }),
       openSession: async () => ({ ok: true, history: [] }),
       westcreate: o.westcreate === undefined ? undefined : async () => o.westcreate,
+      // Real git: each call goes to desktop/git.mjs in the test process.
+      git: {
+        changes: (cwd: string) => w.__git("changes", { cwd }),
+        diff: (cwd: string, file: unknown) => w.__git("diff", { cwd, file }),
+        commit: (cwd: string, p: object) => w.__git("commit", { cwd, ...p }),
+        undo: (cwd: string) => w.__git("undo", { cwd }),
+        discard: (cwd: string, files: unknown) => w.__git("discard", { cwd, files }),
+        branches: (cwd: string) => w.__git("branches", { cwd }),
+        checkout: (cwd: string, p: object) => w.__git("checkout", { cwd, ...p }),
+        sync: (cwd: string, action: string) => w.__git("sync", { cwd, action }),
+        log: (cwd: string, p?: object) => w.__git("log", { cwd, ...(p ?? {}) }),
+        show: (cwd: string, sha: string) => w.__git("show", { cwd, sha }),
+        onProgress: () => () => {},
+      },
       prompt: async (payload: { sessionId: string }) => {
         calls.push({ method: "prompt", payload });
         const turns = o.turns ?? [];
@@ -151,4 +166,39 @@ export async function promptCalls(page: Page): Promise<{ text: string }[]> {
       .filter((c) => c.method === "prompt")
       .map((c) => c.payload),
   );
+}
+
+/** Route window.westcode.git to the real git engine on `dir`. */
+export async function exposeGit(page: Page) {
+  // @ts-expect-error — plain .mjs module from the Electron side
+  const git = await import("../../desktop/git.mjs");
+  const { rmSync } = await import("node:fs");
+  await page.exposeFunction("__git", async (method: string, p: Record<string, unknown>) => {
+    const cwd = p.cwd as string;
+    switch (method) {
+      case "changes": {
+        const st = await git.status(cwd);
+        return { ok: true, ...st, sync: git.syncAction(st) };
+      }
+      case "diff":
+        return git.fileDiff(cwd, p.file);
+      case "commit":
+        return git.commit(cwd, p);
+      case "undo":
+        return git.undoCommit(cwd);
+      case "discard":
+        return git.discard(cwd, p.files, async (path: string) => rmSync(path, { force: true }));
+      case "branches":
+        return git.branches(cwd);
+      case "checkout":
+        return git.checkout(cwd, p);
+      case "sync":
+        return git.sync(cwd, p.action);
+      case "log":
+        return git.log(cwd, p);
+      case "show":
+        return git.commitFiles(cwd, p.sha);
+    }
+    return { ok: false, error: `unknown ${method}` };
+  });
 }

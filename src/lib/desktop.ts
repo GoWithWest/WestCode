@@ -81,6 +81,77 @@ export type GitStatus = {
   remote?: string;
 };
 
+export type GitFile = {
+  path: string;
+  oldPath?: string;
+  kind: "modified" | "new" | "deleted" | "renamed" | "copied" | "untracked" | "conflicted";
+  staged: boolean;
+  submodule: boolean;
+};
+
+export type GitSync = {
+  action: "none" | "fetch" | "pull" | "push" | "publish-branch" | "publish-repo";
+  label: string;
+  disabled?: boolean;
+  ahead?: number;
+  behind?: number;
+};
+
+export type GitChanges = {
+  ok: boolean;
+  error?: string;
+  repo?: boolean;
+  branch?: string | null;
+  upstream?: string | null;
+  ahead?: number;
+  behind?: number;
+  hasUpstream?: boolean;
+  tip?: "valid" | "detached" | "unborn" | "unknown";
+  remotes?: string[];
+  oid?: string | null;
+  operation?: "merge" | "rebase" | "cherry-pick" | null;
+  files?: GitFile[];
+  sync?: GitSync;
+};
+
+export type GitCommit = {
+  sha: string;
+  shortSha: string;
+  summary: string;
+  body: string;
+  author: string;
+  email: string;
+  at: number;
+  parents: string[];
+  refs: string[];
+};
+
+export type GitBridge = {
+  changes: (cwd: string) => Promise<GitChanges>;
+  diff: (cwd: string, file: GitFile) => Promise<{ patch?: string; binary?: boolean; tooLarge?: boolean; ok?: boolean; error?: string }>;
+  commit: (
+    cwd: string,
+    p: { paths: string[]; oldPaths?: string[]; summary: string; description?: string },
+  ) => Promise<{ ok: boolean; sha?: string; error?: string }>;
+  undo: (cwd: string) => Promise<{ ok: boolean; summary?: string; description?: string; error?: string }>;
+  discard: (cwd: string, files: GitFile[]) => Promise<{ ok: boolean; error?: string }>;
+  branches: (cwd: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    branches: { ref: string; name: string; upstream: string | null; sha: string; remote: boolean }[];
+  }>;
+  checkout: (
+    cwd: string,
+    p: { name: string; remote?: boolean; create?: boolean; startPoint?: string },
+  ) => Promise<{ ok: boolean; error?: string }>;
+  sync: (cwd: string, action: string) => Promise<{ ok: boolean; error?: string }>;
+  log: (cwd: string, p?: { limit?: number; skip?: number }) => Promise<{ ok: boolean; commits: GitCommit[] }>;
+  show: (cwd: string, sha: string) => Promise<{ ok: boolean; patch?: string; error?: string }>;
+  onProgress: (
+    fn: (p: { cwd: string; title: string; percent: number }) => void,
+  ) => () => void;
+};
+
 export type CliUpdate = {
   id: string;
   name: string;
@@ -146,6 +217,7 @@ type WestcodeBridge = {
     snippet: string;
   } | null>;
   gitStatus: (cwd: string) => Promise<GitStatus>;
+  git?: GitBridge;
   apiPrompt: (payload: {
     endpoint: string;
     apiKey?: string;

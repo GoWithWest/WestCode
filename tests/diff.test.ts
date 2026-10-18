@@ -37,3 +37,41 @@ describe("statsForDiffs", () => {
     expect(statsForDiffs([{ oldText: "a", newText: "b" }, { oldText: "", newText: "x\ny" }])).toEqual({ adds: 3, dels: 1 });
   });
 });
+
+import { parsePatch } from "@/lib/diff";
+
+describe("parsePatch", () => {
+  it("splits a multi-file patch into numbered rows", () => {
+    const patch = [
+      "diff --git a/a.txt b/a.txt",
+      "index 1..2 100644",
+      "--- a/a.txt",
+      "+++ b/a.txt",
+      "@@ -1,2 +1,2 @@",
+      " keep",
+      "-one",
+      "+two",
+      "diff --git a/n.txt b/n.txt",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/n.txt",
+      "@@ -0,0 +1 @@",
+      "+hello",
+      "diff --git a/img.png b/img.png",
+      "Binary files a/img.png and b/img.png differ",
+    ].join("\n");
+    const files = parsePatch(patch);
+    expect(files.map((f) => f.path)).toEqual(["a.txt", "n.txt", "img.png"]);
+    expect(files[0]!.rows).toEqual([
+      { kind: "same", text: "keep", a: 1, b: 1 },
+      { kind: "del", text: "one", a: 2 },
+      { kind: "add", text: "two", b: 2 },
+    ]);
+    expect(files[1]!.rows).toEqual([{ kind: "add", text: "hello", b: 1 }]);
+    expect(files[2]!.binary).toBe(true);
+  });
+  it("handles --no-index diffs of untracked files", () => {
+    const f = parsePatch("diff --git a/c.txt b/c.txt\n--- /dev/null\n+++ b/c.txt\n@@ -0,0 +1 @@\n+new\n");
+    expect(f[0]!.path).toBe("c.txt");
+  });
+});

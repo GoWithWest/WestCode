@@ -19,7 +19,7 @@ import {
   X,
   type LucideProps,
 } from "lucide-react";
-import { diffLines, statsForDiffs, withContext } from "@/lib/diff";
+import { diffLines, statsForDiffs, withContext, type DiffRow } from "@/lib/diff";
 import { activityLine, formatSeconds, liveLabel, toolKindOf, toolLabel } from "@/lib/activity";
 import { splitActivity } from "@/lib/parse-agent";
 import type { Attachment, Block, ChatMessage, FileDiff, ToolBlock } from "@/lib/types";
@@ -323,20 +323,42 @@ function Output({ text, kind, compact }: { text: string; kind: string; compact?:
 }
 
 export function DiffView({ diff, compact }: { diff: FileDiff; compact?: boolean }) {
-  const rows = withContext(diffLines(diff.oldText, diff.newText), 3);
-  const name = diff.path.split("/").slice(-2).join("/");
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-background/60">
-      <div className="flex items-center gap-2 border-b border-border px-2.5 py-1 font-mono text-2xs text-muted-foreground">
-        <FileSearch className="size-3" />
-        <span className="truncate" title={diff.path}>
-          {name}
-        </span>
-      </div>
+    <DiffRows
+      rows={withContext(diffLines(diff.oldText, diff.newText), 3)}
+      path={diff.path}
+      compact={compact}
+    />
+  );
+}
+
+export function DiffRows({
+  rows,
+  path,
+  compact,
+  fill,
+}: {
+  rows: DiffRow[];
+  path?: string;
+  compact?: boolean;
+  /** Fill the parent's height instead of capping it. */
+  fill?: boolean;
+}) {
+  const name = path?.split("/").slice(-2).join("/");
+  return (
+    <div className={cn("overflow-hidden rounded-md border border-border bg-background/60", fill && "flex min-h-0 flex-col")}>
+      {name ? (
+        <div className="flex items-center gap-2 border-b border-border px-2.5 py-1 font-mono text-2xs text-muted-foreground">
+          <FileSearch className="size-3" />
+          <span className="truncate" title={path}>
+            {name}
+          </span>
+        </div>
+      ) : null}
       <div
         className={cn(
           "scrollbar-thin overflow-auto font-mono text-2xs leading-[1.55]",
-          compact ? "max-h-48" : "max-h-96",
+          fill ? "min-h-0 flex-1" : compact ? "max-h-48" : "max-h-96",
         )}
       >
         <table className="w-full border-collapse">
