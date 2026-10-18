@@ -34,16 +34,26 @@ export function MessageList({
   messages,
   compact,
   sessionId,
+  awaiting,
 }: {
   messages: ChatMessage[];
   compact?: boolean;
   sessionId?: string;
+  /** The tool the agent is waiting on your approval for, if any. */
+  awaiting?: string;
 }) {
   const detail = useHelix((s) => s.settings.transcriptDetail ?? "normal");
   return (
     <div className={cn("mx-auto flex w-full max-w-3xl flex-col", compact ? "gap-4" : "gap-6")}>
       {messages.map((m) => (
-        <Message key={m.id} message={m} compact={compact} detail={detail} sessionId={sessionId} />
+        <Message
+          key={m.id}
+          message={m}
+          compact={compact}
+          detail={detail}
+          sessionId={sessionId}
+          awaiting={m.streaming ? awaiting : undefined}
+        />
       ))}
     </div>
   );
@@ -54,11 +64,13 @@ const Message = memo(function Message({
   compact,
   detail,
   sessionId,
+  awaiting,
 }: {
   message: ChatMessage;
   compact?: boolean;
   detail: Detail;
   sessionId?: string;
+  awaiting?: string;
 }) {
   if (message.role === "system") {
     const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
@@ -138,6 +150,7 @@ const Message = memo(function Message({
           detail={detail}
         />
       ) : null}
+      {awaiting ? <AwaitingApproval tool={awaiting} /> : null}
       {reply.map((b, i) =>
         b.type === "text" ? (
           <Markdown key={`${message.id}-r-${i}`} text={b.text} compact={compact} />
@@ -200,6 +213,22 @@ export function Shimmer({ children, className }: { children: string; className?:
     >
       {thinking ? `${verb}…` : children}
     </span>
+  );
+}
+
+/** Inline marker while the agent is blocked on your OK (card is below). */
+function AwaitingApproval({ tool }: { tool: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => document.getElementById("permission-card")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+      className="flex w-fit max-w-full items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-1.5 text-left text-xs text-warn"
+    >
+      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-warn" />
+      <span className="min-w-0 truncate">
+        Waiting for your approval: <span className="font-mono">{tool.replace(/`/g, "").slice(0, 80)}</span>
+      </span>
+    </button>
   );
 }
 

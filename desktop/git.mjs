@@ -438,3 +438,46 @@ export async function restoreCheckpoint(cwd, sha) {
     return { ok: true, undo: before.sha, removed: created };
   });
 }
+
+// ------------------------------------------------------------------ repositories
+
+const SKIP_DIRS = new Set(["node_modules", ".git", ".venv", "venv", "dist", "build", ".output", "Library", ".Trash", "__MACOSX"]);
+
+/**
+ * Git repositories inside a folder that is not one itself (a ~/Software
+ * holding many projects): GitHub Desktop's repository list for that folder.
+ */
+export async function findRepos(dir, { depth = 2, limit = 60 } = {}) {
+  const { readdirSync, statSync } = await import("node:fs");
+  const out = [];
+  const walk = (d, level) => {
+    if (out.length >= limit || level > depth) return;
+    let entries = [];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= limit) return;
+      if (!e.isDirectory() || e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
+      const full = join(d, e.name);
+      if (existsSync(join(full, ".git"))) {
+        let mtime = 0;
+        try {
+          mtime = statSync(join(full, ".git")).mtimeMs;
+        } catch {
+          /* keep 0 */
+        }
+        out.push({ path: full, name: e.name, mtime });
+      } else walk(full, level + 1);
+    }
+  };
+  walk(dir, 1);
+  return out.sort((a, b) => b.mtime - a.mtime);
+}
+
+export async function initRepo(dir) {
+  const r = await runGit(dir, ["init", "-q"]);
+  return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr.trim() };
+}

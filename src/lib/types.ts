@@ -7,6 +7,7 @@ export type LayoutView =
   | "library"
   | "agents"
   | "westcreate"
+  | "memory"
   | "settings";
 
 export type Attachment = {
@@ -127,6 +128,8 @@ export type Session = {
   sideOpen?: string;
   /** Last time the user had this session on screen. */
   seenAt?: number;
+  /** Repository the source control panel works on when the folder holds several. */
+  scmRepo?: string;
 };
 
 export type PlanEntry = {

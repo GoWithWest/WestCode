@@ -34,8 +34,16 @@ contextBridge.exposeInMainWorld("westcode", {
     review: (payload) => ipcRenderer.invoke("learn:review", payload),
     cancel: (origin) => ipcRenderer.invoke("learn:cancel", origin),
     pending: () => ipcRenderer.invoke("learn:pending"),
-    decide: (id, verdict, edited) => ipcRenderer.invoke("learn:decide", { id, verdict, edited }),
+    decide: (id, verdict, edited, opts) => ipcRenderer.invoke("learn:decide", { id, verdict, edited, ...(opts || {}) }),
     memory: () => ipcRenderer.invoke("learn:memory"),
+  },
+  memoryHub: {
+    state: (memoryRepo) => ipcRenderer.invoke("memory:state", { memoryRepo }),
+    preview: (path) => ipcRenderer.invoke("memory:preview", { path }),
+    createRepo: (dir) => ipcRenderer.invoke("memory:create-repo", { dir }),
+    pickFolder: () => ipcRenderer.invoke("memory:pick-folder"),
+    setRemote: (dir, url) => ipcRenderer.invoke("memory:set-remote", { dir, url }),
+    sync: (enabled, memoryRepo) => ipcRenderer.invoke("memory:sync", { enabled, memoryRepo }),
   },
   openWestcreate: () => ipcRenderer.invoke("westcreate:open"),
   git: {
@@ -49,6 +57,8 @@ contextBridge.exposeInMainWorld("westcode", {
     sync: (cwd, action) => ipcRenderer.invoke("git:sync", { cwd, action }),
     log: (cwd, payload) => ipcRenderer.invoke("git:log", { cwd, ...(payload || {}) }),
     show: (cwd, sha) => ipcRenderer.invoke("git:show", { cwd, sha }),
+    findRepos: (cwd) => ipcRenderer.invoke("git:find-repos", { cwd }),
+    init: (cwd) => ipcRenderer.invoke("git:init", { cwd }),
     checkpoint: (cwd, label) => ipcRenderer.invoke("git:checkpoint", { cwd, label }),
     restore: (cwd, sha) => ipcRenderer.invoke("git:restore", { cwd, sha }),
     onProgress: (fn) => {

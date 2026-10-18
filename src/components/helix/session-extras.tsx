@@ -158,7 +158,7 @@ export function PermissionCard({ session, agentName }: { session: Session; agent
   if (!p) return null;
   return (
     <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
-      <div className="rounded-xl border border-warn/40 bg-surface shadow-window">
+      <div id="permission-card" className="rounded-xl border border-warn/40 bg-surface shadow-window">
         <div className="flex items-start gap-2.5 px-3.5 pt-3">
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-warn" />
           <div className="min-w-0 flex-1">

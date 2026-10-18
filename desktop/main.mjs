@@ -14,6 +14,8 @@ import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 import * as gitOps from "./git.mjs";
 import * as westcreate from "./westcreate.mjs";
 import * as learn from "./learn.mjs";
+import * as memoryHub from "./memory-hub.mjs";
+import * as memoryFlow from "./memory-flow.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -556,7 +558,21 @@ ipcMain.handle("learn:cancel", (_e, origin) => {
   return { ok: true };
 });
 ipcMain.handle("learn:pending", () => learn.listPending());
-ipcMain.handle("learn:decide", (_e, p = {}) => learn.decide(String(p.id || ""), p.verdict === "approve" ? "approve" : "reject", p.edited));
+ipcMain.handle("learn:decide", (_e, p = {}) => memoryFlow.decideAndShare(p));
+ipcMain.handle("memory:state", (_e, p = {}) => memoryFlow.memoryState(p.memoryRepo));
+ipcMain.handle("memory:preview", (_e, p = {}) => memoryHub.preview(String(p.path || "")));
+ipcMain.handle("memory:create-repo", async (_e, p = {}) => {
+  const dir = String(p.dir || join(homedir(), "memory"));
+  return { ...(await memoryHub.createRepo(dir)), dir };
+});
+ipcMain.handle("memory:pick-folder", async () => {
+  const res = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"], title: "Memory repository folder" });
+  return res.canceled ? null : res.filePaths[0];
+});
+ipcMain.handle("memory:set-remote", (_e, p = {}) => memoryHub.setRemote(String(p.dir || ""), String(p.url || "")));
+ipcMain.handle("memory:sync", async (_e, p = {}) =>
+  p.enabled ? { ok: true, results: await memoryFlow.syncAllRules(p.memoryRepo) } : { ok: true, results: memoryHub.unsyncRules() },
+);
 ipcMain.handle("learn:memory", () => ({ user: learn.readMemory("user"), memory: learn.readMemory("memory"), snapshot: learn.memorySnapshot() }));
 
 ipcMain.handle("westcreate:snapshot", () => westcreate.snapshot());
@@ -679,6 +695,8 @@ gitHandler("git:sync", (dir, p) =>
 );
 gitHandler("git:log", (dir, p) => gitOps.log(dir, p));
 gitHandler("git:show", (dir, p) => gitOps.commitFiles(dir, p.sha));
+gitHandler("git:find-repos", (dir) => gitOps.findRepos(dir).then((repos) => ({ ok: true, repos })));
+gitHandler("git:init", (dir) => gitOps.initRepo(dir));
 gitHandler("git:checkpoint", (dir, p) => gitOps.checkpoint(dir, String(p.label || "turn").slice(0, 80)));
 gitHandler("git:restore", (dir, p) => gitOps.restoreCheckpoint(dir, p.sha));
 

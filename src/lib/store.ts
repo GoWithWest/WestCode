@@ -121,6 +121,13 @@ export type AppSettings = {
    * "ask" stages them for approval, "auto" applies them, "off" never reviews.
    */
   learning: "off" | "ask" | "auto";
+  /**
+   * The shared memory store: a git repository (preferred — memory follows
+   * the user) or "" for WestCode's local desk memory.
+   */
+  memoryRepo: string;
+  /** Keep a shared-memory block in every installed CLI's global rules file. */
+  memorySync: boolean;
   /** Appearance: follow the OS, or force dark / light. */
   theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
@@ -138,6 +145,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   transcriptDetail: "normal",
   learning: "ask",
   theme: "dark",
+  memoryRepo: "",
+  memorySync: false,
   launchAtLogin: false,
 };
 
@@ -2196,7 +2205,8 @@ export const useHelix = create<HelixState>((set, get) => ({
   decideProposal: async (id, verdict, edited) => {
     const api = westcode()?.learn;
     if (!api) return "Needs the desktop app.";
-    const r = await api.decide(id, verdict, edited);
+    const st = get().settings;
+    const r = await api.decide(id, verdict, edited, { memoryRepo: st.memoryRepo || undefined, memorySync: st.memorySync });
     await get().refreshLearning();
     if (verdict === "approve") void get().refreshLibrary();
     return r.ok ? null : (r.error ?? "Failed.");
@@ -2480,7 +2490,10 @@ export const useHelix = create<HelixState>((set, get) => ({
     const groupsText = groupPreamble(linkedGroups);
     // Approved desk memory rides the first turn of each CLI session (a
     // frozen snapshot — it never changes mid-session).
-    const memoryText = !latest.agentSessionId && get().deskMemory ? `${get().deskMemory}\n` : "";
+    const repoLine = get().settings.memoryRepo
+      ? `[Shared memory] Durable memories for this user live in the git repository ${get().settings.memoryRepo}: one Markdown file per fact (frontmatter name/description/type), add a line to its index or TIMELINE.md if it has one, then commit and push. Check it before work that may depend on earlier decisions.\n`
+      : "";
+    const memoryText = !latest.agentSessionId && (get().deskMemory || repoLine) ? `${repoLine}${get().deskMemory}\n` : "";
     const mentioned = extractMentions(outgoing, get().agents).filter(
       (m) => m.agent.id !== latest.agentId,
     );

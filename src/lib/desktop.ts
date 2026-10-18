@@ -147,6 +147,8 @@ export type GitBridge = {
   sync: (cwd: string, action: string) => Promise<{ ok: boolean; error?: string }>;
   log: (cwd: string, p?: { limit?: number; skip?: number }) => Promise<{ ok: boolean; commits: GitCommit[] }>;
   show: (cwd: string, sha: string) => Promise<{ ok: boolean; patch?: string; error?: string }>;
+  findRepos?: (cwd: string) => Promise<{ ok: boolean; repos: { path: string; name: string; mtime: number }[] }>;
+  init?: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   checkpoint?: (cwd: string, label: string) => Promise<{ ok: boolean; sha?: string; error?: string }>;
   restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; error?: string }>;
   onProgress: (
@@ -182,8 +184,50 @@ export type LearnBridge = {
   }) => Promise<{ ok: boolean; error?: string; reply?: string; staged: LearnProposal[] }>;
   cancel: (origin: string) => Promise<{ ok: boolean }>;
   pending: () => Promise<LearnProposal[]>;
-  decide: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<{ ok: boolean; error?: string }>;
+  decide: (
+    id: string,
+    verdict: "approve" | "reject",
+    edited?: string,
+    opts?: { memoryRepo?: string; memorySync?: boolean },
+  ) => Promise<{ ok: boolean; error?: string; shared?: { ok: boolean; pushed?: boolean; note?: string; error?: string } }>;
   memory: () => Promise<{ user: string; memory: string; snapshot: string }>;
+};
+
+export type MemorySource = {
+  provider: string;
+  kind: "rules" | "memory";
+  label: string;
+  path: string;
+  entries: number | null;
+};
+
+export type RepoInfo = {
+  exists: boolean;
+  repo: boolean;
+  root?: string;
+  remote?: string;
+  lastCommit?: string;
+  unpushed?: number | null;
+};
+
+export type MemoryHubBridge = {
+  state: (memoryRepo?: string) => Promise<{
+    ok: boolean;
+    sources: MemorySource[];
+    repo: RepoInfo | null;
+    detected: { path: string; from: string; remote: string } | null;
+    sync: { provider: string; path: string; synced: boolean }[];
+    facts: string[];
+    local: string;
+  }>;
+  preview: (path: string) => Promise<{ files: string[]; text: string }>;
+  createRepo: (dir?: string) => Promise<{ ok: boolean; dir: string; error?: string }>;
+  pickFolder: () => Promise<string | null>;
+  setRemote: (dir: string, url: string) => Promise<{ ok: boolean; error?: string }>;
+  sync: (
+    enabled: boolean,
+    memoryRepo?: string,
+  ) => Promise<{ ok: boolean; results: { provider: string; path: string; status: string; error?: string }[] }>;
 };
 
 export type WestCreateSnapshot = {
@@ -270,6 +314,7 @@ type WestcodeBridge = {
   git?: GitBridge;
   westcreate?: () => Promise<WestCreateSnapshot>;
   learn?: LearnBridge;
+  memoryHub?: MemoryHubBridge;
   openWestcreate?: () => Promise<{ ok: boolean; error?: string }>;
   apiPrompt: (payload: {
     endpoint: string;

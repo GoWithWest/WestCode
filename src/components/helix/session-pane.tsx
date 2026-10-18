@@ -39,6 +39,14 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
     pinned.current = true;
   }, [session.id]);
 
+  // An approval request always comes into view, wherever the reader was.
+  useEffect(() => {
+    if (!session.permission) return;
+    pinned.current = true;
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [session.permission]);
+
   // ⌘⇧G toggles source control for the focused pane (not split panes).
   useEffect(() => {
     if (compact) return;
@@ -94,7 +102,8 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
                 effort={effortLabel(session.providerId, session.effort)}
               />
             ) : (
-              <MessageList messages={session.messages} compact={compact || compactPref} sessionId={session.id} />
+              <MessageList messages={session.messages} compact={compact || compactPref} sessionId={session.id}
+              awaiting={session.permission?.tool} />
             )}
           </div>
 
@@ -328,7 +337,25 @@ function GitChip({
     // re-poll when a turn finishes so fresh edits show up quickly
   }, [api, cwd, status]);
 
-  if (!git?.repo) return null;
+  if (!git?.repo) {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label="Source control"
+        title="Source control: repositories in this folder (⌘⇧G)"
+        className={
+          open
+            ? "inline-flex items-center gap-1.5 rounded-full border border-border-strong bg-muted px-2 py-0.5 text-2xs"
+            : "inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-2xs hover:text-foreground"
+        }
+      >
+        <GitBranch className="size-3" />
+        Source control
+      </button>
+    );
+  }
   // Normalize every GitHub remote shape (https, git@:, ssh://git@,
   // ssh.github.com, org-scoped scp) to https://github.com/owner/repo.
   const gh = /(?:^|@|\/\/)(?:ssh\.)?github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?$/.exec(
