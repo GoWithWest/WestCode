@@ -121,6 +121,10 @@ export type Session = {
   agentMode?: string;
   /** The user named this session; agent-suggested titles stop applying. */
   titleLocked?: boolean;
+  /** A side chat (/btw) of this parent session: read-only, shown as a drawer. */
+  sideOf?: string;
+  /** The side chat shown in this session's drawer. */
+  sideOpen?: string;
 };
 
 export type PlanEntry = {

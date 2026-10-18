@@ -211,9 +211,13 @@ export type SendOpts = {
   replay?: boolean;
   /** Transcript message id of the queued row a replay re-sends. */
   replayOf?: string;
+  /** What the user bubble shows when the prompt itself is long scaffolding. */
+  display?: string;
 };
 
 type CreateOpts = {
+  /** Make this a side chat of that session (read-only drawer). */
+  sideOf?: string;
   providerId: string;
   projectId: string;
   title?: string;
@@ -1617,6 +1621,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     attachments,
     agentId,
     background,
+    sideOf,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
     const settings = get().settings;
@@ -1645,10 +1650,11 @@ export const useHelix = create<HelixState>((set, get) => ({
       messages: [],
       turns: 0,
       agentId,
+      sideOf,
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
-      ...(background
+      ...(background || sideOf
         ? {}
         : {
             activeId: session.id,
@@ -2361,7 +2367,7 @@ export const useHelix = create<HelixState>((set, get) => ({
             id: uid("m"),
             role: "user",
             createdAt: Date.now(),
-            blocks: [{ type: "text", text: trimmed || "Attached files" }],
+            blocks: [{ type: "text", text: opts?.display || trimmed || "Attached files" }],
             attachments: attachments.length ? attachments : undefined,
           };
       set((s) => ({
@@ -2399,7 +2405,7 @@ export const useHelix = create<HelixState>((set, get) => ({
             id: uid("m"),
             role: "user",
             createdAt: Date.now(),
-            blocks: [{ type: "text", text: trimmed || "Attached files" }],
+            blocks: [{ type: "text", text: opts?.display || trimmed || "Attached files" }],
             attachments: attachments.length ? attachments : undefined,
           };
 
@@ -2796,6 +2802,7 @@ function runSlash(
     "group",
     "ungroup",
     "reflect",
+    "btw",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -2819,6 +2826,41 @@ function runSlash(
       get().customProviders,
     );
     note(`WestCode desk roster\n\n${formatRoster(roster)}`);
+    return true;
+  }
+
+  if (cmd === "btw") {
+    if (!arg) {
+      note("Usage: /btw <question> — asks on the side without touching this session's work.");
+      return true;
+    }
+    const parent = session.sideOf ? (get().sessions.find((x) => x.id === session.sideOf) ?? session) : session;
+    const context = parent.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-12)
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${blocksToPlain(m.blocks).replace(/\s+/g, " ").slice(0, 600)}`)
+      .join("\n");
+    const prompt = `[Side chat]
+This is a side question asked next to another session. The context below is reference only: do not continue that session's plan, todo list or approvals, and do not change files, git state or anything else — read, search and answer. Keep the answer short.
+
+Context from the main session:
+${context || "(nothing yet)"}
+
+Question: ${arg}`;
+    const sideId = get().createSession({
+      providerId: parent.providerId,
+      projectId: parent.projectId,
+      cwd: parent.cwd,
+      model: parent.model,
+      effort: parent.effort,
+      permissionMode: "plan",
+      title: `Side: ${arg.slice(0, 40)}`,
+      sideOf: parent.id,
+    });
+    set((s) => ({
+      sessions: patchSession(s.sessions, parent.id, (x) => ({ ...x, sideOpen: sideId, updatedAt: Date.now() })),
+    }));
+    void get().send(sideId, prompt, { display: arg });
     return true;
   }
 

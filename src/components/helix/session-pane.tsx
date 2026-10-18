@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, GitBranch, Pencil, Terminal } from "lucide-react";
+import { Code2, Download, Folder, GitBranch, Pencil, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -21,6 +21,9 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
   const persona = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
   const agentName = persona?.name ?? provider.short;
   const [scmOpen, setScmOpen] = useState(false);
+  const side = useHelix((s) =>
+    session.sideOpen ? s.sessions.find((x) => x.id === session.sideOpen) : undefined,
+  );
   const scroller = useRef<HTMLDivElement>(null);
   // Follow the stream only while the reader is at the bottom; scrolling up
   // to read earlier work must not be yanked back down by every chunk.
@@ -100,6 +103,29 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
         </div>
         {scmOpen ? (
           <SourceControlPanel session={session} onClose={() => setScmOpen(false)} />
+        ) : null}
+        {!scmOpen && side ? (
+          <aside
+            aria-label="Side chat"
+            className="flex h-full min-h-0 w-[min(26rem,45vw)] shrink-0 flex-col border-l border-border bg-surface"
+          >
+            <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+              <span className="truncate text-xs font-medium">Side chat · read-only</span>
+              <button
+                type="button"
+                aria-label="Close side chat"
+                onClick={() =>
+                  useHelix.setState((st) => ({
+                    sessions: st.sessions.map((x) => (x.id === session.id ? { ...x, sideOpen: undefined } : x)),
+                  }))
+                }
+                className="text-subtle hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+            <SessionPane session={side} compact />
+          </aside>
         ) : null}
       </div>
     </section>
