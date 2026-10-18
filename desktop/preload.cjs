@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld("westcode", {
     sync: (cwd, action) => ipcRenderer.invoke("git:sync", { cwd, action }),
     log: (cwd, payload) => ipcRenderer.invoke("git:log", { cwd, ...(payload || {}) }),
     show: (cwd, sha) => ipcRenderer.invoke("git:show", { cwd, sha }),
+    checkpoint: (cwd, label) => ipcRenderer.invoke("git:checkpoint", { cwd, label }),
+    restore: (cwd, sha) => ipcRenderer.invoke("git:restore", { cwd, sha }),
     onProgress: (fn) => {
       const handler = (_e, data) => fn(data);
       ipcRenderer.on("git:progress", handler);

@@ -87,7 +87,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
                 effort={effortLabel(session.providerId, session.effort)}
               />
             ) : (
-              <MessageList messages={session.messages} compact={compact || compactPref} />
+              <MessageList messages={session.messages} compact={compact || compactPref} sessionId={session.id} />
             )}
           </div>
 

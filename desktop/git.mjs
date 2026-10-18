@@ -378,3 +378,63 @@ export async function commitFiles(cwd, sha) {
   const r = await runGit(cwd, ["show", "--no-color", "--no-ext-diff", "-M", "--format=", "--patch", sha, "--"]);
   return r.code === 0 ? { ok: true, patch: r.stdout } : { ok: false, error: r.stderr.trim() };
 }
+
+// ------------------------------------------------------------------ checkpoints
+
+/**
+ * Snapshot the working tree before an agent turn (Cursor-style checkpoint):
+ * a stash commit holding tracked AND untracked files, without touching the
+ * tree or the stash list. Kept alive under refs/westcode/checkpoints.
+ */
+export async function checkpoint(cwd, label = "turn") {
+  const head = await runGit(cwd, ["rev-parse", "--verify", "HEAD"]);
+  if (head.code !== 0) return { ok: false, error: "No commits yet." };
+  // Index copy so untracked files can be captured without staging them for real.
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "wc-ckpt-"));
+  const env = { ...process.env, GIT_INDEX_FILE: join(dir, "index") };
+  try {
+    await runGit(cwd, ["read-tree", "HEAD"], { env });
+    await runGit(cwd, ["add", "-A", "--", "."], { env });
+    const tree = await runGit(cwd, ["write-tree"], { env });
+    if (tree.code !== 0) return { ok: false, error: tree.stderr.trim() };
+    const commit = await runGit(
+      cwd,
+      ["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `westcode checkpoint: ${label}`],
+      { env: { ...env, GIT_AUTHOR_NAME: "WestCode", GIT_AUTHOR_EMAIL: "checkpoint@westcode", GIT_COMMITTER_NAME: "WestCode", GIT_COMMITTER_EMAIL: "checkpoint@westcode" } },
+    );
+    if (commit.code !== 0) return { ok: false, error: commit.stderr.trim() };
+    const sha = commit.stdout.trim();
+    await runGit(cwd, ["update-ref", `refs/westcode/checkpoints/${sha}`, sha]);
+    return { ok: true, sha };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Put the working tree back to a checkpoint: files the agent changed get
+ * their content back, files it created are removed. A checkpoint of the
+ * current state is taken first, so the restore itself can be undone.
+ */
+export async function restoreCheckpoint(cwd, sha) {
+  if (!/^[0-9a-f]{40}$/i.test(String(sha))) return { ok: false, error: "Bad checkpoint id." };
+  return withRepoLock(cwd, async () => {
+    const before = await checkpoint(cwd, "before restore");
+    if (!before.ok) return before;
+    // Files present now but not in the checkpoint were created after it.
+    const now = await runGit(cwd, ["ls-tree", "-r", "-z", "--name-only", before.sha]);
+    const then = await runGit(cwd, ["ls-tree", "-r", "-z", "--name-only", sha]);
+    const keep = new Set(then.stdout.split("\0").filter(Boolean));
+    const created = now.stdout.split("\0").filter((p) => p && !keep.has(p));
+    const { rmSync } = await import("node:fs");
+    for (const p of created) rmSync(join(cwd, p), { force: true });
+    const r = await runGit(cwd, ["checkout", sha, "--", "."]);
+    if (r.code !== 0) return { ok: false, error: r.stderr.trim() };
+    // checkout writes the index too; put the index back to HEAD so nothing
+    // looks staged that the user did not stage.
+    await runGit(cwd, ["reset", "-q"]);
+    return { ok: true, undo: before.sha, removed: created };
+  });
+}

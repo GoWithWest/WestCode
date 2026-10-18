@@ -64,6 +64,10 @@ export type ChatMessage = {
   fromProviderId?: string;
   fromTitle?: string;
   hop?: number;
+  /** Working-tree snapshot taken just before this message's turn ran. */
+  checkpoint?: string;
+  /** On a "restored" note: the snapshot that undoes the restore. */
+  restoreUndo?: string;
 };
 
 export type Project = {

@@ -321,6 +321,8 @@ export type HelixState = {
   /** Review a session now (or when counters fire), staging proposals. */
   reviewSession: (sessionId: string, opts?: { manual?: boolean }) => Promise<void>;
   decideProposal: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<string | null>;
+  /** Put the session's folder back to a checkpoint (undoable). */
+  restoreCheckpoint: (sessionId: string, sha: string, label: string) => Promise<void>;
   /** Link (or unlink) a skill group to a session. */
   linkSkillGroup: (sessionId: string, groupId: string, linked: boolean) => void;
   setProviderColor: (providerId: string, color: string) => void;
@@ -2183,6 +2185,24 @@ export const useHelix = create<HelixState>((set, get) => ({
     return r.ok ? null : (r.error ?? "Failed.");
   },
 
+  restoreCheckpoint: async (sessionId, sha, label) => {
+    const api = westcode()?.git;
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    if (!api?.restore || !ses) return;
+    const r = await api.restore(ses.cwd, sha);
+    const note: ChatMessage = r.ok
+      ? {
+          ...systemNote(
+            `Files restored to before “${label}”.${r.removed?.length ? ` Removed ${r.removed.length} file${r.removed.length === 1 ? "" : "s"} created after it.` : ""} The conversation is unchanged.`,
+          ),
+          restoreUndo: r.undo,
+        }
+      : systemNote(`Could not restore: ${r.error ?? "unknown error"}`);
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, note] })),
+    }));
+  },
+
   linkSkillGroup: (sessionId, groupId, linked) => {
     set((s) => ({
       sessions: patchSession(s.sessions, sessionId, (ses) => {
@@ -2498,6 +2518,23 @@ export const useHelix = create<HelixState>((set, get) => ({
     }
 
     promptAsst.set(sessionId, asstId);
+    // Snapshot the folder first (git repos only), so this turn's file
+    // changes can be rolled back from the message.
+    if (userMsg && userMsg.role === "user" && api.git?.checkpoint) {
+      try {
+        const cp = await api.git.checkpoint(latest.cwd, trimmed.slice(0, 60));
+        if (cp.ok && cp.sha) {
+          set((s) => ({
+            sessions: patchSession(s.sessions, sessionId, (ses) => ({
+              ...ses,
+              messages: ses.messages.map((m) => (m.id === userMsg.id ? { ...m, checkpoint: cp.sha } : m)),
+            })),
+          }));
+        }
+      } catch {
+        /* not a repo, or git missing — no checkpoint */
+      }
+    }
     try {
       const historyRaw = latest.messages
         .filter(

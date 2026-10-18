@@ -191,3 +191,38 @@ describe("parseProgress", () => {
     expect(git.parseProgress("To /tmp/x")).toBeNull();
   });
 });
+
+describe("checkpoints", () => {
+  it("snapshot before a turn, restore undoes edits and new files, and the restore can be undone", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, "a.txt"), "user edit\n");
+    writeFileSync(join(dir, "draft.txt"), "untracked user file\n");
+    const cp = await git.checkpoint(dir, "turn 1");
+    expect(cp.ok).toBe(true);
+    // Nothing visible changed: same status, no stash entry.
+    expect(sh(dir, "stash", "list").trim()).toBe("");
+    expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("user edit\n");
+
+    // The "agent" edits, deletes and creates.
+    writeFileSync(join(dir, "a.txt"), "agent edit\n");
+    rmSync(join(dir, "b.txt"));
+    writeFileSync(join(dir, "agent-new.txt"), "made by agent\n");
+
+    const r = await git.restoreCheckpoint(dir, cp.sha);
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("user edit\n");
+    expect(readFileSync(join(dir, "b.txt"), "utf8")).toBe("bee\n");
+    expect(readFileSync(join(dir, "draft.txt"), "utf8")).toBe("untracked user file\n");
+    expect(existsSync(join(dir, "agent-new.txt"))).toBe(false);
+    expect(r.removed).toEqual(["agent-new.txt"]);
+    // Index is not left staged.
+    expect(sh(dir, "diff", "--cached", "--name-only").trim()).toBe("");
+
+    // Undo the restore.
+    const back = await git.restoreCheckpoint(dir, r.undo);
+    expect(back.ok).toBe(true);
+    expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("agent edit\n");
+    expect(existsSync(join(dir, "agent-new.txt"))).toBe(true);
+    expect(existsSync(join(dir, "b.txt"))).toBe(false);
+  });
+});

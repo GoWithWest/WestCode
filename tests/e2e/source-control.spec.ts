@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
@@ -86,4 +86,29 @@ test("source control: discard throws a change away", async ({ page }) => {
   await panel.getByRole("button", { name: "Discard changes to README.md" }).click({ force: true });
   await expect(panel.getByText("No local changes")).toBeVisible();
   expect(readFileSync(join(dir, "README.md"), "utf8")).toBe("# demo\n");
+});
+
+test("checkpoints: restore a turn's file changes from the message, then undo", async ({ page }) => {
+  const dir = repo();
+  await exposeGit(page);
+  await installBridge(page, { state: deskWith([{ title: "Calc", cwd: dir }]) });
+  await page.goto("/");
+  const box = page.getByPlaceholder(/Message Claude/);
+  await box.fill("make add correct");
+  await box.press("Enter");
+  // The turn finished; now the "agent's" edits land on disk.
+  await expect(page.getByText("ok", { exact: true })).toBeVisible();
+  writeFileSync(join(dir, "calc.py"), "def add(a, b):\n    return a + b\n");
+  writeFileSync(join(dir, "test_calc.py"), "assert True\n");
+
+  page.once("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: "Restore files to before this message" }).click({ force: true });
+  await expect(page.getByText(/Files restored to before “make add correct”\. Removed 1 file/)).toBeVisible();
+  expect(readFileSync(join(dir, "calc.py"), "utf8")).toContain("a - b");
+  expect(existsSync(join(dir, "test_calc.py"))).toBe(false);
+
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(page.getByText(/Files restored to before “the restore”/)).toBeVisible();
+  expect(readFileSync(join(dir, "calc.py"), "utf8")).toContain("a + b");
+  expect(existsSync(join(dir, "test_calc.py"))).toBe(true);
 });

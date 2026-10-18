@@ -679,6 +679,8 @@ gitHandler("git:sync", (dir, p) =>
 );
 gitHandler("git:log", (dir, p) => gitOps.log(dir, p));
 gitHandler("git:show", (dir, p) => gitOps.commitFiles(dir, p.sha));
+gitHandler("git:checkpoint", (dir, p) => gitOps.checkpoint(dir, String(p.label || "turn").slice(0, 80)));
+gitHandler("git:restore", (dir, p) => gitOps.restoreCheckpoint(dir, p.sha));
 
 // App state (sessions, library, agents, providers, colors…) persists in
 // ~/.westcode/state.json so it survives app replacement — the packaged

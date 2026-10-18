@@ -50,9 +50,18 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
     const skills = o.skills ?? {};
     (window as unknown as { __westcode: unknown }).__westcode = { calls, saved };
     const ok = async () => ({ ok: true, output: "" });
-    const w = window as unknown as {
-      __git: (method: string, payload: unknown) => Promise<unknown>;
-      __learn: (method: string, payload: unknown) => Promise<unknown>;
+    const raw = window as unknown as {
+      __git?: (method: string, payload: unknown) => Promise<unknown>;
+      __learn?: (method: string, payload: unknown) => Promise<unknown>;
+    };
+    // Without exposeGit the panel sees "not a repository"; without
+    // exposeLearn there is simply nothing pending.
+    const w = {
+      get __learn() {
+        return raw.__learn;
+      },
+      __git: (method: string, payload: unknown) =>
+        raw.__git ? raw.__git(method, payload) : Promise.resolve({ ok: false, repo: false, error: "no git in this test" }),
     };
     (window as unknown as { westcode: unknown }).westcode = {
       desktop: true,
@@ -112,11 +121,12 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
             : async () => o.westcreate,
       openWestcreate: ok,
       learn: {
-        review: (p: unknown) => w.__learn("review", p),
+        review: (p: unknown) => (w.__learn ? w.__learn("review", p) : Promise.resolve({ ok: true, staged: [] })),
         cancel: async () => ({ ok: true }),
-        pending: () => w.__learn("pending", {}),
-        decide: (id: string, verdict: string, edited?: string) => w.__learn("decide", { id, verdict, edited }),
-        memory: () => w.__learn("memory", {}),
+        pending: () => (w.__learn ? w.__learn("pending", {}) : Promise.resolve([])),
+        decide: (id: string, verdict: string, edited?: string) =>
+          w.__learn ? w.__learn("decide", { id, verdict, edited }) : Promise.resolve({ ok: false }),
+        memory: () => (w.__learn ? w.__learn("memory", {}) : Promise.resolve({ user: "", memory: "", snapshot: "" })),
       },
       // Real git: each call goes to desktop/git.mjs in the test process.
       git: {
@@ -130,6 +140,8 @@ export async function installBridge(page: Page, opts: BridgeOpts = {}) {
         sync: (cwd: string, action: string) => w.__git("sync", { cwd, action }),
         log: (cwd: string, p?: object) => w.__git("log", { cwd, ...(p ?? {}) }),
         show: (cwd: string, sha: string) => w.__git("show", { cwd, sha }),
+        checkpoint: (cwd: string, label: string) => w.__git("checkpoint", { cwd, label }),
+        restore: (cwd: string, sha: string) => w.__git("restore", { cwd, sha }),
         onProgress: () => () => {},
       },
       prompt: async (payload: { sessionId: string }) => {
@@ -215,6 +227,10 @@ export async function exposeGit(page: Page) {
         return git.log(cwd, p);
       case "show":
         return git.commitFiles(cwd, p.sha);
+      case "checkpoint":
+        return git.checkpoint(cwd, p.label);
+      case "restore":
+        return git.restoreCheckpoint(cwd, p.sha);
     }
     return { ok: false, error: `unknown ${method}` };
   });
