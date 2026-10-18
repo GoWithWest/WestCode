@@ -23,11 +23,19 @@ Login opens Terminal so each CLI completes its own browser OAuth — WestCode ne
 - **Sessions** for any provider, in mosaic, focus, or split view. Rename them, switch their working directory, and watch the live **git chip** (branch, +/− lines, ahead/behind, PR link).
 - **Desk bus**: sessions message each other across providers (`/msg`, or just ask an agent to "tell Codex…"). Assignments carry an explicit reply-to contract so agents report back instead of waiting on each other.
 - **Agents**: preset personas (Avery the Architect, Beck the Builder, Sable the Swarm, Quinn the QA, Lennox the Lore, Oz the Orchestrator, Mason the Maker) with avatars — editable, deletable, or make your own. Say `You are @Oz` in a session to assign one; tag `@Beck` to delegate.
-- **Library**: skills, plugins, and MCP connectors read live from each CLI (`~/.claude`, `~/.grok`, `~/.codex`), filterable by provider and kind; import from a repo or a local file.
+- **Agents as characters**: each persona is a small glossy character (shape, colour, accessory — pick your own) that moves with its session: floats when free, glances around while thinking, sways while a tool runs, hops when it needs your OK. Teammate cards show what each is doing; an Activity list shows what is in progress.
+- **Transcript**: tool calls fold into one line ("Read 3 files, edited 1, ran 2 commands +12 −3") with a live label while the agent works; edits show as diffs, thinking as "Thought for 8s", replies as Markdown. The agent's task list is pinned above the composer, context use is a ring in the composer, and permission requests show the exact diff or command (press 1–3). ⌘O cycles Normal / Thinking / Verbose.
+- **Source control** (GitHub Desktop in the session): click the git chip or ⌘⇧G — changed files with checkboxes and their diffs, commit exactly what you picked (with Undo), switch or create branches, Fetch / Pull / Push / Publish with ahead/behind, and history with each commit's patch.
+- **Checkpoints**: before each of your messages runs, the folder's files are snapshotted; hover a message → Restore puts them back (undoable), Cursor-style.
+- **Side chats**: `/btw <question>` asks in a read-only drawer next to the session without derailing it.
+- **Skill groups**: Library → Groups bundles skills by kind of work (Web Design, Motion & Video, DevOps & Cloud, … 24 presets). Link one from the composer's Skills control or `/group web`; every skill in it that the session's CLI has installed rides each turn. Add or take out skills per group, or make your own.
+- **The desk learns** (Hermes-style): after enough turns or tool calls a read-only reviewer session proposes new or better skills and short memory facts; you approve them in Library → Learned (or set it to automatic). Approved skills land in `~/.agents/skills` and `~/.claude/skills`; memory reaches every new session. `/reflect` reviews a session now.
+- **Library**: skills (with descriptions, including plugin skills), plugins, and MCP connectors read live from each CLI (`~/.claude`, `~/.grok`, `~/.codex`), filterable by provider and kind; import from a repo or a local file.
+- **Light and dark**: Settings → Appearance (System / Dark / Light).
 
 ## WestCreate
 
-[WestCreate](https://github.com/thejago/WestCreate) (laser cutting, CNC, 3D printing) registers its MCP server with Claude Code, Grok and Codex the first time it is opened. Every WestCode session of those providers then has its tools, and the server shows in the Library. Say `You are @Mason` in a session, or tag `@Mason`, to steer WestCreate from the desk: draw, generate boxes, prepare and run laser jobs. Nothing in WestCode talks to WestCreate directly; the CLIs do.
+[WestCreate](https://github.com/thejago/WestCreate) (laser cutting, CNC, 3D printing) registers its MCP server with Claude Code, Grok and Codex the first time it is opened — and WestCode also adds WestCreate's bridge (`~/.westcreate/bin/westcreate-mcp.mjs`) to every session it starts when a CLI has not registered it, so the tools are always there. The **WestCreate** view (sidebar) shows the open drawing, the planned job and the machine, read-only, with quick prompts that hand work to **Mason the Maker**. Say `You are @Mason` in a session, or tag `@Mason`, to steer WestCreate from anywhere on the desk. WestCode never edits WestCreate's files or settings.
 
 ## Develop
 
@@ -37,6 +45,8 @@ npm run app        # Vite dev server on :8080 + Electron shell
 npm run dev        # web preview only (no CLI spawning in a browser)
 npm run dist       # signed DMG/ZIP into release/ (Developer ID cert required)
 ```
+
+Tests: `npm test` (unit: ACP mapping against recorded Claude/Grok sessions, the git engine against real repositories, WestCreate client, learning loop, skill groups) and `npm run test:e2e` (Playwright: the real renderer with a scripted desktop bridge). `.github/workflows/test.yml` runs both on Ubuntu, and the unit tests plus an unsigned app build on macOS, for every branch and PR.
 
 CI (`.github/workflows/build.yml`) typechecks, lints, then builds a **signed + notarized + stapled** DMG/ZIP on every push to main and publishes it to GitHub Releases (requires the `MAC_CERT_P12`/`APPLE_API_*` repo secrets; unsigned dev artifact otherwise).
 
