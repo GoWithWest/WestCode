@@ -1256,7 +1256,15 @@ export const useHelix = create<HelixState>((set, get) => ({
     set({ view, mobileNav: "desk" });
   },
   setActive: (id) => {
-    set({ activeId: id, view: "focus", mobileNav: "desk" });
+    // Leaving a session marks what was on screen as seen (sidebar unread dot).
+    const prev = get().activeId;
+    const now = Date.now();
+    set((s) => ({
+      activeId: id,
+      view: "focus",
+      mobileNav: "desk",
+      sessions: s.sessions.map((x) => (x.id === prev || x.id === id ? { ...x, seenAt: now } : x)),
+    }));
     // A pane whose history has not been painted yet (including one that
     // only holds a failure note) asks the CLI again on focus.
     void get().hydrateSession(id);

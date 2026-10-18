@@ -65,9 +65,13 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
             <AgentBadge session={session} />
             <CwdPicker session={session} />
             <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
-            <ExportButton session={session} />
-            <ResumeButton session={session} />
-            <EditorButton session={session} />
+            {!compact ? (
+              <>
+                <ExportButton session={session} />
+                <ResumeButton session={session} />
+                <EditorButton session={session} />
+              </>
+            ) : null}
           </div>
         </div>
       </header>

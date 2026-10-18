@@ -1,4 +1,4 @@
-import { memo, useState, type ComponentType } from "react";
+import { memo, useEffect, useState, type ComponentType } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -148,16 +148,57 @@ const Message = memo(function Message({
   );
 });
 
+const THINKING_VERBS = [
+  "Thinking",
+  "Pondering",
+  "Weighing it up",
+  "Untangling",
+  "Sifting",
+  "Mulling it over",
+  "Piecing it together",
+  "Working it out",
+];
+let verbIndex = 0;
+let verbTimer: number | null = null;
+const verbListeners = new Set<(i: number) => void>();
+
+/** One verb shared by every live "Thinking" label, changing every 8 s. */
+function useThinkingVerb(active: boolean) {
+  const [i, setI] = useState(verbIndex);
+  useEffect(() => {
+    if (!active) return;
+    verbListeners.add(setI);
+    if (verbTimer == null) {
+      verbTimer = window.setInterval(() => {
+        verbIndex = (verbIndex + 1) % THINKING_VERBS.length;
+        verbListeners.forEach((fn) => fn(verbIndex));
+      }, 8000);
+    }
+    return () => {
+      verbListeners.delete(setI);
+      if (!verbListeners.size && verbTimer != null) {
+        window.clearInterval(verbTimer);
+        verbTimer = null;
+        verbIndex = 0;
+      }
+    };
+  }, [active]);
+  return THINKING_VERBS[i] ?? "Thinking";
+}
+
 /** "Thinking…" with a light sweep, the way the desktop apps show live work. */
 export function Shimmer({ children, className }: { children: string; className?: string }) {
+  const thinking = children === "Thinking";
+  const verb = useThinkingVerb(thinking);
   return (
     <span
       className={cn(
         "shimmer-text inline-block text-xs font-medium text-muted-foreground",
         className,
       )}
+      aria-live="polite"
     >
-      {children}
+      {thinking ? `${verb}…` : children}
     </span>
   );
 }

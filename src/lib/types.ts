@@ -125,6 +125,8 @@ export type Session = {
   sideOf?: string;
   /** The side chat shown in this session's drawer. */
   sideOpen?: string;
+  /** Last time the user had this session on screen. */
+  seenAt?: number;
 };
 
 export type PlanEntry = {

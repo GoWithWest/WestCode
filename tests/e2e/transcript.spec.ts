@@ -31,6 +31,7 @@ test("a Claude turn shows the permission diff, compact tool rows, the reply, usa
   await box.press("Enter");
 
   await expect(page.getByText("wants to edit a file")).toBeVisible();
+  await expect(page.getByRole("navigation").getByText("Needs approval")).toBeVisible();
   await expect(page.getByText("return a + b").first()).toBeVisible();
   await page.screenshot({ path: "test-results/shots/permission.png" });
   await page.keyboard.press("1");
