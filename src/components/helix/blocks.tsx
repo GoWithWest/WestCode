@@ -10,6 +10,7 @@ import {
   FileSearch,
   FileText,
   Globe,
+  History,
   Search,
   Send,
   SquareTerminal,
@@ -32,15 +33,17 @@ type Detail = "normal" | "thinking" | "verbose";
 export function MessageList({
   messages,
   compact,
+  sessionId,
 }: {
   messages: ChatMessage[];
   compact?: boolean;
+  sessionId?: string;
 }) {
   const detail = useHelix((s) => s.settings.transcriptDetail ?? "normal");
   return (
     <div className={cn("mx-auto flex w-full max-w-3xl flex-col", compact ? "gap-4" : "gap-6")}>
       {messages.map((m) => (
-        <Message key={m.id} message={m} compact={compact} detail={detail} />
+        <Message key={m.id} message={m} compact={compact} detail={detail} sessionId={sessionId} />
       ))}
     </div>
   );
@@ -50,10 +53,12 @@ const Message = memo(function Message({
   message,
   compact,
   detail,
+  sessionId,
 }: {
   message: ChatMessage;
   compact?: boolean;
   detail: Detail;
+  sessionId?: string;
 }) {
   if (message.role === "system") {
     const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
@@ -66,6 +71,15 @@ const Message = memo(function Message({
           )}
         >
           {text}
+          {message.restoreUndo && sessionId ? (
+            <button
+              type="button"
+              onClick={() => void useHelix.getState().restoreCheckpoint(sessionId, message.restoreUndo!, "the restore")}
+              className="ml-2 font-medium text-foreground underline underline-offset-2"
+            >
+              Undo
+            </button>
+          ) : null}
         </pre>
       </div>
     );
@@ -78,7 +92,27 @@ const Message = memo(function Message({
   if (message.role === "user") {
     const text = message.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
     return (
-      <div className="flex justify-end">
+      <div className="group/user flex items-center justify-end gap-2">
+        {message.checkpoint && sessionId ? (
+          <button
+            type="button"
+            title="Put the folder's files back to how they were before this message (undoable)"
+            aria-label="Restore files to before this message"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Restore the folder's files to how they were before this message? Changes made after it are undone (you can undo the restore).",
+                )
+              ) {
+                void useHelix.getState().restoreCheckpoint(sessionId, message.checkpoint!, text.slice(0, 50));
+              }
+            }}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-subtle opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100"
+          >
+            <History className="size-3" />
+            Restore
+          </button>
+        ) : null}
         <div
           className={cn(
             "max-w-[min(36rem,88%)] whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed text-foreground",

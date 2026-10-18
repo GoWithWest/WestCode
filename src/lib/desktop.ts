@@ -147,6 +147,8 @@ export type GitBridge = {
   sync: (cwd: string, action: string) => Promise<{ ok: boolean; error?: string }>;
   log: (cwd: string, p?: { limit?: number; skip?: number }) => Promise<{ ok: boolean; commits: GitCommit[] }>;
   show: (cwd: string, sha: string) => Promise<{ ok: boolean; patch?: string; error?: string }>;
+  checkpoint?: (cwd: string, label: string) => Promise<{ ok: boolean; sha?: string; error?: string }>;
+  restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; error?: string }>;
   onProgress: (
     fn: (p: { cwd: string; title: string; percent: number }) => void,
   ) => () => void;
