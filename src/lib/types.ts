@@ -93,6 +93,8 @@ export type Session = {
   agentId?: string;
   /** Hidden from the default sidebar list; restorable. */
   archivedAt?: number;
+  /** Skill groups linked to this session (their skills ride every turn). */
+  skillGroupIds?: string[];
 };
 
 export type IncomingRef = {

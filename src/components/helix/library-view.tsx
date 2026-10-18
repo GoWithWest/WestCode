@@ -8,8 +8,18 @@ import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ProviderDot } from "./provider";
+import { GroupsPanel, SkillGroupAssign } from "./skill-groups";
 
-const TABS: { id: AddonKind; label: string }[] = [
+type LibraryTab = AddonKind | "group";
+
+const KIND_TABS: { id: AddonKind; label: string }[] = [
+  { id: "skill", label: "Skills" },
+  { id: "plugin", label: "Plugins" },
+  { id: "connector", label: "Connectors" },
+];
+
+const TABS: { id: LibraryTab; label: string }[] = [
+  { id: "group", label: "Groups" },
   { id: "skill", label: "Skills" },
   { id: "plugin", label: "Plugins" },
   { id: "connector", label: "Connectors" },
@@ -21,7 +31,7 @@ export function LibraryView() {
   const live = useHelix((s) => s.liveAddons);
   const libraryStatus = useHelix((s) => s.libraryStatus);
   const refreshLibrary = useHelix((s) => s.refreshLibrary);
-  const [tab, setTab] = useState<AddonKind>("skill");
+  const [tab, setTab] = useState<LibraryTab>("group");
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [connectorOpen, setConnectorOpen] = useState(false);
@@ -45,9 +55,7 @@ export function LibraryView() {
     }));
     const canned = LIBRARY.filter((a) =>
       (a.providers ?? []).some(
-        (p) =>
-          p === "*" ||
-          PROVIDER_ORDER.includes(p as (typeof PROVIDER_ORDER)[number]),
+        (p) => p === "*" || PROVIDER_ORDER.includes(p as (typeof PROVIDER_ORDER)[number]),
       ),
     );
     // Merge sources by kind+name: the first occurrence keeps identity (canned
@@ -62,14 +70,10 @@ export function LibraryView() {
         byKey.set(key, { ...a, providers: [...(a.providers ?? [])] });
         continue;
       }
-      cur.providers = [
-        ...new Set([...(cur.providers ?? []), ...(a.providers ?? [])]),
-      ];
+      cur.providers = [...new Set([...(cur.providers ?? []), ...(a.providers ?? [])])];
       if (!cur.summary && a.summary) cur.summary = a.summary;
     }
-    const liveKeys = new Set(
-      fromCli.map((a) => `${a.kind}:${a.name.toLowerCase()}`),
-    );
+    const liveKeys = new Set(fromCli.map((a) => `${a.kind}:${a.name.toLowerCase()}`));
     const merged = [...byKey.values()].map((a) => ({
       ...a,
       installed: liveKeys.has(`${a.kind}:${a.name.toLowerCase()}`),
@@ -79,9 +83,7 @@ export function LibraryView() {
       filter === "all"
         ? all
         : all.filter(
-            (a) =>
-              (a.providers ?? []).includes(filter) ||
-              (a.providers ?? []).includes("*"),
+            (a) => (a.providers ?? []).includes(filter) || (a.providers ?? []).includes("*"),
           );
     const q = query.trim().toLowerCase();
     if (!q) return scoped;
@@ -103,17 +105,13 @@ export function LibraryView() {
           <div>
             <h2 className="text-lg font-medium tracking-tight">Library</h2>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Everything your CLIs have installed (~/.claude, ~/.grok,
-              ~/.codex), merged with a curated catalog you can install from.
-              Install, remove, and configure run each provider's own CLI.
+              Everything your CLIs have installed (~/.claude, ~/.grok, ~/.codex), merged with a
+              curated catalog you can install from. Install, remove, and configure run each
+              provider's own CLI.
             </p>
           </div>
           <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setConnectorOpen(true)}
-            >
+            <Button size="sm" variant="outline" onClick={() => setConnectorOpen(true)}>
               <Plus className="size-3.5" />
               Add connector
             </Button>
@@ -164,39 +162,38 @@ export function LibraryView() {
             className="ml-auto h-8 w-36 rounded-md border border-border bg-window px-2.5 text-xs outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
           />
         </div>
-        <p className="mt-2 text-2xs text-subtle">
-          {installedCount} installed · {items.length} in this list
-        </p>
+        {tab === "group" ? <GroupsPanel query={query} /> : null}
+        {tab !== "group" ? (
+          <>
+            <p className="mt-2 text-2xs text-subtle">
+              {installedCount} installed · {items.length} in this list
+            </p>
 
-        <ul className="mt-4 space-y-2">
-          {items.length === 0 ? (
-            <li className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-              {libraryStatus === "loading"
-                ? "Reading skills from the CLIs…"
-                : "Nothing matches. Import your own, or clear the filter."}
-            </li>
-          ) : (
-            items.map((a) => (
-              <AddonCard
-                key={a.id}
-                addon={a}
-                onConfigure={() => setConfigAddon(a)}
-                onRemoveCustom={a.custom ? () => remove(a.id) : undefined}
-              />
-            ))
-          )}
-        </ul>
+            <ul className="mt-4 space-y-2">
+              {items.length === 0 ? (
+                <li className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                  {libraryStatus === "loading"
+                    ? "Reading skills from the CLIs…"
+                    : "Nothing matches. Import your own, or clear the filter."}
+                </li>
+              ) : (
+                items.map((a) => (
+                  <AddonCard
+                    key={a.id}
+                    addon={a}
+                    onConfigure={() => setConfigAddon(a)}
+                    onRemoveCustom={a.custom ? () => remove(a.id) : undefined}
+                  />
+                ))
+              )}
+            </ul>
+          </>
+        ) : null}
       </div>
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
-      <AddConnectorDialog
-        open={connectorOpen}
-        onOpenChange={setConnectorOpen}
-      />
+      <AddConnectorDialog open={connectorOpen} onOpenChange={setConnectorOpen} />
       {configAddon ? (
-        <AddonConfigDialog
-          addon={configAddon}
-          onClose={() => setConfigAddon(null)}
-        />
+        <AddonConfigDialog addon={configAddon} onClose={() => setConfigAddon(null)} />
       ) : null}
     </div>
   );
@@ -222,13 +219,9 @@ function AddonCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-medium">{addon.name}</h3>
-            {addon.custom ? (
-              <span className="text-2xs text-subtle">yours</span>
-            ) : null}
+            {addon.custom ? <span className="text-2xs text-subtle">yours</span> : null}
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {addon.summary}
-          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{addon.summary}</p>
           <p className="mt-2 font-mono text-2xs text-subtle">
             {addon.source}
             {addon.repo ? ` · ${addon.repo}` : ""}
@@ -249,6 +242,11 @@ function AddonCard({
             )}
           </div>
           <p className="mt-2 font-mono text-2xs text-subtle">{addon.install}</p>
+          {addon.kind === "skill" ? (
+            <div className="mt-2">
+              <SkillGroupAssign name={addon.name} />
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <div className="flex items-center gap-1">
@@ -270,12 +268,7 @@ function AddonCard({
             {addon.installed ? "Manage" : "Install"}
           </Button>
           {onRemoveCustom ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Remove"
-              onClick={onRemoveCustom}
-            >
+            <Button size="icon" variant="ghost" aria-label="Remove" onClick={onRemoveCustom}>
               <Trash2 className="size-3.5 text-muted-foreground" />
             </Button>
           ) : null}
@@ -322,9 +315,7 @@ function AddonConfigDialog({
 
   const cliStatus = useHelix((s) => s.cliStatus);
   function installTargets(): string[] {
-    const found = new Set(
-      cliStatus.filter((c) => c.found).map((c) => c.id),
-    );
+    const found = new Set(cliStatus.filter((c) => c.found).map((c) => c.id));
     const declared = actionProviders(addon).filter((p) => found.has(p));
     if (declared.length) return declared;
     // The catalog's provider list is advisory — MCP servers work on any
@@ -346,25 +337,17 @@ function AddonConfigDialog({
         // provider is how each CLI works, but the user acts once.
         const slug = addon.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
         const targets = installTargets();
-        const missing = placeholders.filter(
-          (ph) => !(argValues[ph] ?? "").trim(),
-        );
+        const missing = placeholders.filter((ph) => !(argValues[ph] ?? "").trim());
         // Substitute per TOKEN of the template, so a filled-in value with
         // spaces (a folder path, say) stays one spawn argument.
         const fill = (tok: string) =>
-          tok.replace(/<([^>]+)>/g, (_m, ph: string) =>
-            (argValues[ph] ?? "").trim(),
-          );
+          tok.replace(/<([^>]+)>/g, (_m, ph: string) => (argValues[ph] ?? "").trim());
         const templateTokens = (addon.install ?? "").trim().split(/\s+/);
         const isNpx = templateTokens[0] === "npx";
         const npxArgs = isNpx ? templateTokens.slice(1).map(fill) : [];
-        const urlFilled = /^https?:\/\/\S+$/.exec(
-          fill((addon.install ?? "").trim()),
-        )?.[0];
+        const urlFilled = /^https?:\/\/\S+$/.exec(fill((addon.install ?? "").trim()))?.[0];
         if (missing.length) {
-          setOutput(
-            "Fill in the field above first — this connector needs that setting to work.",
-          );
+          setOutput("Fill in the field above first — this connector needs that setting to work.");
         } else if (!targets.length) {
           setOutput(
             "No supported CLI is installed on this Mac. Install Claude Code, Grok Build, or Codex in Connections first.",
@@ -385,13 +368,13 @@ function AddonConfigDialog({
                   commandOrUrl: urlFilled!,
                   transport: "http",
                 });
-            lines.push(`${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`);
+            lines.push(
+              `${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`,
+            );
           }
           setOutput(
             lines.join("\n") +
-              (urlFilled
-                ? "\nRemote server — use Authenticate to finish OAuth where needed."
-                : ""),
+              (urlFilled ? "\nRemote server — use Authenticate to finish OAuth where needed." : ""),
           );
         } else {
           setOutput(
@@ -468,9 +451,7 @@ function AddonConfigDialog({
   const canEnable =
     (providerId === "grok" && addon.kind !== "skill") ||
     (providerId === "claude" && addon.kind === "plugin");
-  const canAuth =
-    (providerId === "claude" || providerId === "codex") &&
-    addon.kind === "connector";
+  const canAuth = (providerId === "claude" || providerId === "codex") && addon.kind === "connector";
   const canDoctor = providerId === "grok" && addon.kind === "connector";
   const removableKind = addon.kind !== "skill";
 
@@ -479,9 +460,7 @@ function AddonConfigDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-background/70" />
         <Dialog.Content className="scrollbar-none fixed inset-x-4 top-1/2 z-50 mx-auto max-h-[min(90dvh,40rem)] w-auto max-w-md -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-window focus:outline-none">
-          <Dialog.Title className="text-lg font-medium tracking-tight">
-            {addon.name}
-          </Dialog.Title>
+          <Dialog.Title className="text-lg font-medium tracking-tight">{addon.name}</Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted-foreground">
             {addon.kind} · {addon.source}
             {addon.repo ? ` · ${addon.repo}` : ""}
@@ -513,9 +492,7 @@ function AddonConfigDialog({
                   </label>
                   <input
                     value={argValues[ph] ?? ""}
-                    onChange={(e) =>
-                      setArgValues((v) => ({ ...v, [ph]: e.target.value }))
-                    }
+                    onChange={(e) => setArgValues((v) => ({ ...v, [ph]: e.target.value }))}
                     placeholder={ph}
                     className="mt-1 h-8 w-full rounded-md border border-border bg-window px-2.5 font-mono text-xs outline-none placeholder:text-subtle focus:ring-1 focus:ring-ring"
                   />
@@ -546,26 +523,51 @@ function AddonConfigDialog({
             ) : null}
             {canEnable ? (
               <>
-                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("enable")}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!!busy}
+                  onClick={() => void run("enable")}
+                >
                   Enable
                 </Button>
-                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("disable")}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!!busy}
+                  onClick={() => void run("disable")}
+                >
                   Disable
                 </Button>
               </>
             ) : null}
             {canAuth ? (
               <>
-                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("login")}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!!busy}
+                  onClick={() => void run("login")}
+                >
                   Authenticate
                 </Button>
-                <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("logout")}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!!busy}
+                  onClick={() => void run("logout")}
+                >
                   Log out
                 </Button>
               </>
             ) : null}
             {canDoctor ? (
-              <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run("doctor")}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!!busy}
+                onClick={() => void run("doctor")}
+              >
                 Doctor
               </Button>
             ) : null}
@@ -573,15 +575,13 @@ function AddonConfigDialog({
 
           {addon.kind === "skill" && addon.installed ? (
             <p className="mt-3 text-2xs leading-relaxed text-muted-foreground">
-              Skills are files — this one lives in the provider's skills
-              folder (or ships inside a plugin). Remove it there.
+              Skills are files — this one lives in the provider's skills folder (or ships inside a
+              plugin). Remove it there.
             </p>
           ) : null}
 
           {addon.install ? (
-            <p className="mt-3 font-mono text-2xs break-all text-subtle">
-              {addon.install}
-            </p>
+            <p className="mt-3 font-mono text-2xs break-all text-subtle">{addon.install}</p>
           ) : null}
 
           {output ? (
@@ -650,9 +650,7 @@ function AddConnectorDialog({
     setOutput("");
     try {
       if (!srv.remote && !srv.npmPkg) {
-        setOutput(
-          "This registry entry has no remote URL or npm package to install.",
-        );
+        setOutput("This registry entry has no remote URL or npm package to install.");
         return;
       }
       if (!foundClis.length) {
@@ -683,7 +681,9 @@ function AddConnectorDialog({
               commandOrUrl: "npx",
               args: ["-y", srv.npmPkg],
             });
-        lines.push(`${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`);
+        lines.push(
+          `${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`,
+        );
       }
       setOutput(lines.join("\n"));
       void refreshLibrary();
@@ -723,7 +723,9 @@ function AddConnectorDialog({
           header: header.trim() || undefined,
         });
         if (res.ok) anyOk = true;
-        lines.push(`${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`);
+        lines.push(
+          `${pid}: ${res.ok ? "added" : "FAILED"}${res.output ? ` — ${res.output.split("\n").slice(-1)[0]}` : ""}`,
+        );
       }
       setOutput(lines.join("\n"));
       if (anyOk) void refreshLibrary();
@@ -741,10 +743,9 @@ function AddConnectorDialog({
             Add MCP connector
           </Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-            A command (stdio) or an http(s) URL. WestCode runs each CLI's own
-            `mcp add` and installs to every CLI on this Mac — remote servers
-            that need OAuth finish sign-in via Authenticate on the connector
-            afterwards.
+            A command (stdio) or an http(s) URL. WestCode runs each CLI's own `mcp add` and installs
+            to every CLI on this Mac — remote servers that need OAuth finish sign-in via
+            Authenticate on the connector afterwards.
           </Dialog.Description>
 
           <Field label="Name" value={name} onChange={setName} placeholder="playwright" />
@@ -783,7 +784,12 @@ function AddConnectorDialog({
               placeholder="github, postgres, browser…"
               className="h-8 flex-1 rounded-md border border-border bg-window px-2.5 text-xs outline-none placeholder:text-subtle"
             />
-            <Button size="sm" variant="outline" disabled={regBusy} onClick={() => void searchRegistry()}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={regBusy}
+              onClick={() => void searchRegistry()}
+            >
               {regBusy ? "Searching…" : "Search"}
             </Button>
           </div>
@@ -852,9 +858,7 @@ function ImportDialog({
   const [installNote, setInstallNote] = useState("");
 
   function toggleProv(id: string) {
-    setProviders((cur) =>
-      cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
-    );
+    setProviders((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   }
 
   async function submit() {
@@ -895,12 +899,10 @@ function ImportDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-background/70" />
         <Dialog.Content className="scrollbar-none fixed inset-x-4 top-1/2 z-50 mx-auto max-h-[min(90dvh,40rem)] w-auto max-w-md -translate-y-1/2 overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-window focus:outline-none">
-          <Dialog.Title className="text-lg font-medium tracking-tight">
-            Import
-          </Dialog.Title>
+          <Dialog.Title className="text-lg font-medium tracking-tight">Import</Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-            Add a skill, plugin, or MCP connector from a repo you trust — or a
-            local file (SKILL.md, config, manifest).
+            Add a skill, plugin, or MCP connector from a repo you trust — or a local file (SKILL.md,
+            config, manifest).
           </Dialog.Description>
 
           {westcode()?.pickFile ? (
@@ -912,9 +914,7 @@ function ImportDialog({
                 const f = await westcode()!.pickFile();
                 if (!f) return;
                 setPickedPath(f.path);
-                setName(
-                  f.name.replace(/\.(md|json|ya?ml|toml|txt)$/i, "").replace(/[-_]/g, " "),
-                );
+                setName(f.name.replace(/\.(md|json|ya?ml|toml|txt)$/i, "").replace(/[-_]/g, " "));
                 setSource("Local file");
                 setInstall(f.path);
                 if (f.snippet) setSummary(f.snippet);
@@ -926,7 +926,7 @@ function ImportDialog({
           ) : null}
 
           <div className="mt-4 flex gap-1.5">
-            {TABS.map((t) => (
+            {KIND_TABS.map((t) => (
               <button
                 key={t.id}
                 type="button"
@@ -950,12 +950,7 @@ function ImportDialog({
             onChange={setSource}
             placeholder="Anthropic, you, a teammate"
           />
-          <Field
-            label="GitHub repo"
-            value={repo}
-            onChange={setRepo}
-            placeholder="org/repo"
-          />
+          <Field label="GitHub repo" value={repo} onChange={setRepo} placeholder="org/repo" />
           <label className="mt-3 block">
             <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
               Summary
@@ -974,9 +969,7 @@ function ImportDialog({
             placeholder="/plugin install … or npx …"
           />
 
-          <p className="mt-3 text-2xs font-medium tracking-wide text-subtle uppercase">
-            Providers
-          </p>
+          <p className="mt-3 text-2xs font-medium tracking-wide text-subtle uppercase">Providers</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {PROVIDER_ORDER.map((id) => (
               <button
@@ -998,14 +991,15 @@ function ImportDialog({
 
           {pickedPath && kind === "skill" ? (
             <p className="mt-3 text-2xs text-muted-foreground">
-              This SKILL.md will be installed to the selected providers'
-              skills folders (~/.claude/skills, ~/.grok/skills, …). Skills
-              with extra files (references/, scripts/) need their whole
-              folder copied manually.
+              This SKILL.md will be installed to the selected providers' skills folders
+              (~/.claude/skills, ~/.grok/skills, …). Skills with extra files (references/, scripts/)
+              need their whole folder copied manually.
             </p>
           ) : null}
           {installNote ? (
-            <pre className="mt-2 font-mono text-2xs whitespace-pre-wrap text-subtle">{installNote}</pre>
+            <pre className="mt-2 font-mono text-2xs whitespace-pre-wrap text-subtle">
+              {installNote}
+            </pre>
           ) : null}
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
@@ -1034,9 +1028,7 @@ function Field({
 }) {
   return (
     <label className="mt-3 block">
-      <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
-        {label}
-      </span>
+      <span className="text-2xs font-medium tracking-wide text-subtle uppercase">{label}</span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}

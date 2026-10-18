@@ -23,7 +23,8 @@
     "app": "node desktop/dev.mjs",
     "electron": "WESTCODE_DEV=1 electron .",
     "build:desktop": "vite build",
-    "dist": "npm run build:desktop && electron-builder --mac --publish never -c.directories.output=/tmp/westcode-release && rm -rf release && mkdir -p release && cp /tmp/westcode-release/*.dmg /tmp/westcode-release/*.zip release/"
+    "dist": "npm run build:desktop && electron-builder --mac --publish never -c.directories.output=/tmp/westcode-release && rm -rf release && mkdir -p release && cp /tmp/westcode-release/*.dmg /tmp/westcode-release/*.zip release/",
+    "test": "vitest run"
   },
   "build": {
     "appId": "dev.westcode.app",
@@ -118,6 +119,7 @@
     "prettier": "^3.4.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.56.1",
-    "vite": "^8.2.0"
+    "vite": "^8.2.0",
+    "vitest": "^3.2.4"
   }
 }
