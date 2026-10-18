@@ -43,10 +43,20 @@ export type SessionEvent = {
     | "models"
     | "ready"
     | "user"
+    | "plan"
+    | "usage"
+    | "info"
+    | "mode"
     | "noop";
   text?: string;
   toolId?: string;
   name?: string;
+  title?: string;
+  toolKind?: string;
+  diffs?: { path: string; oldText: string; newText: string }[];
+  plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
+  usage?: { used: number; size: number };
+  modeId?: string;
   path?: string;
   command?: string;
   content?: string;
