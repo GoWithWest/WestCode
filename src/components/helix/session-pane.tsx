@@ -12,6 +12,7 @@ import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./
 import { PermissionCard, PlanCard } from "./session-extras";
 import { AgentAvatar } from "./agents-view";
 import { SourceControlPanel } from "./source-control";
+import { ArtifactPane } from "./artifact-pane";
 import { dotStateFor } from "@/lib/dots";
 
 export function SessionPane({ session, compact }: { session: Session; compact?: boolean }) {
@@ -117,7 +118,8 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
         {scmOpen ? (
           <SourceControlPanel session={session} onClose={() => setScmOpen(false)} />
         ) : null}
-        {!scmOpen && side ? (
+        {!scmOpen && session.artifact ? <ArtifactPane session={session} /> : null}
+        {!scmOpen && !session.artifact && side ? (
           <aside
             aria-label="Side chat"
             className="flex h-full min-h-0 w-[min(26rem,45vw)] shrink-0 flex-col border-l border-border bg-surface"

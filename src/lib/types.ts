@@ -130,6 +130,8 @@ export type Session = {
   seenAt?: number;
   /** Repository the source control panel works on when the folder holds several. */
   scmRepo?: string;
+  /** What the artifact pane is previewing (a file the agent made, or inline code). */
+  artifact?: { title: string; url: string; path?: string; markdown?: boolean };
 };
 
 export type PlanEntry = {

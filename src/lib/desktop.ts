@@ -315,6 +315,11 @@ type WestcodeBridge = {
   westcreate?: () => Promise<WestCreateSnapshot>;
   learn?: LearnBridge;
   memoryHub?: MemoryHubBridge;
+  artifact?: {
+    file: (root: string, file: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    inline: (code: string, lang: string) => Promise<{ ok: boolean; url?: string }>;
+    openExternal: (url: string) => Promise<{ ok: boolean }>;
+  };
   openWestcreate?: () => Promise<{ ok: boolean; error?: string }>;
   apiPrompt: (payload: {
     endpoint: string;

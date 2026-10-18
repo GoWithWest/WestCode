@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld("westcode", {
   installSkillFile: (path, name, providers) => ipcRenderer.invoke("skill:install-file", { path, name, providers }),
   gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
   westcreate: () => ipcRenderer.invoke("westcreate:snapshot"),
+  artifact: {
+    file: (root, file) => ipcRenderer.invoke("artifact:file", { root, file }),
+    inline: (code, lang) => ipcRenderer.invoke("artifact:inline", { code, lang }),
+    openExternal: (url) => ipcRenderer.invoke("artifact:open-external", url),
+  },
   learn: {
     review: (payload) => ipcRenderer.invoke("learn:review", payload),
     cancel: (origin) => ipcRenderer.invoke("learn:cancel", origin),

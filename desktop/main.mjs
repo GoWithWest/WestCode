@@ -16,6 +16,7 @@ import * as westcreate from "./westcreate.mjs";
 import * as learn from "./learn.mjs";
 import * as memoryHub from "./memory-hub.mjs";
 import * as memoryFlow from "./memory-flow.mjs";
+import * as artifacts from "./artifact-server.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -574,6 +575,22 @@ ipcMain.handle("memory:sync", async (_e, p = {}) =>
   p.enabled ? { ok: true, results: await memoryFlow.syncAllRules(p.memoryRepo) } : { ok: true, results: memoryHub.unsyncRules() },
 );
 ipcMain.handle("learn:memory", () => ({ user: learn.readMemory("user"), memory: learn.readMemory("memory"), snapshot: learn.memorySnapshot() }));
+
+// ---- Artifact previews (sandboxed local server, session folders only).
+ipcMain.handle("artifact:file", async (_e, p = {}) => {
+  try {
+    const root = repoDir(p.root);
+    const file = String(p.file || "").startsWith("/") ? String(p.file) : join(root, String(p.file || ""));
+    return { ok: true, url: await artifacts.previewUrl(root, file) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle("artifact:inline", async (_e, p = {}) => ({ ok: true, url: await artifacts.inlineUrl(String(p.code || ""), p.lang === "svg" ? "svg" : "html") }));
+ipcMain.handle("artifact:open-external", (_e, url) => {
+  if (/^http:\/\/127\.0\.0\.1:\d+\//.test(String(url))) void shell.openExternal(String(url));
+  return { ok: true };
+});
 
 ipcMain.handle("westcreate:snapshot", () => westcreate.snapshot());
 ipcMain.handle("westcreate:open", () => westcreate.openApp());

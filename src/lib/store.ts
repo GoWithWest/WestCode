@@ -337,6 +337,8 @@ export type HelixState = {
   /** Review a session now (or when counters fire), staging proposals. */
   reviewSession: (sessionId: string, opts?: { manual?: boolean }) => Promise<void>;
   decideProposal: (id: string, verdict: "approve" | "reject", edited?: string) => Promise<string | null>;
+  /** Preview a file the agent made, or inline html/svg, in the artifact pane. */
+  openArtifact: (sessionId: string, what: { path?: string; code?: string; lang?: string }) => Promise<string | null>;
   /** Put the session's folder back to a checkpoint (undoable). */
   restoreCheckpoint: (sessionId: string, sha: string, label: string) => Promise<void>;
   /** Link (or unlink) a skill group to a session. */
@@ -2210,6 +2212,22 @@ export const useHelix = create<HelixState>((set, get) => ({
     await get().refreshLearning();
     if (verdict === "approve") void get().refreshLibrary();
     return r.ok ? null : (r.error ?? "Failed.");
+  },
+
+  openArtifact: async (sessionId, what) => {
+    const api = westcode()?.artifact;
+    const ses = get().sessions.find((x) => x.id === sessionId);
+    if (!api || !ses) return "Previews need the WestCode desktop app.";
+    const r = what.path ? await api.file(ses.cwd, what.path) : await api.inline(what.code ?? "", what.lang ?? "html");
+    if (!r.ok || !r.url) return r.ok ? "No preview." : ((r as { error?: string }).error ?? "No preview.");
+    const title = what.path ? what.path.split("/").pop()! : `${(what.lang ?? "html").toUpperCase()} from the reply`;
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        artifact: { title, url: r.url!, path: what.path, markdown: /\.(md|markdown)$/i.test(what.path ?? "") },
+      })),
+    }));
+    return null;
   },
 
   restoreCheckpoint: async (sessionId, sha, label) => {
