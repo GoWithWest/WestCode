@@ -18,6 +18,7 @@ import { dotStateFor } from "@/lib/dots";
 export function SessionPane({ session, compact }: { session: Session; compact?: boolean }) {
   const setActive = useHelix((s) => s.setActive);
   const compactPref = useHelix((s) => s.settings.transcriptCompact);
+  const loadingHistory = useHelix((s) => s.loadingHistory.includes(session.id));
   const provider = useResolvedProvider(session.providerId);
   const persona = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
   const agentName = persona?.name ?? provider.short;
@@ -97,6 +98,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
           >
             {session.messages.length === 0 ? (
               <EmptySession
+                loading={loadingHistory}
                 name={provider.short}
                 cwd={session.cwd}
                 model={session.model}
@@ -413,16 +415,28 @@ function GitChip({
 }
 
 function EmptySession({
+  loading,
   name,
   cwd,
   model,
   effort,
 }: {
+  loading?: boolean;
   name: string;
   cwd: string;
   model: string;
   effort: string;
 }) {
+  if (loading) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center" role="status">
+        <p className="text-sm font-medium">Loading this conversation from {name}…</p>
+        <p className="max-w-xs text-xs text-muted-foreground">
+          {name} keeps the transcript; WestCode is reading it back. You can type now.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
       <p className="text-sm font-medium">{name} is ready</p>

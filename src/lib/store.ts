@@ -266,6 +266,8 @@ export type HelixState = {
   learnPending: LearnProposal[];
   /** Session ids with a review running now. */
   reviewing: string[];
+  /** Session ids whose stored history is being read from the CLI now. */
+  loadingHistory: string[];
   /** Approved desk memory, as injected into new CLI sessions. */
   deskMemory: string;
   providerColors: Record<string, string>;
@@ -674,42 +676,65 @@ export function stripDeskPreamble(text: string): string {
   // full: the turns it quotes are already in the transcript above it.
   if (text.startsWith("[WestCode restored this thread")) return "";
   if (!text.startsWith("[WestCode desk]")) return text;
-  // The desk block is always first and always present here.
+  // Turns sent since the end marker existed say where the scaffolding stops.
+  const marked = text.indexOf(PREAMBLE_END);
+  if (marked >= 0) return stripMentionNotes(text.slice(marked + PREAMBLE_END.length)).trim() || text;
+  // Older turns: the desk block is always first and always present here.
   const deskEnd = "Never acknowledge a completion report.";
   const at = text.indexOf(deskEnd);
   if (at < 0) return text;
   let rest = text.slice(at + deskEnd.length);
-  // Then the optional blocks, in the order WestCode composes them. Each is
-  // consumed only when its OPENING marker starts what is left, so a phrase
-  // the human happens to use later in their own message is never a cut
-  // point — the blocks are scaffolding at the front or they are not there.
-  const optional: [RegExp, string[]][] = [
-    [
-      /^\s*\[Agent profile:/,
-      ["delegate to them with westcode_send_message when a task belongs to their role."],
-    ],
+  // Then the optional blocks WestCode may add, in whatever order a version
+  // composed them. Each is consumed only when its OPENING marker starts what
+  // is left, so a phrase the human happens to use later in their own message
+  // is never a cut point — the blocks are scaffolding at the front or they
+  // are not there.
+  const ended: [RegExp, string[]][] = [
+    [/^\s*\[Shared memory\]/, ["Check it before work that may depend on earlier decisions."]],
+    [/^\s*\[Agent profile:/, ["delegate to them with westcode_send_message when a task belongs to their role."]],
     [
       /^\s*\[Peer agent:/,
-      [
-        "the sender is waiting for your reply.",
-        "acknowledgment ping-pong wastes both sessions.",
-      ],
+      ["the sender is waiting for your reply.", "acknowledgment ping-pong wastes both sessions."],
     ],
   ];
-  for (const [opens, ends] of optional) {
-    if (!opens.test(rest)) continue;
-    const stop = ends
-      .map((e) => rest.indexOf(e))
-      .filter((i) => i >= 0)
-      .sort((a, b) => a - b)[0];
-    if (stop === undefined) continue;
-    rest = rest.slice(stop + ends.find((e) => rest.startsWith(e, stop))!.length);
+  // Blocks that are a header line, maybe one sentence, then bullet lines.
+  const listed: [RegExp, number][] = [
+    [/^\s*\[Desk memory\b[^\n]*\n/, 0],
+    [/^\s*\[Skill groups linked to this session\][^\n]*\n/, 1],
+  ];
+  for (let progress = true; progress; ) {
+    progress = false;
+    for (const [opens, ends] of ended) {
+      if (!opens.test(rest)) continue;
+      const stop = ends
+        .map((e) => rest.indexOf(e))
+        .filter((i) => i >= 0)
+        .sort((a, b) => a - b)[0];
+      if (stop === undefined) continue;
+      rest = rest.slice(stop + ends.find((e) => rest.startsWith(e, stop))!.length);
+      progress = true;
+    }
+    for (const [opens, sentences] of listed) {
+      const m = rest.match(opens);
+      if (!m) continue;
+      const lines = rest.slice(m[0].length).split("\n");
+      let i = sentences;
+      while (i < lines.length && /^(- |About the user:|About their setup and projects:)/.test(lines[i]!)) i++;
+      rest = lines.slice(i).join("\n");
+      progress = true;
+    }
   }
-  // Delegation notes for @mentioned agents sit between the scaffolding and
-  // the human's own words.
-  rest = rest.replace(/^(\s*\[@[^\]]*\]\s*)+/, "");
-  return rest.trim() || text;
+  return stripMentionNotes(rest).trim() || text;
 }
+
+// Delegation notes for @mentioned agents sit between the scaffolding and the
+// human's own words.
+function stripMentionNotes(rest: string): string {
+  return rest.replace(/^(\s*\[@[^\]]*\]\s*)+/, "");
+}
+
+/** Last line of every preamble WestCode puts in front of a turn. */
+export const PREAMBLE_END = "[End of WestCode context. The user's message follows.]";
 
 /** Send the first queued message of an idle pane, as send()'s finally does. */
 function drainQueued(sessionId: string) {
@@ -1279,6 +1304,7 @@ export const useHelix = create<HelixState>((set, get) => ({
   groupsPersist: EMPTY_GROUPS,
   learnPending: [],
   reviewing: [],
+  loadingHistory: [],
   deskMemory: "",
   providerColors: {},
   settings: DEFAULT_SETTINGS,
@@ -1550,6 +1576,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     if (!api?.openSession || !ses || !cliBacked(ses)) return;
     if (hydrating.has(sessionId) || hydrated.has(sessionId)) return;
     hydrating.add(sessionId);
+    set((s) => ({ loadingHistory: [...s.loadingHistory, sessionId] }));
     try {
       const res = await api.openSession({
         sessionId: ses.id,
@@ -1578,6 +1605,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       }));
     } finally {
       hydrating.delete(sessionId);
+      set((s) => ({ loadingHistory: s.loadingHistory.filter((id) => id !== sessionId) }));
     }
   },
 
@@ -2658,8 +2686,8 @@ export const useHelix = create<HelixState>((set, get) => ({
       ? `Incoming work from another WestCode session. Act on it now. When you finish (or if you are blocked), you MUST call westcode_send_message with to="${opts?.incoming?.fromSessionId}" and a short result — the sender is waiting for your reply.`
       : `Incoming status report from another WestCode session. Read it. Do NOT reply unless it assigns you new work or asks a direct question — a completion report is terminal, and acknowledgment ping-pong wastes both sessions.`;
     const preambleText = opts?.incoming
-      ? `${bus}\n${persona}${groupsText}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n\n`
-      : `${bus}\n${memoryText}${persona}${groupsText}${mentionNotes}`;
+      ? `${bus}\n${persona}${groupsText}[Peer agent: ${resolveProvider(opts.incoming.fromProviderId, get().customProviders).short} · ${opts.incoming.fromTitle} · session ${opts.incoming.fromSessionId}]\n${incomingNote}\n${PREAMBLE_END}\n\n`
+      : `${bus}\n${memoryText}${persona}${groupsText}${mentionNotes}${PREAMBLE_END}\n`;
     const promptText = `${preambleText}${outgoing}`;
 
     const api = westcode();
