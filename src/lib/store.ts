@@ -415,9 +415,54 @@ export function cliBacked(s: Session): boolean {
   );
 }
 
+const msgText = (m: ChatMessage) =>
+  m.blocks
+    .map((b) => (b.type === "text" ? b.text : ""))
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** Every checkpoint the session knows: saved ones plus those on messages. */
+function collectCheckpoints(s: Session): { text: string; sha: string }[] {
+  const out = [...(s.checkpoints ?? [])];
+  const seen = new Set(out.map((c) => c.sha));
+  for (const m of s.messages) {
+    if (m.role === "user" && m.checkpoint && !seen.has(m.checkpoint)) {
+      out.push({ text: msgText(m), sha: m.checkpoint });
+      seen.add(m.checkpoint);
+    }
+  }
+  return out.slice(-50);
+}
+
+/** Put saved checkpoints back on re-read messages, in order, by their text. */
+export function attachCheckpoints(
+  messages: ChatMessage[],
+  checkpoints: { text: string; sha: string }[] = [],
+): ChatMessage[] {
+  if (!checkpoints.length) return messages;
+  const used = new Set(messages.map((m) => m.checkpoint).filter(Boolean));
+  let from = 0;
+  return messages.map((m) => {
+    if (m.role !== "user" || m.checkpoint) return m;
+    const text = msgText(m);
+    for (let i = from; i < checkpoints.length; i++) {
+      const c = checkpoints[i]!;
+      if (c.text === text && !used.has(c.sha)) {
+        from = i + 1;
+        used.add(c.sha);
+        return { ...m, checkpoint: c.sha };
+      }
+    }
+    return m;
+  });
+}
+
 function sanitizeSession(s: Session): Session {
+  const checkpoints = collectCheckpoints(s);
   return {
     ...s,
+    checkpoints: checkpoints.length ? checkpoints : undefined,
     status: s.status === "running" ? "waiting" : s.status,
     permission: null,
     queued: undefined,
@@ -1599,7 +1644,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       set((state) => ({
         sessions: patchSession(state.sessions, sessionId, (s) => ({
           ...s,
-          messages: mergeHistory(s, messages, res.ok),
+          messages: attachCheckpoints(mergeHistory(s, messages, res.ok), collectCheckpoints(s)),
           status: res.ok ? (s.status === "error" ? "idle" : s.status) : "error",
         })),
       }));
@@ -2727,6 +2772,11 @@ export const useHelix = create<HelixState>((set, get) => ({
             sessions: patchSession(s.sessions, sessionId, (ses) => ({
               ...ses,
               messages: ses.messages.map((m) => (m.id === userMsg.id ? { ...m, checkpoint: cp.sha } : m)),
+              // Keyed by what the CLI records, which is what a re-read shows.
+              checkpoints: [
+                ...(ses.checkpoints ?? []),
+                { text: outgoing.replace(/\s+/g, " ").trim(), sha: cp.sha! },
+              ].slice(-50),
             })),
           }));
         }

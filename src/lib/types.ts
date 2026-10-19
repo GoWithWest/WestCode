@@ -107,7 +107,13 @@ export type Session = {
   permission?: PermissionPrompt | null;
   availableModels?: { id: string; label: string }[];
   queued?: { text: string; incoming?: IncomingRef; msgId?: string }[];
-  agentSessionId?: string;
+/**
+   * Checkpoints keyed by the text of the message they precede. A CLI-backed
+   * pane is re-read from the CLI after a restart, which knows nothing of
+   * them, so they are kept here and put back on the matching messages.
+   */
+  checkpoints?: { text: string; sha: string }[];
+    agentSessionId?: string;
   /** Persona from the Agents menu ("You are @Oz" assigns it). */
   agentId?: string;
   /** Hidden from the default sidebar list; restorable. */
