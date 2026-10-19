@@ -1888,7 +1888,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       }));
       const nextActive =
         archived && s.activeId === id
-          ? (sessions.find((x) => !x.archivedAt)?.id ?? null)
+          ? (sessions.find((x) => !x.archivedAt && !x.sideOf)?.id ?? null)
           : s.activeId;
       const splitHit =
         s.splitIds && (s.splitIds[0] === id || s.splitIds[1] === id);
