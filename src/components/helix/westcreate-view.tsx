@@ -67,7 +67,8 @@ export function WestCreateView() {
   const machine = snap?.machine ?? null;
   const items = count(pick(doc, "items"));
   const layers = count(pick(doc, "layers"));
-  const seconds = Number(pick(job, "timeSeconds", "seconds", "time"));
+  // WestCreate's job resource (laser.plan) gives the planned time as estimatedSeconds.
+  const seconds = Number(pick(job, "estimatedSeconds", "timeSeconds", "seconds", "time"));
   const fits = pick(job, "fitsBed", "fits");
 
   return (
