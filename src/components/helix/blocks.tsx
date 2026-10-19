@@ -136,7 +136,7 @@ const Message = memo(function Message({
                   .restoreCheckpoint(
                     sessionId,
                     message.checkpoint!,
-                    text.length > 50 ? `${text.slice(0, 50).trimEnd()}…` : text,
+                    text.length > 50 ? `${text.slice(0, 50).replace(/\s+\S*$/, "")}…` : text,
                   );
               }
             }}
