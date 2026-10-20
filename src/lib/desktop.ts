@@ -493,11 +493,7 @@ type WestcodeBridge = {
     onData: (fn: (m: { id: string; data: string }) => void) => () => void;
     onExit: (fn: (m: { id: string; code: number }) => void) => () => void;
   };
-  find?: {
-    start: (text: string, opts?: { forward?: boolean; next?: boolean }) => void;
-    stop: () => void;
-    onResult: (fn: (r: { active: number; total: number }) => void) => () => void;
-  };
+
   syncDesk: (rows: {
     id: string;
     title: string;

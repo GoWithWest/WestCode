@@ -154,15 +154,7 @@ contextBridge.exposeInMainWorld("westcode", {
       return () => ipcRenderer.removeListener("term:exit", h);
     },
   },
-  find: {
-    start: (text, opts) => ipcRenderer.send("find:start", { text, ...(opts || {}) }),
-    stop: () => ipcRenderer.send("find:stop"),
-    onResult: (fn) => {
-      const handler = (_e, r) => fn(r);
-      ipcRenderer.on("find:result", handler);
-      return () => ipcRenderer.removeListener("find:result", handler);
-    },
-  },
+
   onDeskDeliver: (fn) => {
     const handler = (_e, data) => fn(data);
     ipcRenderer.on("desk:deliver", handler);

@@ -221,9 +221,6 @@ async function createWindow() {
       setTimeout(() => win?.webContents.send("deeplink", link), 1500);
     }
   });
-  win.webContents.on("found-in-page", (_e, r) => {
-    win?.webContents.send("find:result", { active: r.activeMatchOrdinal, total: r.matches });
-  });
 
   if (process.env.WESTCODE_DEV === "1") {
     void win.loadURL(DEV_URL);
@@ -438,12 +435,6 @@ ipcMain.handle(
   ),
 );
 
-ipcMain.on("find:start", (_e, { text, forward = true, next = false } = {}) => {
-  const t = String(text || "");
-  if (!win || !t) return;
-  win.webContents.findInPage(t, { forward: Boolean(forward), findNext: Boolean(next) });
-});
-ipcMain.on("find:stop", () => win?.webContents.stopFindInPage("clearSelection"));
 ipcMain.on("app:keep-awake", (_e, enabled) => {
   keepAwakeWanted = Boolean(enabled);
   applyKeepAwake();

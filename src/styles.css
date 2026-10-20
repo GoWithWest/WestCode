@@ -403,3 +403,13 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ⌘F matches (find-bar.tsx, CSS Custom Highlight API). */
+::highlight(westcode-find) {
+  background-color: color-mix(in oklab, var(--color-accent) 35%, transparent);
+  color: inherit;
+}
+::highlight(westcode-find-current) {
+  background-color: #f5c84c;
+  color: #111;
+}
