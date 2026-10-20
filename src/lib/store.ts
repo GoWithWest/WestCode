@@ -416,6 +416,17 @@ function saveState(key: string, value: unknown) {
   }
 }
 
+// Unsent composer text per session, kept in the state file like settings
+// (localStorage alone is per-port, and the app's port changes per launch).
+const DRAFTS_KEY = "westcode-drafts-v1";
+export function readDrafts(): Record<string, string> {
+  const d = readJson<Record<string, string>>(DRAFTS_KEY, {});
+  return d && typeof d === "object" ? d : {};
+}
+export function writeDrafts(d: Record<string, string>) {
+  saveState(DRAFTS_KEY, d);
+}
+
 function persistLibrary(enabled: string[], custom: Addon[]) {
   saveState(LIBRARY_KEY, { enabled, custom });
 }

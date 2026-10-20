@@ -11,7 +11,7 @@ import {
   type SlashCmd,
 } from "@/lib/catalog";
 import { prettySize, readAttachments } from "@/lib/fs";
-import { useHelix } from "@/lib/store";
+import { readDrafts, useHelix, writeDrafts } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { Attachment, Session } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,22 @@ import { UsageRing } from "./session-extras";
 
 type Panel = "mode" | "model" | "effort" | null;
 
+// Unsent text per session, kept across restarts (Claude Desktop's saved
+// draft) in the app's state file. Attachments stay in memory only.
 const drafts = new Map<string, { text: string; files: Attachment[] }>();
+let draftsLoaded = false;
+function loadDrafts() {
+  if (draftsLoaded) return;
+  draftsLoaded = true;
+  for (const [id, text] of Object.entries(readDrafts())) {
+    if (typeof text === "string" && text && !drafts.has(id)) drafts.set(id, { text, files: [] });
+  }
+}
+function persistDrafts() {
+  const out: Record<string, string> = {};
+  for (const [id, d] of drafts) if (d.text.trim()) out[id] = d.text.slice(0, 20_000);
+  writeDrafts(out);
+}
 
 export function Composer({ session }: { session: Session }) {
   const send = useHelix((s) => s.send);
@@ -30,6 +45,7 @@ export function Composer({ session }: { session: Session }) {
   const setSessionEffort = useHelix((s) => s.setSessionEffort);
   const setSessionPermissionMode = useHelix((s) => s.setSessionPermissionMode);
   const sessions = useHelix((s) => s.sessions);
+  loadDrafts();
   const saved = drafts.get(session.id);
   const [value, setValue] = useState(saved?.text ?? "");
   const [files, setFiles] = useState<Attachment[]>(saved?.files ?? []);
@@ -86,6 +102,28 @@ export function Composer({ session }: { session: Session }) {
   const draftRef = useRef({ value, files });
   draftRef.current = { value, files };
 
+  // Keep the draft saved as it is typed (survives a quit or crash).
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (value.trim()) drafts.set(session.id, { text: value, files });
+      else if (!files.length) drafts.delete(session.id);
+      persistDrafts();
+    }, 600);
+    return () => window.clearTimeout(t);
+  }, [value, files, session.id]);
+
+  // "Edit" on a queued message puts its text back here.
+  useEffect(() => {
+    const onCompose = (e: Event) => {
+      const d = (e as CustomEvent<{ sessionId: string; text: string }>).detail;
+      if (d?.sessionId !== session.id) return;
+      setValue((v) => (v.trim() ? `${v}\n${d.text}` : d.text));
+      ref.current?.focus();
+    };
+    window.addEventListener("westcode:compose", onCompose);
+    return () => window.removeEventListener("westcode:compose", onCompose);
+  }, [session.id]);
+
   useEffect(() => {
     ref.current?.focus();
     return () => {
@@ -125,6 +163,7 @@ export function Composer({ session }: { session: Session }) {
     setMenu(false);
     setPanel(null);
     drafts.delete(session.id);
+    persistDrafts();
     void send(session.id, t, { attachments: attached });
   }
 

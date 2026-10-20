@@ -168,6 +168,17 @@ const Message = memo(function Message({
           </button>
           <button
             type="button"
+            onClick={() => {
+              // Take it back out of the queue and into the composer.
+              useHelix.getState().unqueue(sessionId, message.id);
+              window.dispatchEvent(new CustomEvent("westcode:compose", { detail: { sessionId, text } }));
+            }}
+            className="hover:text-foreground"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
             onClick={() => useHelix.getState().unqueue(sessionId, message.id)}
             className="hover:text-foreground"
           >
