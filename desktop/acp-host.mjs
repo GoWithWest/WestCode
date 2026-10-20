@@ -609,13 +609,19 @@ class AcpSession {
 
   rpc(method, params) {
     const id = this.nextRpc++;
-    const timeout = this.readOnly
-      ? 20_000
-      : method === "session/prompt"
+    // Starting an adapter (npx) can take well over 20 s on a busy Mac, and a
+    // long transcript takes a while to replay: reading history gets the
+    // same start-up time as a session, and longer for the load itself.
+    const timeout =
+      method === "session/prompt"
         ? 15 * 60_000
         : method === "initialize" || method === "authenticate"
           ? 60_000
-          : 25_000;
+          : this.readOnly && (method === "session/load" || method === "session/resume")
+            ? 90_000
+            : this.readOnly
+              ? 20_000
+              : 25_000;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
