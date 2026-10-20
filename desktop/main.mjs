@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
@@ -445,6 +445,31 @@ function applyKeepAwake() {
     awakeId = null;
   }
 }
+// Prompt box → Take screenshot: macOS's own region picker (screencapture -i),
+// with WestCode out of the way while the user picks.
+ipcMain.handle("screenshot:capture", async () => {
+  if (process.platform !== "darwin") return { ok: false, error: "Screenshots are taken with macOS's screencapture." };
+  const file = join(app.getPath("temp"), `westcode-shot-${Date.now()}.png`);
+  const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible());
+  if (wasVisible) win.hide();
+  try {
+    await new Promise((resolve) => {
+      const p = spawn("/usr/sbin/screencapture", ["-i", "-x", file], { stdio: "ignore" });
+      p.on("exit", resolve);
+      p.on("error", resolve);
+    });
+    if (!existsSync(file)) return { ok: false, cancelled: true };
+    const data = readFileSync(file).toString("base64");
+    rmSync(file, { force: true });
+    return { ok: true, data, mime: "image/png" };
+  } finally {
+    if (wasVisible && win && !win.isDestroyed()) {
+      win.show();
+      win.focus();
+    }
+  }
+});
+
 // Menu bar icon (Settings → Show WestCode in the menu bar).
 let tray = null;
 let trayRows = [];

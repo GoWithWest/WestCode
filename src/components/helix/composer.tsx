@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { ProviderDot, useResolvedProvider } from "./provider";
 import { ComposerSkillGroups } from "./skill-groups";
 import { UsageRing } from "./session-extras";
+import { AnnotateDialog } from "./annotate";
 
 type Panel = "mode" | "model" | "effort" | "style" | null;
 
@@ -53,6 +54,8 @@ export function Composer({ session }: { session: Session }) {
   const [hi, setHi] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [menu, setMenu] = useState(false);
+  // Screenshot being marked up before it is attached (data: URL).
+  const [shot, setShot] = useState<string | null>(null);
   const [peersOpen, setPeersOpen] = useState(false);
   const [panel, setPanel] = useState<Panel>(null);
   const [drop, setDrop] = useState(false);
@@ -242,6 +245,14 @@ export function Composer({ session }: { session: Session }) {
 
   return (
     <div className="border-t border-border bg-surface px-3 py-3 md:px-4">
+      <AnnotateDialog
+        src={shot}
+        onDone={(file) => {
+          setShot(null);
+          if (file) void addFiles([file]);
+          ref.current?.focus();
+        }}
+      />
       <input
         ref={fileRef}
         type="file"
@@ -500,6 +511,19 @@ export function Composer({ session }: { session: Session }) {
                         >
                           Attach files
                         </button>
+                        {westcode()?.captureScreenshot ? (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setMenu(false);
+                              const r = await westcode()!.captureScreenshot!();
+                              if (r.ok && r.data) setShot(`data:${r.mime ?? "image/png"};base64,${r.data}`);
+                            }}
+                            className="block w-full px-3 py-2 text-left text-xs hover:bg-muted"
+                          >
+                            Take screenshot
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => setPeersOpen(true)}

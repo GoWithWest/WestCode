@@ -486,6 +486,8 @@ type WestcodeBridge = {
   setKeepAwake?: (enabled: boolean) => void;
   /** Menu bar icon on/off. */
   setTray?: (enabled: boolean) => void;
+  /** macOS region screenshot; base64 PNG, or cancelled. */
+  captureScreenshot?: () => Promise<{ ok: boolean; data?: string; mime?: string; cancelled?: boolean; error?: string }>;
   pr?: {
     status: (cwd: string) => Promise<PrStatus>;
     create: (cwd: string, p?: { title?: string; body?: string; draft?: boolean }) => Promise<{ ok: boolean; url?: string; error?: string }>;
