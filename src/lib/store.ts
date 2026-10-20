@@ -972,7 +972,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         if (ev.command) known.command = ev.command;
         if (ev.content) known.content = ev.content;
         if (ev.diffs) known.diffs = ev.diffs;
-        if (ev.findings) known.findings = ev.findings;
+        if (ev.findings && isFindingsTool(`${known.name} ${known.title ?? ""}`)) known.findings = ev.findings;
         if (ev.status) known.status = ev.status;
         continue;
       }
@@ -987,7 +987,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         command: ev.command,
         content: ev.content || "",
         status: ev.status || "done",
-        ...(ev.findings ? { findings: ev.findings } : {}),
+        ...(ev.findings && isFindingsTool(`${ev.name ?? ""} ${ev.title ?? ""}`) ? { findings: ev.findings } : {}),
       };
       tools.set(key, block);
       asst.blocks.push(block);
@@ -1217,7 +1217,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           content: ev.content || "",
           diffs: ev.diffs,
           status: ev.status || "running",
-          ...(ev.findings ? { findings: ev.findings } : {}),
+          ...(ev.findings && isFindingsTool(`${ev.name ?? ""} ${ev.title ?? ""}`) ? { findings: ev.findings } : {}),
         };
         if (idx >= 0) {
           const prev = blocks[idx] as ToolBlock;
@@ -1237,7 +1237,8 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
             diffs: tool.diffs || prev.diffs,
             path: tool.path || prev.path,
             command: tool.command || prev.command,
-            findings: tool.findings || prev.findings,
+            findings:
+              tool.findings && isFindingsTool(`${meaningfulName} ${tool.title || prev.title || ""}`) ? tool.findings : prev.findings,
             // A patch without a status leaves the card where it was.
             status: ev.status || prev.status,
           };
@@ -1261,6 +1262,9 @@ function spawnableProviderId(providerId: string, state: HelixState): string {
   if (state.customProviders.some((c) => c.id === providerId)) return providerId;
   return PROVIDER_ORDER[0]!;
 }
+
+/** Tool calls whose input is a review's findings (WestCode's desk tool, Claude Code's ReportFindings). */
+const isFindingsTool = (label: string) => /westcode_report_findings|(^|[^a-z])ReportFindings\b/.test(label);
 
 // Auto-continue after a usage limit resets: one timer per waiting session.
 const continueTimers = new Map<string, ReturnType<typeof setTimeout>>();

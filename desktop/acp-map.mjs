@@ -174,7 +174,10 @@ export function mapUpdate(params, opts = {}) {
     const title = typeof u.title === "string" ? u.title : "";
     const diffs = contentDiffs(u.content);
     const status = toolStatus(u);
-    const findings = isFindingsTool(`${name} ${title}`) && Array.isArray(raw.findings) ? parseFindings(raw) : undefined;
+    // Claude's adapter refines a call with a partial update that drops unchanged
+    // fields (name, title): findings on a nameless update are kept, and the
+    // renderer checks them against the call's recorded name.
+    const findings = Array.isArray(raw.findings) && (isFindingsTool(`${name} ${title}`) || (!name && !title)) ? parseFindings(raw) : undefined;
     return {
       type: "tool",
       ...(findings ? { findings } : {}),
