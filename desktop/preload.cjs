@@ -138,6 +138,7 @@ contextBridge.exposeInMainWorld("westcode", {
     start: (cwd, name) => ipcRenderer.invoke("dev:start", { cwd, name }),
     stop: (cwd, name) => ipcRenderer.invoke("dev:stop", { cwd, name }),
   },
+  outputStyles: (cwd, hostId) => ipcRenderer.invoke("claude:output-styles", { cwd, hostId }),
   env: {
     get: (scope) => ipcRenderer.invoke("env:get", scope),
     set: (scope, text) => ipcRenderer.invoke("env:set", { scope, text }),

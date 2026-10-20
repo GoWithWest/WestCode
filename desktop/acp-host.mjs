@@ -300,6 +300,12 @@ class AcpSession {
    * Mac for a host session and checks the folder exists here, so it gets
    * the local stand-in (the wrapper turns it back into the host's path).
    */
+  /** `_meta` for session/new|load|resume: Claude's output style as a settings layer. */
+  sessionMeta() {
+    if (this.providerId !== "claude" || !this.outputStyle) return undefined;
+    return { claudeCode: { options: { settings: { outputStyle: this.outputStyle } } } };
+  }
+
   agentCwd() {
     return this.remote && this.providerId === "claude" ? localStandIn(this.remote, this.cwd) : this.cwd;
   }
@@ -475,6 +481,7 @@ class AcpSession {
             sessionId: resumeId,
             cwd: this.agentCwd(),
             mcpServers,
+            ...(this.sessionMeta() ? { _meta: this.sessionMeta() } : {}),
           });
           this.agentSessionId =
             loaded?.sessionId || loaded?.session_id || resumeId;
@@ -504,6 +511,7 @@ class AcpSession {
     const created = await this.rpc("session/new", {
       cwd: this.agentCwd(),
       mcpServers,
+      ...(this.sessionMeta() ? { _meta: this.sessionMeta() } : {}),
     });
     this.agentSessionId = created?.sessionId || created?.session_id || this.id;
     this.resumed = false;
@@ -912,6 +920,7 @@ export function ensureSession(opts, emit) {
     existing.model === opts.model &&
     existing.effort === opts.effort &&
     (existing.remote?.id || null) === (opts.hostId || null) &&
+    (existing.outputStyle || "") === (opts.outputStyle || "") &&
     // Permission flags are spawn-time (--always-approve, env) — a mode
     // change must respawn, or Bypass→Ask would leave approvals wide open.
     (existing.permissionMode || "ask") === (opts.permissionMode || "ask")
@@ -930,6 +939,7 @@ export function ensureSession(opts, emit) {
   );
   s.resumeId = opts.agentSessionId || null;
   s.reviewer = opts.reviewer || null;
+  s.outputStyle = opts.outputStyle || "";
   if (opts.hostId) {
     s.remote = getHost(opts.hostId);
     if (!s.remote) throw new Error(`SSH host "${opts.hostId}" is not set up any more — add it again in Settings → SSH hosts.`);

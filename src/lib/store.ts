@@ -145,6 +145,8 @@ export type AppSettings = {
   worktreeBranchPrefix?: string;
   /** Where worktrees go; empty = <repo>/.claude/worktrees. */
   worktreeLocation?: string;
+  /** Output style for new Claude sessions; empty = Claude Code's own setting. */
+  claudeOutputStyle?: string;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -348,6 +350,7 @@ export type HelixState = {
   stop: (sessionId: string) => void;
   setSessionModel: (sessionId: string, model: string) => void;
   setSessionEffort: (sessionId: string, effort: string) => void;
+  setSessionOutputStyle: (sessionId: string, style: string) => void;
   setSessionPermissionMode: (sessionId: string, mode: string) => void;
   toggleAddon: (id: string) => void;
   importAddon: (addon: Omit<Addon, "id" | "custom">) => void;
@@ -1990,6 +1993,12 @@ export const useHelix = create<HelixState>((set, get) => ({
     }));
   },
 
+  setSessionOutputStyle: (sessionId, style) => {
+    set((state) => ({
+      sessions: patchSession(state.sessions, sessionId, (s) => ({ ...s, outputStyle: style, updatedAt: Date.now() })),
+    }));
+  },
+
   setSessionPermissionMode: (sessionId, mode) => {
     set((state) => ({
       sessions: patchSession(state.sessions, sessionId, (s) => ({
@@ -3092,6 +3101,8 @@ export const useHelix = create<HelixState>((set, get) => ({
         permissionMode: latest.permissionMode,
         agentSessionId: latest.agentSessionId,
         hostId: latest.hostId,
+        outputStyle:
+          latest.providerId === "claude" ? (latest.outputStyle ?? get().settings.claudeOutputStyle ?? "") : undefined,
         history,
         text: promptText,
       });

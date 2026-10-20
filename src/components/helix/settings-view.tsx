@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ExternalLink, FolderOpen, Plus, Trash2 } from "lucide-react";
 import { PERMISSION_MODES, defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
 import { pickDirectory } from "@/lib/fs";
+import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useAllProviders } from "./provider";
@@ -109,6 +110,8 @@ export function SettingsView() {
               how new sessions run tools
             </span>
           </Row>
+
+          <OutputStyleRow value={settings.claudeOutputStyle ?? ""} onChange={(v) => update({ claudeOutputStyle: v })} />
 
           <Row label="Folder">
             <span className="min-w-0 flex-1 truncate font-mono text-2xs text-muted-foreground">
@@ -435,6 +438,42 @@ export function SettingsView() {
         </section>
       </div>
     </div>
+  );
+}
+
+/** Default Claude Code output style for sessions that have not picked one. */
+function OutputStyleRow({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [styles, setStyles] = useState<{ name: string; custom?: boolean }[]>([]);
+  const api = westcode()?.outputStyles;
+  useEffect(() => {
+    if (!api) return;
+    let dead = false;
+    void api("").then((r) => {
+      if (!dead) setStyles(r.styles ?? []);
+    });
+    return () => {
+      dead = true;
+    };
+  }, [api]);
+  if (!api) return null;
+  return (
+    <Row label="Output style">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Claude output style"
+        className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none"
+      >
+        <option value="">Claude Code&apos;s setting</option>
+        {styles.map((st) => (
+          <option key={st.name} value={st.name}>
+            {st.name === "default" ? "Default" : st.name}
+          </option>
+        ))}
+        {value && !styles.some((st) => st.name === value) ? <option value={value}>{value}</option> : null}
+      </select>
+      <span className="text-2xs text-subtle">for Claude sessions; each session can change it in the prompt box</span>
+    </Row>
   );
 }
 

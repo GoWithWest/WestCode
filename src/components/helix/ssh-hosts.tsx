@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, Download, Plus, Server, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, Download, Pencil, Plus, Server, Trash2, XCircle } from "lucide-react";
 import { westcode, type SshHost, type SshProbe } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,8 @@ export function SshHostsSection() {
   const refresh = useHelix((s) => s.refreshSshHosts);
   const refreshCli = useHelix((s) => s.refreshCliSessions);
   const [adding, setAdding] = useState(false);
+  // Id of the host being edited (the form then saves over it, keeping its id).
+  const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", target: "", port: "", identityFile: "" });
   const [error, setError] = useState("");
   const [probes, setProbes] = useState<Record<string, SshProbe | "testing">>({});
@@ -38,6 +40,7 @@ export function SshHostsSection() {
     }
     await refresh();
     setAdding(false);
+    setEditing(null);
     setForm({ name: "", target: "", port: "", identityFile: "" });
     void test(r.host);
     void refreshCli();
@@ -47,6 +50,7 @@ export function SshHostsSection() {
     const t = form.target.trim();
     const at = t.lastIndexOf("@");
     void save({
+      ...(editing ? { id: editing } : {}),
       name: form.name.trim() || t,
       host: at > 0 ? t.slice(at + 1) : t,
       user: at > 0 ? t.slice(0, at) : undefined,
@@ -103,6 +107,24 @@ export function SshHostsSection() {
                   </span>
                   <Button size="sm" variant="ghost" onClick={() => void test(h)} disabled={p === "testing"}>
                     {p === "testing" ? "Testing…" : "Test"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Edit ${h.name}`}
+                    onClick={() => {
+                      setError("");
+                      setEditing(h.id);
+                      setAdding(true);
+                      setForm({
+                        name: h.name,
+                        target: h.user ? `${h.user}@${h.host}` : h.host,
+                        port: h.port ? String(h.port) : "",
+                        identityFile: h.identityFile || "",
+                      });
+                    }}
+                  >
+                    <Pencil className="size-3.5" />
                   </Button>
                   <Button
                     size="sm"
@@ -200,11 +222,20 @@ export function SshHostsSection() {
             </p>
           ) : null}
           <div className="flex justify-end gap-2">
-            <Button type="button" size="sm" variant="ghost" onClick={() => setAdding(false)}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setAdding(false);
+                setEditing(null);
+                setForm({ name: "", target: "", port: "", identityFile: "" });
+              }}
+            >
               Cancel
             </Button>
             <Button type="submit" size="sm" disabled={!form.target.trim()}>
-              Add host
+              {editing ? "Save" : "Add host"}
             </Button>
           </div>
         </form>

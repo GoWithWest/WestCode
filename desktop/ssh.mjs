@@ -77,8 +77,11 @@ function writeHosts(list) {
 
 export function saveHost(h) {
   const host = normalizeHost(h);
-  const list = loadHosts().filter((x) => x.id !== host.id);
-  writeHosts([...list, host]);
+  const list = loadHosts();
+  const at = list.findIndex((x) => x.id === host.id);
+  if (at >= 0) list[at] = host; // edit keeps its place
+  else list.push(host);
+  writeHosts(list);
   return host;
 }
 

@@ -457,6 +457,8 @@ type WestcodeBridge = {
     permissionMode?: string;
     agentSessionId?: string;
     hostId?: string;
+    /** Claude Code output style for this session ("" = the CLI's own setting). */
+    outputStyle?: string;
     history?: { role: string; text: string }[];
     text: string;
   }) => Promise<{ ok: boolean; error?: string }>;
@@ -491,6 +493,10 @@ type WestcodeBridge = {
     start: (cwd: string, name: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
     stop: (cwd: string, name: string) => Promise<{ ok: boolean }>;
   };
+  outputStyles?: (
+    cwd: string,
+    hostId?: string,
+  ) => Promise<{ ok: boolean; error?: string; styles: { name: string; description?: string; custom?: boolean }[] }>;
   env?: {
     get: (scope: string) => Promise<{ ok: boolean; text: string }>;
     set: (scope: string, text: string) => Promise<{ ok: boolean; error?: string }>;

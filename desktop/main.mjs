@@ -26,6 +26,7 @@ import * as filesPane from "./files.mjs";
 import * as askpass from "./askpass.mjs";
 import * as devServers from "./devservers.mjs";
 import * as sessionEnv from "./session-env.mjs";
+import { listOutputStyles } from "./output-styles.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -1245,6 +1246,7 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
     permissionMode,
     agentSessionId,
     hostId,
+    outputStyle,
     text,
     history,
   } = payload;
@@ -1265,6 +1267,7 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
       permissionMode,
       agentSessionId,
       hostId,
+      outputStyle,
     },
     emit,
   );
@@ -1338,6 +1341,13 @@ ipcMain.handle("ssh:save", (_e, host) => {
   }
 });
 // Settings → Environment variables: "local" or an SSH host id.
+ipcMain.handle("claude:output-styles", async (_e, { cwd, hostId } = {}) => {
+  try {
+    return await listOutputStyles({ cwd: cwd ? String(cwd) : "", hostId: hostId ? String(hostId) : "" });
+  } catch (err) {
+    return { ok: false, error: err.message, styles: [] };
+  }
+});
 ipcMain.handle("env:get", (_e, scope) => ({ ok: true, text: sessionEnv.getEnvText(String(scope || "local")) }));
 ipcMain.handle("env:set", (_e, { scope, text } = {}) => {
   try {

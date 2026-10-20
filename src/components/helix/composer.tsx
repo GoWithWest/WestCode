@@ -20,7 +20,7 @@ import { ProviderDot, useResolvedProvider } from "./provider";
 import { ComposerSkillGroups } from "./skill-groups";
 import { UsageRing } from "./session-extras";
 
-type Panel = "mode" | "model" | "effort" | null;
+type Panel = "mode" | "model" | "effort" | "style" | null;
 
 // Unsent text per session, kept across restarts (Claude Desktop's saved
 // draft) in the app's state file. Attachments stay in memory only.
@@ -599,6 +599,14 @@ export function Composer({ session }: { session: Session }) {
                     </div>
                   </div>
                 </MetaButton>
+                {session.providerId === "claude" ? (
+                  <OutputStyleButton
+                    session={session}
+                    open={panel === "style"}
+                    onToggle={() => setPanel(panel === "style" ? null : "style")}
+                    onPicked={() => setPanel(null)}
+                  />
+                ) : null}
                 <ComposerSkillGroups session={session} />
                 <UsageRing session={session} />
               </div>
@@ -635,6 +643,70 @@ export function Composer({ session }: { session: Session }) {
         Enter to send · Shift Enter for a new line · {provider.authLabel}
       </p>
     </div>
+  );
+}
+
+/**
+ * Claude Code's output style for this session (Claude Desktop's output
+ * style): the built-in ones and the custom styles in ~/.claude/output-styles
+ * and the project's .claude/output-styles. Applies from the next message.
+ */
+function OutputStyleButton({
+  session,
+  open,
+  onToggle,
+  onPicked,
+}: {
+  session: Session;
+  open: boolean;
+  onToggle: () => void;
+  onPicked: () => void;
+}) {
+  const setStyle = useHelix((s) => s.setSessionOutputStyle);
+  const fallback = useHelix((s) => s.settings.claudeOutputStyle ?? "");
+  const [styles, setStyles] = useState<{ name: string; description?: string; custom?: boolean }[]>([]);
+  const current = session.outputStyle ?? fallback;
+  const api = westcode()?.outputStyles;
+  useEffect(() => {
+    if (!open || !api) return;
+    let dead = false;
+    void api(session.cwd, session.hostId).then((r) => {
+      if (!dead) setStyles(r.styles ?? []);
+    });
+    return () => {
+      dead = true;
+    };
+  }, [open, api, session.cwd, session.hostId]);
+  if (!api) return null;
+  const pick = (name: string) => {
+    setStyle(session.id, name);
+    onPicked();
+  };
+  return (
+    <MetaButton open={open} onToggle={onToggle} label={current && current !== "default" ? current : "Style"}>
+      <p className="px-3 pt-1.5 pb-1 text-2xs font-medium tracking-wide text-subtle uppercase">Output style</p>
+      <button
+        type="button"
+        onClick={() => pick("")}
+        className={cn("block w-full px-3 py-2 text-left text-xs hover:bg-muted", !current && "bg-muted font-medium")}
+      >
+        Claude Code&apos;s setting
+      </button>
+      {styles.map((st) => (
+        <button
+          key={st.name}
+          type="button"
+          onClick={() => pick(st.name)}
+          className={cn("block w-full px-3 py-2 text-left hover:bg-muted", st.name === current && "bg-muted")}
+        >
+          <span className={cn("block text-xs", st.name === current && "font-medium")}>
+            {st.name === "default" ? "Default" : st.name}
+            {st.custom ? <span className="ml-1 text-2xs text-subtle">custom</span> : null}
+          </span>
+          {st.description ? <span className="block max-w-64 text-2xs text-muted-foreground">{st.description}</span> : null}
+        </button>
+      ))}
+    </MetaButton>
   );
 }
 

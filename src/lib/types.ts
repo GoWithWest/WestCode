@@ -124,6 +124,8 @@ export type Session = {
     agentSessionId?: string;
   /** Runs on this SSH host (Settings → SSH hosts); absent = this Mac. */
   hostId?: string;
+  /** Claude Code output style; absent = Settings' default (or the CLI's own). */
+  outputStyle?: string;
   /** Works in its own git worktree (cwd = path) on this branch. */
   worktree?: { path: string; branch: string; repo: string };
   /** Persona from the Agents menu ("You are @Oz" assigns it). */
