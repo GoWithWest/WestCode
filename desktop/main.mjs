@@ -430,6 +430,7 @@ const filesCall = (fn) => async (_e, p = {}) => {
   }
 };
 ipcMain.handle("files:list", filesCall((p) => filesPane.listDir(String(p.root || ""), String(p.path || ""), { hostId: p.hostId })));
+ipcMain.handle("files:search", filesCall((p) => filesPane.searchFiles(String(p.root || ""), String(p.query || ""), { hostId: p.hostId })));
 ipcMain.handle("files:read", filesCall((p) => filesPane.readText(String(p.root || ""), String(p.path || ""), { hostId: p.hostId })));
 ipcMain.handle(
   "files:write",

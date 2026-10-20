@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, FileText, Plus, Shield, Square, X } from "lucide-react";
+import { westcode } from "@/lib/desktop";
 import {
   effortLabel,
   effortsFor,
@@ -98,6 +99,30 @@ export function Composer({ session }: { session: Session }) {
         );
       })
     : [];
+
+  // @ also finds files in the session's folder (Claude Desktop's @-mentions).
+  const [fileHits, setFileHits] = useState<string[]>([]);
+  useEffect(() => {
+    const search = westcode()?.files?.search;
+    if (!atOpen || !search) {
+      setFileHits([]);
+      return;
+    }
+    let dead = false;
+    const t = window.setTimeout(() => {
+      void search(session.cwd, atQuery, session.hostId).then((r) => {
+        if (!dead) setFileHits(r.ok ? (r.files ?? []).slice(0, 12) : []);
+      });
+    }, 120);
+    return () => {
+      dead = true;
+      window.clearTimeout(t);
+    };
+  }, [atOpen, atQuery, session.cwd, session.hostId]);
+  const atItems: ({ kind: "session"; s: Session } | { kind: "file"; path: string })[] = [
+    ...atMatches.slice(0, 6).map((s) => ({ kind: "session" as const, s })),
+    ...fileHits.map((path) => ({ kind: "file" as const, path })),
+  ];
 
   const draftRef = useRef({ value, files });
   draftRef.current = { value, files };
@@ -200,12 +225,19 @@ export function Composer({ session }: { session: Session }) {
     ref.current?.focus();
   }
 
+  function mentionFile(path: string) {
+    const next = value.replace(/(?:^|\s)@[^\s]*$/, (m) => (m.startsWith(" ") ? ` @${path} ` : `@${path} `));
+    setValue(next.endsWith(" ") ? next : `${next} `);
+    setDismissed(true);
+    ref.current?.focus();
+  }
+
   async function addFiles(list: FileList | File[]) {
     const next = await readAttachments(list);
     setFiles((prev) => [...prev, ...next].slice(0, 8));
   }
 
-  const palette = slashOpen ? matches : atOpen ? atMatches : [];
+  const palette = slashOpen ? matches : atOpen ? atItems : [];
   const canSend = Boolean(value.trim() || files.length);
 
   return (
@@ -257,32 +289,43 @@ export function Composer({ session }: { session: Session }) {
           </div>
         ) : null}
 
-        {atOpen && atMatches.length > 0 ? (
+        {atOpen && atItems.length > 0 ? (
           <div
             role="listbox"
-            aria-label="Sessions on this desk"
-            className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-56 overflow-y-auto rounded-lg border border-border bg-window py-1 shadow-window"
+            aria-label="Mention a session or a file"
+            className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-64 overflow-y-auto rounded-lg border border-border bg-window py-1 shadow-window"
           >
-            {atMatches.map((p, i) => (
-              <button
-                key={p.id}
-                type="button"
-                role="option"
-                aria-selected={i === hi}
-                onMouseEnter={() => setHi(i)}
-                onClick={() => mention(p)}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-2 text-left",
-                  i === hi ? "bg-muted" : "hover:bg-muted/50",
-                )}
-              >
-                <ProviderDot id={p.providerId} />
-                <span className="text-xs font-medium">{p.title}</span>
-                <span className="ml-auto truncate text-2xs text-subtle">
-                  {p.cwd}
-                </span>
-              </button>
-            ))}
+            {atItems.map((it, i) =>
+              it.kind === "session" ? (
+                <button
+                  key={`s:${it.s.id}`}
+                  type="button"
+                  role="option"
+                  aria-selected={i === hi}
+                  onMouseEnter={() => setHi(i)}
+                  onClick={() => mention(it.s)}
+                  className={cn("flex w-full items-center gap-2 px-3 py-2 text-left", i === hi ? "bg-muted" : "hover:bg-muted/50")}
+                >
+                  <ProviderDot id={it.s.providerId} />
+                  <span className="text-xs font-medium">{it.s.title}</span>
+                  <span className="ml-auto truncate text-2xs text-subtle">{it.s.cwd}</span>
+                </button>
+              ) : (
+                <button
+                  key={`f:${it.path}`}
+                  type="button"
+                  role="option"
+                  aria-selected={i === hi}
+                  onMouseEnter={() => setHi(i)}
+                  onClick={() => mentionFile(it.path)}
+                  className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-left", i === hi ? "bg-muted" : "hover:bg-muted/50")}
+                >
+                  <FileText className="size-3 shrink-0 text-subtle" />
+                  <span className="truncate font-mono text-xs">{it.path.split("/").pop()}</span>
+                  <span className="ml-auto truncate text-2xs text-subtle">{it.path}</span>
+                </button>
+              ),
+            )}
           </div>
         ) : null}
 
@@ -361,8 +404,9 @@ export function Composer({ session }: { session: Session }) {
                     const c = matches[hi] ?? matches[0];
                     if (c) choose(c);
                   } else if (atOpen) {
-                    const p = atMatches[hi] ?? atMatches[0];
-                    if (p) mention(p);
+                    const it = atItems[hi] ?? atItems[0];
+                    if (it?.kind === "session") mention(it.s);
+                    else if (it?.kind === "file") mentionFile(it.path);
                   }
                   return;
                 }

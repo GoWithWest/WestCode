@@ -141,6 +141,7 @@ contextBridge.exposeInMainWorld("westcode", {
   files: {
     list: (root, path, hostId) => ipcRenderer.invoke("files:list", { root, path, hostId }),
     read: (root, path, hostId) => ipcRenderer.invoke("files:read", { root, path, hostId }),
+    search: (root, query, hostId) => ipcRenderer.invoke("files:search", { root, query, hostId }),
     write: (root, path, content, expected) => ipcRenderer.invoke("files:write", { root, path, content, expected }),
   },
   term: {

@@ -495,6 +495,7 @@ type WestcodeBridge = {
       hostId?: string,
     ) => Promise<{ ok: boolean; text?: string; binary?: boolean; tooLarge?: boolean; readOnly?: boolean; error?: string }>;
     write: (root: string, path: string, content: string, expected?: string) => Promise<{ ok: boolean; conflict?: boolean; error?: string }>;
+    search: (root: string, query: string, hostId?: string) => Promise<{ ok: boolean; files?: string[]; error?: string }>;
   };
   term?: {
     open: (p: { id: string; cwd: string; hostId?: string; cols: number; rows: number }) => Promise<{ ok: boolean; error?: string }>;
