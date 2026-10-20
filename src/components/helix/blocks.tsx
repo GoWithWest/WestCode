@@ -238,7 +238,7 @@ const Message = memo(function Message({
   );
 });
 
-const SEVERITY_TONE: Record<Finding["severity"], string> = {
+const SEVERITY_TONE: Record<NonNullable<Finding["severity"]>, string> = {
   high: "bg-destructive/15 text-destructive",
   medium: "bg-warn/15 text-warn",
   low: "bg-muted text-muted-foreground",
@@ -258,8 +258,10 @@ function FindingsCard({ findings, sessionId }: { findings: Finding[]; sessionId?
         <ul className="divide-y divide-border">
           {findings.map((f, i) => (
             <li key={i} className="flex items-start gap-2.5 px-3.5 py-2.5">
-              <span className={`mt-0.5 shrink-0 rounded px-1.5 py-px text-2xs font-medium uppercase ${SEVERITY_TONE[f.severity]}`}>
-                {f.severity}
+              <span
+                className={`mt-0.5 shrink-0 rounded px-1.5 py-px text-2xs font-medium uppercase ${f.severity ? SEVERITY_TONE[f.severity] : "bg-muted text-muted-foreground"}`}
+              >
+                {f.severity ?? `#${i + 1}`}
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-medium">{f.summary}</p>

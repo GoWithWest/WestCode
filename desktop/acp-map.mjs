@@ -1,4 +1,4 @@
-import { parseFindings } from "./findings.mjs";
+import { isFindingsTool, parseFindings } from "./findings.mjs";
 // Map ACP session/update notifications to WestCode session events.
 //
 // Shapes below are the ones the agents actually send (recorded from
@@ -174,7 +174,7 @@ export function mapUpdate(params, opts = {}) {
     const title = typeof u.title === "string" ? u.title : "";
     const diffs = contentDiffs(u.content);
     const status = toolStatus(u);
-    const findings = /westcode_report_findings/.test(`${name} ${title}`) && raw.findings ? parseFindings(raw) : undefined;
+    const findings = isFindingsTool(`${name} ${title}`) && Array.isArray(raw.findings) ? parseFindings(raw) : undefined;
     return {
       type: "tool",
       ...(findings ? { findings } : {}),

@@ -46,7 +46,7 @@ export type ToolBlock = {
   findings?: Finding[];
 };
 
-export type Finding = { file: string; line?: number; severity: "high" | "medium" | "low"; summary: string; detail?: string };
+export type Finding = { file: string; line?: number; severity?: "high" | "medium" | "low"; summary: string; detail?: string };
 
 export type TextBlock = {
   type: "text";
