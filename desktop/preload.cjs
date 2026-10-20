@@ -126,6 +126,22 @@ contextBridge.exposeInMainWorld("westcode", {
     ipcRenderer.on("deeplink", handler);
     return () => ipcRenderer.removeListener("deeplink", handler);
   },
+  term: {
+    open: (p) => ipcRenderer.invoke("term:open", p),
+    write: (id, data) => ipcRenderer.send("term:write", { id, data }),
+    resize: (id, cols, rows) => ipcRenderer.send("term:resize", { id, cols, rows }),
+    close: (id) => ipcRenderer.send("term:close", id),
+    onData: (fn) => {
+      const h = (_e, m) => fn(m);
+      ipcRenderer.on("term:data", h);
+      return () => ipcRenderer.removeListener("term:data", h);
+    },
+    onExit: (fn) => {
+      const h = (_e, m) => fn(m);
+      ipcRenderer.on("term:exit", h);
+      return () => ipcRenderer.removeListener("term:exit", h);
+    },
+  },
   find: {
     start: (text, opts) => ipcRenderer.send("find:start", { text, ...(opts || {}) }),
     stop: () => ipcRenderer.send("find:stop"),

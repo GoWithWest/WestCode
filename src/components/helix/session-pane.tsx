@@ -1,6 +1,7 @@
+import { TerminalPane } from "./terminal-pane";
 import { PrChip } from "./pr-chip";
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, GitBranch, GitFork, Pencil, Server, Terminal, X } from "lucide-react";
+import { Code2, Download, Folder, GitBranch, GitFork, Pencil, Server, SquareTerminal, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -24,6 +25,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
   const persona = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
   const agentName = persona?.name ?? provider.short;
   const [scmOpen, setScmOpen] = useState(false);
+  const [termOpen, setTermOpen] = useState(false);
   const side = useHelix((s) =>
     session.sideOpen ? s.sessions.find((x) => x.id === session.sideOpen) : undefined,
   );
@@ -57,6 +59,11 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "g") {
         e.preventDefault();
         setScmOpen((v) => !v);
+      }
+      // Ctrl+` toggles the terminal pane, as in Claude Desktop.
+      if (e.ctrlKey && !e.metaKey && (e.key === "`" || e.code === "Backquote")) {
+        e.preventDefault();
+        setTermOpen((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -93,6 +100,16 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
               <>
                 <ExportButton session={session} />
                 {session.agentSessionId && !session.hostId ? <ForkButton session={session} /> : null}
+                <button
+                  type="button"
+                  onClick={() => setTermOpen((v) => !v)}
+                  aria-pressed={termOpen}
+                  className={`inline-flex items-center gap-1 hover:text-foreground ${termOpen ? "text-foreground" : ""}`}
+                  title={`Terminal in this folder${session.hostId ? " on the host" : ""} (Ctrl+\`)`}
+                >
+                  <SquareTerminal className="size-3" />
+                  Terminal
+                </button>
                 <ResumeButton session={session} />
                 {!session.hostId ? <EditorButton session={session} /> : null}
               </>
@@ -134,6 +151,11 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
           </div>
 
           <Composer key={session.id} session={session} />
+          {termOpen && !compact ? (
+            <div className="h-[38%] min-h-44 shrink-0">
+              <TerminalPane key={session.id} session={session} onClose={() => setTermOpen(false)} />
+            </div>
+          ) : null}
         </div>
         {scmOpen ? (
           <SourceControlPanel session={session} onClose={() => setScmOpen(false)} />
@@ -289,7 +311,7 @@ function ResumeButton({ session }: { session: Session }) {
       title={`Copy: ${cmd}`}
     >
       <Terminal className="size-3" />
-      {copied ? "Copied" : "Terminal"}
+      {copied ? "Copied" : "Copy resume"}
     </button>
   );
 }

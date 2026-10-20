@@ -471,6 +471,14 @@ type WestcodeBridge = {
   onDeepLink?: (
     fn: (link: { action: "new"; folder: string; prompt: string; host: string; provider: string }) => void,
   ) => () => void;
+  term?: {
+    open: (p: { id: string; cwd: string; hostId?: string; cols: number; rows: number }) => Promise<{ ok: boolean; error?: string }>;
+    write: (id: string, data: string) => void;
+    resize: (id: string, cols: number, rows: number) => void;
+    close: (id: string) => void;
+    onData: (fn: (m: { id: string; data: string }) => void) => () => void;
+    onExit: (fn: (m: { id: string; code: number }) => void) => () => void;
+  };
   find?: {
     start: (text: string, opts?: { forward?: boolean; next?: boolean }) => void;
     stop: () => void;

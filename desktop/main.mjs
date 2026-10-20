@@ -21,6 +21,7 @@ import * as artifacts from "./artifact-server.mjs";
 import * as sshHosts from "./ssh.mjs";
 import { parseDeepLink } from "./deeplink.mjs";
 import * as prs from "./pr.mjs";
+import * as terminals from "./terminal.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -367,6 +368,24 @@ ipcMain.on("desk:sync", (_e, rows) => {
   deskRunning = (Array.isArray(rows) ? rows : []).filter((r) => r?.status === "running").length;
   applyKeepAwake();
 });
+// Integrated terminal: one shell per pane id; output streams to the window.
+ipcMain.handle("term:open", async (_e, p = {}) => {
+  const id = String(p.id || "");
+  if (!id) return { ok: false, error: "No terminal id." };
+  try {
+    return await terminals.openTerminal(
+      { id, cwd: p.cwd, hostId: p.hostId, cols: p.cols, rows: p.rows },
+      (data) => win?.webContents.send("term:data", { id, data }),
+      (code) => win?.webContents.send("term:exit", { id, code }),
+    );
+  } catch (err) {
+    return { ok: false, error: /node-pty/.test(err.message) ? "The terminal is not available in this build." : err.message };
+  }
+});
+ipcMain.on("term:write", (_e, { id, data } = {}) => terminals.writeTerminal(String(id || ""), data));
+ipcMain.on("term:resize", (_e, { id, cols, rows } = {}) => terminals.resizeTerminal(String(id || ""), cols, rows));
+ipcMain.on("term:close", (_e, id) => terminals.closeTerminal(String(id || "")));
+
 ipcMain.on("find:start", (_e, { text, forward = true, next = false } = {}) => {
   const t = String(text || "");
   if (!win || !t) return;
@@ -413,6 +432,7 @@ app.on("before-quit", (event) => {
     }
   }
   quitConfirmed = true;
+  terminals.closeAllTerminals();
   globalShortcut.unregisterAll();
   stopAll();
   killAppServer();
