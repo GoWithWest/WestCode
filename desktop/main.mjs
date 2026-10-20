@@ -19,6 +19,7 @@ import * as memoryHub from "./memory-hub.mjs";
 import * as memoryFlow from "./memory-flow.mjs";
 import * as artifacts from "./artifact-server.mjs";
 import * as sshHosts from "./ssh.mjs";
+import { parseDeepLink } from "./deeplink.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -209,6 +210,13 @@ async function createWindow() {
   });
 
   // ⌘F: Chromium's own find-in-page, results reported to the find bar.
+  win.webContents.on("did-finish-load", () => {
+    if (pendingLink) {
+      const link = pendingLink;
+      pendingLink = null;
+      setTimeout(() => win?.webContents.send("deeplink", link), 1500);
+    }
+  });
   win.webContents.on("found-in-page", (_e, r) => {
     win?.webContents.send("find:result", { active: r.activeMatchOrdinal, total: r.matches });
   });
@@ -257,6 +265,28 @@ app.setName("WestCode");
 if (process.platform === "darwin" && existsSync(ICON_PNG)) {
   app.dock?.setIcon(nativeImage.createFromPath(ICON_PNG));
 }
+
+// westcode://new?folder=…&q=…&host=…&provider=… (Claude Desktop's
+// claude://code/new): opens the New session dialog filled in. It never
+// starts anything by itself — the user confirms in the dialog — and it
+// carries no keys, passwords or commands.
+let pendingLink = null;
+function deliverLink(raw) {
+  const link = parseDeepLink(raw);
+  if (!link) return;
+  if (win?.webContents && !win.webContents.isLoading()) {
+    win.webContents.send("deeplink", link);
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  } else {
+    pendingLink = link;
+  }
+}
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deliverLink(url);
+});
+if (!process.env.WESTCODE_DEV) app.setAsDefaultProtocolClient("westcode");
 
 app.whenReady().then(async () => {
   if (process.platform === "darwin" && existsSync(ICON_PNG)) {

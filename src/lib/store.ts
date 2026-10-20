@@ -268,6 +268,9 @@ export type HelixState = {
   clock: number;
   newOpen: boolean;
   newProviderId: string | null;
+  /** Fills the New session dialog (from a westcode:// link); the user confirms. */
+  newPrefill: { cwd?: string; hostId?: string; prompt?: string } | null;
+  openNewWith: (p: { cwd?: string; hostId?: string; prompt?: string; providerId?: string }) => void;
   enabledAddons: string[];
   customAddons: Addon[];
   customProviders: CustomProvider[];
@@ -1360,6 +1363,9 @@ export const useHelix = create<HelixState>((set, get) => ({
   clock: Date.now(),
   newOpen: false,
   newProviderId: null,
+  newPrefill: null,
+  openNewWith: ({ providerId, ...prefill }) =>
+    set({ newOpen: true, newProviderId: providerId || null, newPrefill: prefill }),
   enabledAddons: DEFAULT_ENABLED,
   customAddons: [],
   customProviders: [],
@@ -1422,7 +1428,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     for (const id of new Set(ids)) void get().hydrateSession(id);
   },
   setNewOpen: (newOpen, providerId = null) =>
-    set({ newOpen, newProviderId: newOpen ? providerId : null }),
+    set({ newOpen, newProviderId: newOpen ? providerId : null, ...(newOpen ? {} : { newPrefill: null }) }),
   setMobileNav: (mobileNav) => set({ mobileNav }),
   tick: () => set({ clock: Date.now() }),
 

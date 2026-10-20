@@ -115,6 +115,11 @@ contextBridge.exposeInMainWorld("westcode", {
   },
   syncDesk: (rows) => ipcRenderer.send("desk:sync", rows),
   setKeepAwake: (enabled) => ipcRenderer.send("app:keep-awake", enabled),
+  onDeepLink: (fn) => {
+    const handler = (_e, link) => fn(link);
+    ipcRenderer.on("deeplink", handler);
+    return () => ipcRenderer.removeListener("deeplink", handler);
+  },
   find: {
     start: (text, opts) => ipcRenderer.send("find:start", { text, ...(opts || {}) }),
     stop: () => ipcRenderer.send("find:stop"),

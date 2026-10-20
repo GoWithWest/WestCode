@@ -51,7 +51,15 @@
       "identity": "Jago Westerduin (R7BRR46TY2)",
       "hardenedRuntime": true,
       "gatekeeperAssess": false
-    }
+    },
+    "protocols": [
+      {
+        "name": "WestCode",
+        "schemes": [
+          "westcode"
+        ]
+      }
+    ]
   },
   "dependencies": {
     "@hookform/resolvers": "^5.7.0",

@@ -30,6 +30,8 @@ export function NewSessionDialog() {
   const [cwd, setCwd] = useState(settings.defaultCwd);
   const [title, setTitle] = useState("");
   const sshHosts = useHelix((s) => s.sshHosts);
+  const prefill = useHelix((s) => s.newPrefill);
+  const [prompt, setPrompt] = useState("");
   const setView = useHelix((s) => s.setView);
   const [hostId, setHostId] = useState("");
   // Claude Desktop's "Worktree": the session gets its own branch and copy.
@@ -63,6 +65,17 @@ export function NewSessionDialog() {
     setModel((match && settings.defaultModel) || p?.defaultModel || "");
     setEffort((match && settings.defaultEffort) || defaultEffortFor(id));
     if (settings.defaultCwd) setCwd(settings.defaultCwd);
+    setHostId("");
+    setRemote(null);
+    setPrompt("");
+    if (prefill) {
+      const host = prefill.hostId
+        ? sshHosts.find((h) => h.id === prefill.hostId || h.name === prefill.hostId || h.host === prefill.hostId)
+        : undefined;
+      if (host) setHostId(host.id);
+      if (prefill.cwd) setCwd(prefill.cwd);
+      if (prefill.prompt) setPrompt(prefill.prompt);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -147,7 +160,9 @@ export function NewSessionDialog() {
       effort,
       ...(hostId ? { hostId } : {}),
       ...(wt ? { worktree: wt } : {}),
+      ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
     });
+    setPrompt("");
     setTitle("");
     setWorktree(false);
   }
@@ -366,6 +381,17 @@ export function NewSessionDialog() {
             />
           </label>
 
+          {prompt ? (
+            <label className="mt-3 block">
+              <span className="text-2xs font-medium tracking-wide text-subtle uppercase">First message (from a link)</span>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                className="mt-1.5 w-full rounded-md border border-border bg-window px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+              />
+            </label>
+          ) : null}
           {!hostId ? (
             <label className="mt-3 flex items-start gap-2 text-xs">
               <input

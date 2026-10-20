@@ -436,6 +436,9 @@ type WestcodeBridge = {
   onEvent: (fn: (e: SessionEvent) => void) => () => void;
   onMenu: (fn: (action: string) => void) => () => void;
   setKeepAwake?: (enabled: boolean) => void;
+  onDeepLink?: (
+    fn: (link: { action: "new"; folder: string; prompt: string; host: string; provider: string }) => void,
+  ) => () => void;
   find?: {
     start: (text: string, opts?: { forward?: boolean; next?: boolean }) => void;
     stop: () => void;
