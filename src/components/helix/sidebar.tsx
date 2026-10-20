@@ -36,12 +36,28 @@ export function Sidebar() {
           (s.hostId ?? "").toLowerCase().includes(q),
       )
     : pool;
+  // Claude Desktop can group the sidebar by environment: here, by machine.
+  const byMachine = useHelix((s) => s.settings.groupByMachine ?? false) && hosts.length > 0;
+  const ordered = byMachine
+    ? [...visible].sort((a, b) => (a.hostId ? 1 : 0) - (b.hostId ? 1 : 0) || (a.hostId ?? "").localeCompare(b.hostId ?? ""))
+    : visible;
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-surface md:w-60">
       <div className="flex h-11 items-center justify-between px-3">
-        <span className="text-2xs font-medium tracking-wide text-subtle uppercase">
+        <span className="flex items-center gap-2 text-2xs font-medium tracking-wide text-subtle uppercase">
           Sessions
+          {hosts.length ? (
+            <button
+              type="button"
+              aria-pressed={byMachine}
+              onClick={() => useHelix.getState().updateSettings({ groupByMachine: !byMachine })}
+              className={`rounded px-1 normal-case tracking-normal hover:text-foreground ${byMachine ? "text-foreground" : ""}`}
+              title="Group sessions by the machine they run on"
+            >
+              by machine
+            </button>
+          ) : null}
         </span>
         <Button
           size="icon"
@@ -68,10 +84,19 @@ export function Sidebar() {
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5">
-            {visible.map((ses) => {
+            {ordered.map((ses, i) => {
               const active = ses.id === activeId && view === "focus";
+              const machine = ses.hostId ? (hosts.find((h) => h.id === ses.hostId)?.name ?? ses.hostId) : "This Mac";
+              const prev = ordered[i - 1];
+              const prevMachine = prev ? (prev.hostId ? (hosts.find((h) => h.id === prev.hostId)?.name ?? prev.hostId) : "This Mac") : null;
               return (
                 <li key={ses.id} className="group/row relative">
+                  {byMachine && machine !== prevMachine ? (
+                    <p className="flex items-center gap-1 px-2.5 pt-2 pb-0.5 text-2xs font-medium tracking-wide text-subtle uppercase">
+                      {ses.hostId ? <Server className="size-2.5" /> : null}
+                      {machine}
+                    </p>
+                  ) : null}
                   <button
                     type="button"
                     aria-label={ses.archivedAt ? `Restore ${ses.title}` : `Archive ${ses.title}`}
