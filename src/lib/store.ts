@@ -1052,7 +1052,9 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     // guess at your next prompt.
     patch((ses) => ({
       ...ses,
-      ...(ev.title && !ses.titleLocked ? { title: ev.title } : {}),
+      // Grok titles a session after its first prompt, which opens with
+      // WestCode's own desk preamble — that is never a name for the work.
+      ...(ev.title && !ses.titleLocked && !/^\s*\[WestCode/.test(ev.title) ? { title: ev.title } : {}),
       ...(ev.suggestion !== undefined ? { suggestion: ev.suggestion } : {}),
     }));
     return;

@@ -736,7 +736,7 @@ class AcpSession {
       this.pending.delete(msg.id);
       if (!p) return;
       if (msg.error) {
-        p.reject(new Error(msg.error.message || "ACP error"));
+        p.reject(new Error(rpcErrorText(msg.error)));
       } else {
         p.resolve(msg.result ?? {});
       }
@@ -899,6 +899,17 @@ class AcpSession {
   }
 }
 
+/**
+ * An agent's JSON-RPC error as text. Generic messages ("Internal error")
+ * carry the real reason in `data` (Grok: data.message, Claude: data.details).
+ */
+export function rpcErrorText(error) {
+  const base = String(error?.message || "ACP error");
+  const d = error?.data;
+  const detail = typeof d === "string" ? d : d && typeof d === "object" ? d.message || d.details || d.error : "";
+  return detail && !base.includes(String(detail)) ? `${base}: ${detail}` : base;
+}
+
 const sessions = new Map();
 
 export function getSession(id) {
@@ -1037,7 +1048,7 @@ async function withAgent(providerId, opts, fn) {
       if (msg.id != null && msg.method == null && pending.has(msg.id)) {
         const p = pending.get(msg.id);
         pending.delete(msg.id);
-        if (msg.error) p.reject(new Error(msg.error.message || "ACP error"));
+        if (msg.error) p.reject(new Error(rpcErrorText(msg.error)));
         else p.resolve(msg.result ?? {});
       }
     }
