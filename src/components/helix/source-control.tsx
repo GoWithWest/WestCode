@@ -168,7 +168,7 @@ export function SourceControlPanel({
         </button>
       ) : null}
       <div className="flex items-center gap-1.5 border-b border-border px-3 py-2">
-        <BranchPicker cwd={cwd} current={state?.branch ?? null} onChanged={refresh} />
+        <BranchPicker cwd={cwd} current={state?.branch ?? null} loaded={state !== null} onChanged={refresh} />
         {sync && sync.action !== "none" ? (
           <Button
             size="sm"
@@ -244,7 +244,10 @@ export function SourceControlPanel({
 
       {tab === "changes" ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          {files.length === 0 ? (
+          {state === null ? (
+            // Not read yet (a network share can take seconds): never claim "no changes" meanwhile.
+            <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">Reading the repository…</div>
+          ) : files.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
               <Check className="size-5 text-success" />
               <p className="text-sm font-medium">No local changes</p>
@@ -599,10 +602,13 @@ function HistoryTab({ cwd, refreshKey }: { cwd: string; refreshKey: string }) {
 function BranchPicker({
   cwd,
   current,
+  loaded,
   onChanged,
 }: {
   cwd: string;
   current: string | null;
+  /** False until the first status read: no branch is not "detached" yet. */
+  loaded: boolean;
   onChanged: () => void;
 }) {
   const api = westcode()?.git;
@@ -640,7 +646,7 @@ function BranchPicker({
           className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium hover:bg-muted"
         >
           <GitBranch className="size-3.5 shrink-0" />
-          <span className="truncate">{current ?? "Detached HEAD"}</span>
+          <span className="truncate">{current ?? (loaded ? "Detached HEAD" : "…")}</span>
           <ChevronDown className="size-3 shrink-0 opacity-60" />
         </button>
       </Popover.Trigger>
