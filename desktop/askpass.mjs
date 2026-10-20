@@ -104,6 +104,8 @@ export function startAskpass({ ask, encrypt, decrypt }) {
   // A saved password that was just used and is asked for again was wrong:
   // ask the user instead of looping on it.
   const lastSaved = new Map();
+  const inFlight = new Map();
+  const cancelledUntil = new Map();
   const server = createServer((req, res) => {
     if (req.method !== "POST" || req.headers["x-westcode-token"] !== token) {
       res.writeHead(403).end();
@@ -127,8 +129,22 @@ export function startAskpass({ ask, encrypt, decrypt }) {
           return;
         }
         if (saved) forgetPassword(hostId);
-        const answer = await ask({ hostId, prompt, secret: !/yes\/no/i.test(prompt) });
+        // Cancelled for this host a moment ago: do not ask again right away.
+        if ((cancelledUntil.get(hostId) || 0) > Date.now()) {
+          res.writeHead(401).end();
+          return;
+        }
+        // Several connections opening at once all ask the same thing: one
+        // dialog, one answer for all of them.
+        const key = `${hostId}\n${prompt}`;
+        let pending = inFlight.get(key);
+        if (!pending) {
+          pending = ask({ hostId, prompt, secret: !/yes\/no/i.test(prompt) }).finally(() => inFlight.delete(key));
+          inFlight.set(key, pending);
+        }
+        const answer = await pending;
         if (!answer) {
+          cancelledUntil.set(hostId, Date.now() + 60_000);
           res.writeHead(401).end();
           return;
         }
