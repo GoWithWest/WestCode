@@ -133,6 +133,8 @@ export type AppSettings = {
   theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
+  /** Last permission mode chosen per folder (Plan is per session only). */
+  folderModes?: Record<string, string>;
   /** Keep the Mac from sleeping while an agent is mid-turn. */
   keepAwake?: boolean;
   /** Branch name prefix for session worktrees. */
@@ -1866,7 +1868,10 @@ export const useHelix = create<HelixState>((set, get) => ({
         effort ??
         ((scoped && settings.defaultEffort) || defaultEffortFor(providerId)),
       permissionMode:
-        permissionMode || settings.defaultPermissionMode || DEFAULT_PERMISSION,
+        permissionMode ||
+        settings.folderModes?.[hostId ? `${hostId}:${path}` : path] ||
+        settings.defaultPermissionMode ||
+        DEFAULT_PERMISSION,
       status: "idle",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -1922,6 +1927,13 @@ export const useHelix = create<HelixState>((set, get) => ({
         updatedAt: Date.now(),
       })),
     }));
+    // Claude Desktop remembers the mode per folder; Plan stays per session.
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    if (ses && mode !== "plan" && !ses.sideOf) {
+      const key = ses.hostId ? `${ses.hostId}:${ses.cwd}` : ses.cwd;
+      const folderModes = { ...(get().settings.folderModes ?? {}), [key]: mode };
+      get().updateSettings({ folderModes });
+    }
   },
 
   toggleAddon: (id) => {
