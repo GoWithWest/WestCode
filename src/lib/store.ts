@@ -1263,6 +1263,43 @@ function spawnableProviderId(providerId: string, state: HelixState): string {
   return PROVIDER_ORDER[0]!;
 }
 
+// Output from a cycle the agent started itself, per session: one assistant
+// message, closed after a quiet spell or when the user sends again.
+const autoAsst = new Map<string, { id: string; timer?: ReturnType<typeof setTimeout> }>();
+
+function closeAutonomous(sessionId: string) {
+  const a = autoAsst.get(sessionId);
+  if (!a) return;
+  clearTimeout(a.timer);
+  autoAsst.delete(sessionId);
+  useHelix.setState((s) => ({
+    sessions: patchSession(s.sessions, sessionId, (x) => ({
+      ...x,
+      messages: x.messages.map((m) => (m.id === a.id ? { ...m, streaming: false } : m)),
+    })),
+  }));
+}
+
+function autonomousEvent(sessionId: string, ev: SessionEvent) {
+  if (!useHelix.getState().sessions.some((s) => s.id === sessionId)) return;
+  let a = autoAsst.get(sessionId);
+  if (!a) {
+    const id = uid("m");
+    useHelix.setState((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        updatedAt: Date.now(),
+        messages: [...x.messages, { id, role: "assistant", createdAt: Date.now(), blocks: [], raw: "", streaming: true }],
+      })),
+    }));
+    a = { id };
+    autoAsst.set(sessionId, a);
+  }
+  applyEvent(sessionId, a.id, ev);
+  clearTimeout(a.timer);
+  a.timer = setTimeout(() => closeAutonomous(sessionId), 4000);
+}
+
 /** Tool calls whose input is a review's findings (WestCode's desk tool, Claude Code's ReportFindings). */
 const isFindingsTool = (label: string) => /westcode_report_findings|(^|[^a-z])ReportFindings\b/.test(label);
 
@@ -1312,6 +1349,12 @@ function bindDesktopEvents() {
   eventsBound = true;
   api.onEvent((ev) => {
     const pending = promptAsst.get(ev.sessionId);
+    if (!pending && (ev.type === "text" || ev.type === "thought" || ev.type === "tool")) {
+      // Claude Code works on its own between prompts (a background task
+      // finished, a queued note): that output has no prompt to land on.
+      autonomousEvent(ev.sessionId, ev);
+      return;
+    }
     if (!pending) {
       if (
         ev.type === "commands" ||
@@ -2962,6 +3005,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       return;
     }
 
+    closeAutonomous(sessionId);
     abortBySession.get(sessionId)?.abort();
     const ac = new AbortController();
     abortBySession.set(sessionId, ac);
