@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld("westcode", {
   stateSave: (key, value) => ipcRenderer.invoke("state:save", { key, value }),
   cliSessions: (providerIds) => ipcRenderer.invoke("sessions:cli-list", { providerIds }),
   openSession: (payload) => ipcRenderer.invoke("session:open", payload),
+  forkSession: (payload) => ipcRenderer.invoke("session:fork", payload),
   ssh: {
     list: () => ipcRenderer.invoke("ssh:list"),
     save: (host) => ipcRenderer.invoke("ssh:save", host),

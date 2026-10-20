@@ -85,6 +85,15 @@ export function CommandPalette() {
                     Archive “{current.title}”
                   </Command.Item>
                 ) : null}
+                {current?.agentSessionId && !current.hostId ? (
+                  <Command.Item
+                    className={item}
+                    value={`fork ${current.title}`}
+                    onSelect={() => run(() => void st().forkSession(current.id))}
+                  >
+                    Fork “{current.title}”
+                  </Command.Item>
+                ) : null}
                 <Command.Item
                   className={item}
                   onSelect={() =>

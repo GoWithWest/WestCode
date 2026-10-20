@@ -271,6 +271,8 @@ export type HelixState = {
   /** Fills the New session dialog (from a westcode:// link); the user confirms. */
   newPrefill: { cwd?: string; hostId?: string; prompt?: string } | null;
   openNewWith: (p: { cwd?: string; hostId?: string; prompt?: string; providerId?: string }) => void;
+  /** Copy the conversation into a new session (Claude Desktop's Fork). */
+  forkSession: (sessionId: string) => Promise<string | null>;
   enabledAddons: string[];
   customAddons: Addon[];
   customProviders: CustomProvider[];
@@ -1364,6 +1366,45 @@ export const useHelix = create<HelixState>((set, get) => ({
   newOpen: false,
   newProviderId: null,
   newPrefill: null,
+  forkSession: async (sessionId) => {
+    const api = westcode();
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    if (!api?.forkSession || !ses?.agentSessionId || ses.hostId) return null;
+    const note = (text: string) =>
+      set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, systemNote(text)] })) }));
+    const r = await api.forkSession({
+      providerId: ses.providerId,
+      cwd: ses.cwd,
+      agentSessionId: ses.agentSessionId,
+      model: ses.model,
+      effort: ses.effort,
+    });
+    if (!r.ok || !r.agentSessionId) {
+      note(`Could not fork: ${r.error ?? "unknown error"}`);
+      return null;
+    }
+    const id = uid("ses");
+    const fork: Session = {
+      ...ses,
+      id,
+      title: `Fork of ${ses.title}`.slice(0, 80),
+      titleLocked: true,
+      agentSessionId: r.agentSessionId,
+      messages: [],
+      status: "idle",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      archivedAt: undefined,
+      sideOpen: undefined,
+      queued: undefined,
+      permission: null,
+      checkpoints: undefined,
+      worktree: undefined,
+    };
+    set((st) => ({ sessions: [fork, ...st.sessions], activeId: id, view: "focus" as const }));
+    await get().hydrateSession(id);
+    return id;
+  },
   openNewWith: ({ providerId, ...prefill }) =>
     set({ newOpen: true, newProviderId: providerId || null, newPrefill: prefill }),
   enabledAddons: DEFAULT_ENABLED,

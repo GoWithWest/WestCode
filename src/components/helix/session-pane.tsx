@@ -1,6 +1,6 @@
 import { PrChip } from "./pr-chip";
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, GitBranch, Pencil, Server, Terminal, X } from "lucide-react";
+import { Code2, Download, Folder, GitBranch, GitFork, Pencil, Server, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -92,6 +92,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
             {!compact ? (
               <>
                 <ExportButton session={session} />
+                {session.agentSessionId && !session.hostId ? <ForkButton session={session} /> : null}
                 <ResumeButton session={session} />
                 {!session.hostId ? <EditorButton session={session} /> : null}
               </>
@@ -289,6 +290,30 @@ function ResumeButton({ session }: { session: Session }) {
     >
       <Terminal className="size-3" />
       {copied ? "Copied" : "Terminal"}
+    </button>
+  );
+}
+
+function ForkButton({ session }: { session: Session }) {
+  const fork = useHelix((s) => s.forkSession);
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy || session.status === "running"}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await fork(session.id);
+        } finally {
+          setBusy(false);
+        }
+      }}
+      className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+      title="Fork: copy this conversation into a new session to try another direction"
+    >
+      <GitFork className="size-3" />
+      {busy ? "Forking…" : "Fork"}
     </button>
   );
 }

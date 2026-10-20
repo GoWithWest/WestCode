@@ -409,6 +409,13 @@ type WestcodeBridge = {
     /** Sessions a CLI here lists whose folder is on another machine. */
     elsewhere?: number;
   }>;
+  forkSession?: (p: {
+    providerId: string;
+    cwd: string;
+    agentSessionId: string;
+    model?: string;
+    effort?: string;
+  }) => Promise<{ ok: boolean; agentSessionId?: string; error?: string }>;
   ssh?: {
     list: () => Promise<{ hosts: SshHost[]; config: (Omit<SshHost, "id"> & { hostName?: string })[] }>;
     save: (host: Partial<SshHost>) => Promise<{ ok: boolean; host?: SshHost; error?: string }>;

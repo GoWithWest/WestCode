@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews, runOneShot } from "./acp-host.mjs";
+import { ensureSession, dropSession, forkAcpSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews, runOneShot } from "./acp-host.mjs";
 import { judgePrompt, parseVerdict } from "./goal.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 import * as gitOps from "./git.mjs";
@@ -1305,6 +1305,15 @@ ipcMain.handle("session:open", async (_e, payload) => {
     dropSession(readerId);
   }
 });
+
+ipcMain.handle("session:fork", (_e, p = {}) =>
+  forkAcpSession(String(p.providerId || ""), {
+    cwd: p.cwd,
+    agentSessionId: String(p.agentSessionId || ""),
+    model: p.model,
+    effort: p.effort,
+  }),
+);
 
 ipcMain.handle("session:steer", async (_e, { sessionId, text }) => {
   const s = getSession(sessionId);

@@ -926,11 +926,13 @@ export function ensureSession(opts, emit) {
  * transcript schemas are internal and change between releases). The agent is
  * spawned only for the query and killed straight after.
  */
-export async function listAcpSessions(providerId, opts = {}) {
+/**
+ * Start a throwaway agent, initialize it, run `fn(rpc, init)`, then stop it.
+ * For one-off calls that are not a conversation (list, fork).
+ */
+async function withAgent(providerId, opts, fn) {
   const remote = opts.hostId ? getHost(opts.hostId) : null;
-  if (opts.hostId && !remote) return { ok: false, output: `Unknown SSH host ${opts.hostId}.`, sessions: [] };
-  // Claude's sessions on a host are files there; read them with sh, no agent.
-  if (remote && providerId === "claude") return listRemoteClaude(remote, opts.limit);
+  if (opts.hostId && !remote) throw new Error(`Unknown SSH host ${opts.hostId}.`);
   const spec = spawnSpec(providerId, opts.model || "", opts.effort || "", {
     permissionMode: "ask",
     remote,
@@ -989,40 +991,71 @@ export async function listAcpSessions(providerId, opts = {}) {
       }, 45_000);
     });
   try {
-    await rpc("initialize", {
+    const init = await rpc("initialize", {
       protocolVersion: 1,
       clientInfo: { name: "westcode", title: "WestCode", version: "1.0.0" },
       clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
+        fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
       },
     });
-    // No cwd filter: both adapters then return every stored session, across
-    // every folder, which is what the sidebar wants.
-    const res = await rpc("session/list", {});
-    const rows = (res?.sessions || [])
-      .map((s) => ({
-        providerId,
-        agentSessionId: s.sessionId || s.session_id || "",
-        cwd: s.cwd || "",
-        title: String(s.title || "").trim(),
-        updatedAt: Date.parse(s.updatedAt || s.updated_at || "") || 0,
-        ...(remote ? { hostId: remote.id } : {}),
-      }))
-      .filter((s) => s.agentSessionId);
-    return { ok: true, sessions: rows };
+    return await fn(rpc, init, remote);
   } catch (err) {
-    return {
-      ok: false,
-      output: `${err.message}${stderr.trim() ? ` — ${stderr.trim().split("\n").slice(-2).join(" ")}` : ""}`,
-      sessions: [],
-    };
+    err.message = `${err.message}${stderr.trim() ? ` — ${stderr.trim().split("\n").slice(-2).join(" ")}` : ""}`;
+    throw err;
   } finally {
     try {
       proc.kill();
     } catch {
       /* already gone */
     }
+  }
+}
+
+export async function listAcpSessions(providerId, opts = {}) {
+  const remote = opts.hostId ? getHost(opts.hostId) : null;
+  if (opts.hostId && !remote) return { ok: false, output: `Unknown SSH host ${opts.hostId}.`, sessions: [] };
+  // Claude's sessions on a host are files there; read them with sh, no agent.
+  if (remote && providerId === "claude") return listRemoteClaude(remote, opts.limit);
+  try {
+    return await withAgent(providerId, opts, async (rpc) => {
+      // No cwd filter: both adapters then return every stored session, across
+      // every folder, which is what the sidebar wants.
+      const res = await rpc("session/list", {});
+      const rows = (res?.sessions || [])
+        .map((s) => ({
+          providerId,
+          agentSessionId: s.sessionId || s.session_id || "",
+          cwd: s.cwd || "",
+          title: String(s.title || "").trim(),
+          updatedAt: Date.parse(s.updatedAt || s.updated_at || "") || 0,
+          ...(remote ? { hostId: remote.id } : {}),
+        }))
+        .filter((s) => s.agentSessionId);
+      return { ok: true, sessions: rows };
+    });
+  } catch (err) {
+    return { ok: false, output: err.message, sessions: [] };
+  }
+}
+
+/**
+ * Fork a stored conversation (Claude Desktop's "Fork session"): the agent
+ * copies the transcript to a new session id, which then opens like any
+ * stored session. Only agents that advertise session fork support it.
+ */
+export async function forkAcpSession(providerId, { cwd, agentSessionId, model, effort }) {
+  try {
+    return await withAgent(providerId, { cwd, model, effort }, async (rpc, init) => {
+      const caps = init?.agentCapabilities || init?.agent_capabilities || {};
+      const can = caps.sessionCapabilities?.fork ?? caps.session_capabilities?.fork;
+      if (!can) return { ok: false, error: `${providerId} cannot fork a conversation.` };
+      const res = await rpc("session/fork", { sessionId: agentSessionId, cwd: expandHome(cwd), mcpServers: [] });
+      const id = res?.sessionId || res?.session_id;
+      return id ? { ok: true, agentSessionId: id } : { ok: false, error: "The agent returned no session id." };
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 }
 
