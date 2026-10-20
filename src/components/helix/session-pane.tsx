@@ -1,3 +1,4 @@
+import { PrChip } from "./pr-chip";
 import { useEffect, useRef, useState } from "react";
 import { Code2, Download, Folder, GitBranch, Pencil, Server, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
@@ -79,6 +80,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
             {!session.hostId ? (
               <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
             ) : null}
+            {!session.hostId ? <PrChip session={session} /> : null}
             {session.worktree ? (
               <span
                 className="rounded-full border border-border px-1.5 py-px text-foreground"

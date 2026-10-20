@@ -20,6 +20,7 @@ import * as memoryFlow from "./memory-flow.mjs";
 import * as artifacts from "./artifact-server.mjs";
 import * as sshHosts from "./ssh.mjs";
 import { parseDeepLink } from "./deeplink.mjs";
+import * as prs from "./pr.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -824,6 +825,9 @@ gitHandler("git:find-repos", (dir) => gitOps.findRepos(dir).then((repos) => ({ o
 gitHandler("git:init", (dir) => gitOps.initRepo(dir));
 gitHandler("git:checkpoint", (dir, p) => gitOps.checkpoint(dir, String(p.label || "turn").slice(0, 80)));
 gitHandler("git:restore", (dir, p) => gitOps.restoreCheckpoint(dir, p.sha));
+gitHandler("pr:status", (dir) => prs.prStatus(dir));
+gitHandler("pr:create", (dir, p) => prs.createPr(dir, { title: p.title, body: p.body, draft: p.draft }));
+gitHandler("pr:merge-auto", (dir) => prs.mergeWhenReady(dir));
 gitHandler("git:worktree-add", (dir, p) =>
   gitOps.addWorktree(dir, { name: String(p.name || "session"), branchPrefix: p.branchPrefix, location: p.location || undefined }),
 );

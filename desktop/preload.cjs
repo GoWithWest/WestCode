@@ -115,6 +115,11 @@ contextBridge.exposeInMainWorld("westcode", {
   },
   syncDesk: (rows) => ipcRenderer.send("desk:sync", rows),
   setKeepAwake: (enabled) => ipcRenderer.send("app:keep-awake", enabled),
+  pr: {
+    status: (cwd) => ipcRenderer.invoke("pr:status", { cwd }),
+    create: (cwd, payload) => ipcRenderer.invoke("pr:create", { cwd, ...(payload || {}) }),
+    mergeWhenReady: (cwd) => ipcRenderer.invoke("pr:merge-auto", { cwd }),
+  },
   onDeepLink: (fn) => {
     const handler = (_e, link) => fn(link);
     ipcRenderer.on("deeplink", handler);

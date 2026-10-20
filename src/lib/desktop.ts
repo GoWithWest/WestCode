@@ -32,6 +32,26 @@ export type CliSession = {
   hostId?: string;
 };
 
+export type PrStatus = {
+  ok: boolean;
+  error?: string;
+  missing?: "gh";
+  noRemote?: boolean;
+  pr?: {
+    number: number;
+    title: string;
+    url: string;
+    state: string;
+    draft: boolean;
+    mergeable: string;
+    review: string;
+    head: string;
+    base: string;
+    autoMerge: boolean;
+    checks: { total: number; passed: number; failed: number; pending: number; failing: { name: string; url: string }[] };
+  } | null;
+};
+
 /** A machine sessions can run on over SSH (Settings → SSH hosts). */
 export type SshHost = {
   id: string;
@@ -436,6 +456,11 @@ type WestcodeBridge = {
   onEvent: (fn: (e: SessionEvent) => void) => () => void;
   onMenu: (fn: (action: string) => void) => () => void;
   setKeepAwake?: (enabled: boolean) => void;
+  pr?: {
+    status: (cwd: string) => Promise<PrStatus>;
+    create: (cwd: string, p?: { title?: string; body?: string; draft?: boolean }) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    mergeWhenReady: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
+  };
   onDeepLink?: (
     fn: (link: { action: "new"; folder: string; prompt: string; host: string; provider: string }) => void,
   ) => () => void;
