@@ -114,6 +114,16 @@ contextBridge.exposeInMainWorld("westcode", {
     return () => ipcRenderer.removeListener("menu:action", handler);
   },
   syncDesk: (rows) => ipcRenderer.send("desk:sync", rows),
+  setKeepAwake: (enabled) => ipcRenderer.send("app:keep-awake", enabled),
+  find: {
+    start: (text, opts) => ipcRenderer.send("find:start", { text, ...(opts || {}) }),
+    stop: () => ipcRenderer.send("find:stop"),
+    onResult: (fn) => {
+      const handler = (_e, r) => fn(r);
+      ipcRenderer.on("find:result", handler);
+      return () => ipcRenderer.removeListener("find:result", handler);
+    },
+  },
   onDeskDeliver: (fn) => {
     const handler = (_e, data) => fn(data);
     ipcRenderer.on("desk:deliver", handler);

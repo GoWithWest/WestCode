@@ -288,6 +288,18 @@ export function SettingsView() {
           <label className="mt-3 flex items-start gap-3">
             <input
               type="checkbox"
+              checked={settings.keepAwake ?? true}
+              onChange={(e) => update({ keepAwake: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Keep this Mac awake while agents work.</span> Sleep is
+              held off only while a turn is running, then released.
+            </span>
+          </label>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
               checked={settings.launchAtLogin}
               onChange={(e) => update({ launchAtLogin: e.target.checked })}
               className="mt-0.5 size-4 accent-[var(--color-accent)]"

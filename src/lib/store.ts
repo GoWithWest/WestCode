@@ -133,6 +133,8 @@ export type AppSettings = {
   theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
+  /** Keep the Mac from sleeping while an agent is mid-turn. */
+  keepAwake?: boolean;
   /** Branch name prefix for session worktrees. */
   worktreeBranchPrefix?: string;
   /** Where worktrees go; empty = <repo>/.claude/worktrees. */
@@ -153,6 +155,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   memoryRepo: "",
   memorySync: false,
   launchAtLogin: false,
+  keepAwake: true,
   worktreeBranchPrefix: "westcode/",
   worktreeLocation: "",
 };
@@ -1507,6 +1510,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     bindDeskPersist();
     void get().refreshCli();
     void get().refreshSshHosts();
+    westcode()?.setKeepAwake?.(get().settings.keepAwake ?? true);
     void get().refreshLibrary();
     void get().refreshUpdates();
     void get().refreshLearning();
@@ -2069,6 +2073,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     if ("launchAtLogin" in patch) {
       void westcode()?.setLoginItem?.(settings.launchAtLogin);
     }
+    if ("keepAwake" in patch) westcode()?.setKeepAwake?.(settings.keepAwake ?? true);
   },
 
   addSchedule: (t) => {

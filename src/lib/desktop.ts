@@ -435,6 +435,12 @@ type WestcodeBridge = {
   }) => Promise<{ ok: boolean }>;
   onEvent: (fn: (e: SessionEvent) => void) => () => void;
   onMenu: (fn: (action: string) => void) => () => void;
+  setKeepAwake?: (enabled: boolean) => void;
+  find?: {
+    start: (text: string, opts?: { forward?: boolean; next?: boolean }) => void;
+    stop: () => void;
+    onResult: (fn: (r: { active: number; total: number }) => void) => () => void;
+  };
   syncDesk: (rows: {
     id: string;
     title: string;

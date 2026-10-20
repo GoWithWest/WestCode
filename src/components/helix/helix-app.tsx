@@ -1,3 +1,6 @@
+import { CommandPalette } from "./command-palette";
+import { FindBar } from "./find-bar";
+import { ShortcutsSheet } from "./shortcuts-sheet";
 import { useEffect } from "react";
 import { Columns2, LayoutGrid, Plus, PanelLeft } from "lucide-react";
 import { Group, Panel, Separator } from "react-resizable-panels";
@@ -59,6 +62,15 @@ export function HelixApp() {
       else if (action === "focus") {
         const id = state.activeId ?? state.sessions[0]?.id;
         if (id) state.setActive(id);
+      } else if (action === "next" || action === "prev") {
+        // Ctrl+Tab / ⌘⇧] and ⌘⇧[: step through the open sessions.
+        const live = state.sessions.filter((s) => !s.archivedAt && !s.sideOf);
+        if (!live.length) return;
+        const i = live.findIndex((s) => s.id === state.activeId);
+        const step = action === "next" ? 1 : -1;
+        state.setActive(live[(i + step + live.length) % live.length]!.id);
+      } else if (action === "palette" || action === "find" || action === "shortcuts") {
+        window.dispatchEvent(new CustomEvent(`westcode:${action}`));
       } else if (action === "split") {
         const live = state.sessions.filter((s) => !s.archivedAt);
         if (live.length >= 2) state.setSplit([live[0]!.id, live[1]!.id]);
@@ -109,6 +121,9 @@ export function HelixApp() {
         }
       />
       <UpdateBanner />
+      <FindBar />
+      <CommandPalette />
+      <ShortcutsSheet />
 
       <div className="flex min-h-0 flex-1">
         <div

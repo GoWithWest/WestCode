@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -171,6 +171,15 @@ function installMenu() {
           accelerator: "CmdOrCtrl+N",
           click: () => sendMenu("new"),
         },
+        { label: "Next Session", accelerator: "CmdOrCtrl+Shift+]", click: () => sendMenu("next") },
+        { label: "Previous Session", accelerator: "CmdOrCtrl+Shift+[", click: () => sendMenu("prev") },
+        { label: "Next Session", accelerator: "Ctrl+Tab", visible: false, acceleratorWorksWhenHidden: true, click: () => sendMenu("next") },
+        { label: "Previous Session", accelerator: "Ctrl+Shift+Tab", visible: false, acceleratorWorksWhenHidden: true, click: () => sendMenu("prev") },
+        { type: "separator" },
+        { label: "Command Palette…", accelerator: "CmdOrCtrl+K", click: () => sendMenu("palette") },
+        { label: "Find…", accelerator: "CmdOrCtrl+F", click: () => sendMenu("find") },
+        { type: "separator" },
+        { label: "Keyboard Shortcuts", accelerator: "CmdOrCtrl+/", click: () => sendMenu("shortcuts") },
       ],
     },
     { role: "editMenu" },
@@ -197,6 +206,11 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  // ⌘F: Chromium's own find-in-page, results reported to the find bar.
+  win.webContents.on("found-in-page", (_e, r) => {
+    win?.webContents.send("find:result", { active: r.activeMatchOrdinal, total: r.matches });
   });
 
   if (process.env.WESTCODE_DEV === "1") {
@@ -304,7 +318,34 @@ app.whenReady().then(async () => {
   });
 });
 
-ipcMain.on("desk:sync", (_e, rows) => setRoster(rows));
+// The desk roster also says whether any agent is mid-turn: that keeps the
+// Mac awake (Settings → Keep this Mac awake) and guards Quit.
+let deskRunning = 0;
+let keepAwakeWanted = true;
+let awakeId = null;
+function applyKeepAwake() {
+  const want = keepAwakeWanted && deskRunning > 0;
+  if (want && awakeId == null) awakeId = powerSaveBlocker.start("prevent-app-suspension");
+  if (!want && awakeId != null) {
+    powerSaveBlocker.stop(awakeId);
+    awakeId = null;
+  }
+}
+ipcMain.on("desk:sync", (_e, rows) => {
+  setRoster(rows);
+  deskRunning = (Array.isArray(rows) ? rows : []).filter((r) => r?.status === "running").length;
+  applyKeepAwake();
+});
+ipcMain.on("find:start", (_e, { text, forward = true, next = false } = {}) => {
+  const t = String(text || "");
+  if (!win || !t) return;
+  win.webContents.findInPage(t, { forward: Boolean(forward), findNext: Boolean(next) });
+});
+ipcMain.on("find:stop", () => win?.webContents.stopFindInPage("clearSelection"));
+ipcMain.on("app:keep-awake", (_e, enabled) => {
+  keepAwakeWanted = Boolean(enabled);
+  applyKeepAwake();
+});
 
 function killAppServer() {
   try {
@@ -323,7 +364,24 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+let quitConfirmed = false;
+app.on("before-quit", (event) => {
+  // Claude Desktop asks before quitting while Claude is still working.
+  if (deskRunning > 0 && !quitConfirmed) {
+    const choice = dialog.showMessageBoxSync({
+      type: "question",
+      buttons: ["Quit", "Keep working"],
+      defaultId: 1,
+      cancelId: 1,
+      message: `${deskRunning === 1 ? "An agent is" : `${deskRunning} agents are`} still working.`,
+      detail: "Quitting stops the turn. The conversation is kept and can be resumed.",
+    });
+    if (choice !== 0) {
+      event.preventDefault();
+      return;
+    }
+  }
+  quitConfirmed = true;
   globalShortcut.unregisterAll();
   stopAll();
   killAppServer();
