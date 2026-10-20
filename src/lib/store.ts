@@ -1013,7 +1013,8 @@ export function closeThinking(blocks: Block[]): Block[] {
   return blocks;
 }
 
-function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
+/** Exported for tests only. */
+export function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
   const patch = (fn: (s: Session) => Session) =>
     useHelix.setState((s) => ({
       sessions: patchSession(s.sessions, sessionId, fn),
@@ -1217,7 +1218,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           content: ev.content || "",
           diffs: ev.diffs,
           status: ev.status || "running",
-          ...(ev.findings && isFindingsTool(`${ev.name ?? ""} ${ev.title ?? ""}`) ? { findings: ev.findings } : {}),
+          ...(ev.findings ? { findings: ev.findings } : {}),
         };
         if (idx >= 0) {
           const prev = blocks[idx] as ToolBlock;
@@ -1243,7 +1244,8 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
             status: ev.status || prev.status,
           };
         } else {
-          blocks.push(tool);
+          // A new card keeps findings only when it is a findings tool.
+          blocks.push(tool.findings && !isFindingsTool(`${tool.name} ${tool.title ?? ""}`) ? { ...tool, findings: undefined } : tool);
           bumpLearn(sessionId, "tools");
         }
         return { ...m, blocks, streaming: true };
