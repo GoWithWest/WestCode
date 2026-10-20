@@ -1406,6 +1406,11 @@ export const useHelix = create<HelixState>((set, get) => ({
     const note = (text: string) =>
       set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, systemNote(text)] })) }));
     const before = [...ses.messages.slice(0, idx)].reverse().find((m) => m.role === "assistant" && m.lastAcp?.id);
+    // Forking starts the agent, which takes a while: say so.
+    const working = { ...systemNote("Rewinding — forking the conversation before that message…"), id: uid("rw") };
+    set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, working] })) }));
+    const dropWorking = () =>
+      set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: x.messages.filter((m) => m.id !== working.id) })) }));
     let agentSessionId: string | undefined;
     if (before?.lastAcp) {
       const r = await api.forkSession({
@@ -1417,6 +1422,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         at: { messageId: before.lastAcp.id, text: before.lastAcp.text },
       });
       if (!r.ok || !r.agentSessionId) {
+        dropWorking();
         note(`Could not rewind: ${r.error ?? "unknown error"}`);
         return false;
       }
