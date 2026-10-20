@@ -25,6 +25,7 @@ import * as terminals from "./terminal.mjs";
 import * as filesPane from "./files.mjs";
 import * as askpass from "./askpass.mjs";
 import * as devServers from "./devservers.mjs";
+import * as sessionEnv from "./session-env.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -361,6 +362,10 @@ function askInWindow({ hostId, prompt, secret }) {
 }
 
 app.whenReady().then(async () => {
+  sessionEnv.initSessionEnv({
+    encrypt: (s) => safeStorage.encryptString(s).toString("base64"),
+    decrypt: (b) => safeStorage.decryptString(Buffer.from(b, "base64")),
+  });
   await askpass.startAskpass({
     ask: askInWindow,
     encrypt: (s) => safeStorage.encryptString(s).toString("base64"),
@@ -1328,6 +1333,16 @@ ipcMain.handle("ssh:list", () => ({ hosts: sshHosts.loadHosts(), config: sshHost
 ipcMain.handle("ssh:save", (_e, host) => {
   try {
     return { ok: true, host: sshHosts.saveHost(host) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+// Settings → Environment variables: "local" or an SSH host id.
+ipcMain.handle("env:get", (_e, scope) => ({ ok: true, text: sessionEnv.getEnvText(String(scope || "local")) }));
+ipcMain.handle("env:set", (_e, { scope, text } = {}) => {
+  try {
+    sessionEnv.setEnvText(String(scope || "local"), String(text ?? ""));
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }

@@ -6,6 +6,7 @@ import { useHelix } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useAllProviders } from "./provider";
 import { SshHostsSection } from "./ssh-hosts";
+import { EnvVarsSection } from "./env-vars";
 
 export function SettingsView() {
   const settings = useHelix((s) => s.settings);
@@ -158,6 +159,8 @@ export function SettingsView() {
         </section>
 
         <SshHostsSection />
+
+        <EnvVarsSection />
 
         <section className="mt-4 rounded-lg border border-border bg-surface p-4">
           <h3 className="text-sm font-medium">Delegation</h3>

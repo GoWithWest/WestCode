@@ -256,7 +256,7 @@ dir="$PWD"
 case "$dir" in "$root"*) dir="\${dir#"$root"}" ;; esac
 [ -n "$dir" ] || dir=/
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\\\\\''/g")"; }
-cmd="${REMOTE_PATH.replace(/["$]/g, (c) => `\\${c}`)}; cd $(q "$dir") || exit 1; exec claude"
+cmd="${REMOTE_PATH.replace(/["$]/g, (c) => `\\${c}`)}; $WESTCODE_REMOTE_EXPORTS cd $(q "$dir") || exit 1; exec claude"
 for a in "$@"; do cmd="$cmd $(q "$a")"; done
 set -- -T -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o NumberOfPasswordPrompts=2
 [ -n "$WESTCODE_SSH_CONTROL" ] && set -- "$@" -o ControlMaster=auto -o "ControlPath=$WESTCODE_SSH_CONTROL/%C" -o ControlPersist=600

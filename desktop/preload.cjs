@@ -138,6 +138,10 @@ contextBridge.exposeInMainWorld("westcode", {
     start: (cwd, name) => ipcRenderer.invoke("dev:start", { cwd, name }),
     stop: (cwd, name) => ipcRenderer.invoke("dev:stop", { cwd, name }),
   },
+  env: {
+    get: (scope) => ipcRenderer.invoke("env:get", scope),
+    set: (scope, text) => ipcRenderer.invoke("env:set", { scope, text }),
+  },
   files: {
     list: (root, path, hostId) => ipcRenderer.invoke("files:list", { root, path, hostId }),
     read: (root, path, hostId) => ipcRenderer.invoke("files:read", { root, path, hostId }),

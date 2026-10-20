@@ -9,6 +9,7 @@ import { childEnv, which } from "./path.mjs";
 import { deskDir } from "./desk-paths.mjs";
 import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate, modelsFrom } from "./acp-map.mjs";
 import { cliHasWestcreate, sessionServer } from "./westcreate.mjs";
+import { envFor, exportsFor } from "./session-env.mjs";
 import {
   claudeRemoteEnv,
   getHost,
@@ -144,7 +145,8 @@ export const ADAPTERS = {
 };
 
 function spawnSpec(providerId, model, effort, opts = {}) {
-  const env = childEnv();
+  // Settings → Environment variables for this Mac (a host's are exported there).
+  const env = opts.remote ? childEnv() : { ...childEnv(), ...envFor("local") };
   const modelId = mapModel(providerId, model);
   const effortId = mapEffort(providerId, effort);
   const perm = permissionFlag(providerId, opts.permissionMode);
@@ -229,12 +231,12 @@ function remoteSpawnSpec(providerId, modelId, effortId, perm, opts, env) {
     flags.push("agent");
     if (perm === "bypassPermissions") flags.push("--always-approve");
     flags.push("-m", modelId, "--reasoning-effort", effortId, "stdio");
-    const cmd = `grok ${flags.map(q).join(" ")}`;
+    const cmd = `${exportsFor(h.id)} grok ${flags.map(q).join(" ")}`;
     return { ...remoteAcpSpawn(h, opts.remoteCwd, cmd), env: sshEnv(h, env) };
   }
   if (providerId === "codex") {
     const cmd = `if command -v npx >/dev/null 2>&1; then exec npx -y ${ADAPTERS.codex}; else exec codex acp; fi`;
-    return { ...remoteAcpSpawn(h, opts.remoteCwd, `sh -c '${cmd}'`), env: sshEnv(h, env) };
+    return { ...remoteAcpSpawn(h, opts.remoteCwd, `${exportsFor(h.id)} sh -c ${q(cmd)}`), env: sshEnv(h, env) };
   }
   if (providerId === "claude") {
     const npx = which("npx", env);
@@ -247,6 +249,7 @@ function remoteSpawnSpec(providerId, modelId, effortId, perm, opts, env) {
       env: {
         ...npmCacheEnv(env),
         ...claudeRemoteEnv(h),
+        WESTCODE_REMOTE_EXPORTS: exportsFor(h.id),
         CLAUDE_CODE_MODEL: modelId,
         CLAUDE_CODE_PERMISSION_MODE: perm,
       },

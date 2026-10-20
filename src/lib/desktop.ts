@@ -491,6 +491,10 @@ type WestcodeBridge = {
     start: (cwd: string, name: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
     stop: (cwd: string, name: string) => Promise<{ ok: boolean }>;
   };
+  env?: {
+    get: (scope: string) => Promise<{ ok: boolean; text: string }>;
+    set: (scope: string, text: string) => Promise<{ ok: boolean; error?: string }>;
+  };
   files?: {
     list: (root: string, path: string, hostId?: string) => Promise<{ ok: boolean; entries?: { name: string; path: string; dir: boolean }[]; error?: string }>;
     read: (
