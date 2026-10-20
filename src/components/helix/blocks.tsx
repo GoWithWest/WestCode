@@ -25,7 +25,7 @@ import {
 import { diffLines, statsForDiffs, withContext, type DiffRow } from "@/lib/diff";
 import { activityLine, formatSeconds, liveLabel, toolKindOf, toolLabel } from "@/lib/activity";
 import { splitActivity } from "@/lib/parse-agent";
-import type { Attachment, Block, ChatMessage, FileDiff, ToolBlock } from "@/lib/types";
+import type { Attachment, Block, ChatMessage, FileDiff, Finding, ToolBlock } from "@/lib/types";
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ProviderDot, useResolvedProvider } from "./provider";
@@ -223,6 +223,11 @@ const Message = memo(function Message({
         />
       ) : null}
       {awaiting ? <AwaitingApproval tool={awaiting} /> : null}
+      {message.blocks.map((b, i) =>
+        b.type === "tool" && b.findings ? (
+          <FindingsCard key={`${message.id}-f-${i}`} findings={b.findings} sessionId={sessionId} />
+        ) : null,
+      )}
       {reply.map((b, i) =>
         b.type === "text" ? (
           <Markdown key={`${message.id}-r-${i}`} text={b.text} compact={compact} />
@@ -232,6 +237,62 @@ const Message = memo(function Message({
     </div>
   );
 });
+
+const SEVERITY_TONE: Record<Finding["severity"], string> = {
+  high: "bg-destructive/15 text-destructive",
+  medium: "bg-warn/15 text-warn",
+  low: "bg-muted text-muted-foreground",
+};
+
+/** Code review findings (westcode_report_findings), most severe first. */
+function FindingsCard({ findings, sessionId }: { findings: Finding[]; sessionId?: string }) {
+  return (
+    <section className="rounded-xl border border-border bg-surface" aria-label="Review findings">
+      <header className="flex items-center gap-2 border-b border-border px-3.5 py-2">
+        <span className="text-xs font-medium">Review</span>
+        <span className="text-2xs text-muted-foreground">
+          {findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}` : "No findings"}
+        </span>
+      </header>
+      {findings.length ? (
+        <ul className="divide-y divide-border">
+          {findings.map((f, i) => (
+            <li key={i} className="flex items-start gap-2.5 px-3.5 py-2.5">
+              <span className={`mt-0.5 shrink-0 rounded px-1.5 py-px text-2xs font-medium uppercase ${SEVERITY_TONE[f.severity]}`}>
+                {f.severity}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium">{f.summary}</p>
+                {f.file ? (
+                  <p className="mt-0.5 truncate font-mono text-2xs text-muted-foreground">
+                    {f.file}
+                    {f.line ? `:${f.line}` : ""}
+                  </p>
+                ) : null}
+                {f.detail ? <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">{f.detail}</p> : null}
+              </div>
+              {sessionId ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("westcode:compose", {
+                        detail: { sessionId, text: `Fix this review finding${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ""}` : ""}: ${f.summary}` },
+                      }),
+                    )
+                  }
+                  className="shrink-0 text-2xs text-muted-foreground hover:text-foreground"
+                >
+                  Fix
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
 
 const THINKING_VERBS = [
   "Thinking",

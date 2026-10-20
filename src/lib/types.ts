@@ -42,7 +42,11 @@ export type ToolBlock = {
   to?: string;
   content: string;
   status: "running" | "done" | "error";
+  /** Code review findings reported with westcode_report_findings. */
+  findings?: Finding[];
 };
+
+export type Finding = { file: string; line?: number; severity: "high" | "medium" | "low"; summary: string; detail?: string };
 
 export type TextBlock = {
   type: "text";

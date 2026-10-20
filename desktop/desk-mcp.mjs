@@ -16,6 +16,32 @@ const DESK_HTTP = process.env.WESTCODE_DESK_URL || "";
 
 const TOOLS = [
   {
+    name: "westcode_report_findings",
+    description:
+      "Report code review findings to the user: WestCode shows them as a review card under your message. Call it once at the end of a review with every verified finding, most severe first (an empty list when nothing survived). Do not also repeat the findings as a list in your reply.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              file: { type: "string", description: "Repository-relative path" },
+              line: { type: "integer", description: "1-based line the finding is about" },
+              severity: { type: "string", enum: ["high", "medium", "low"] },
+              summary: { type: "string", description: "One sentence: what is wrong" },
+              detail: { type: "string", description: "How it fails: the inputs or state and the wrong result" },
+            },
+            required: ["file", "severity", "summary"],
+          },
+        },
+      },
+      required: ["findings"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "westcode_list_sessions",
     description:
       "List other WestCode desk sessions you can message (Claude Code, Grok Build, Codex). Use this instead of ListAgents — ListAgents only shows Claude subagents, not Grok or Codex on this Mac.",
@@ -201,6 +227,13 @@ async function handle(msg) {
         const sessions = await loadRoster();
         reply(id, {
           content: [{ type: "text", text: formatSessions(sessions) }],
+        });
+        return;
+      }
+      if (name === "westcode_report_findings") {
+        const n = Array.isArray(args.findings) ? args.findings.length : 0;
+        reply(id, {
+          content: [{ type: "text", text: n ? `Shown ${n} finding${n === 1 ? "" : "s"} to the user as a review card.` : "Shown to the user: no findings." }],
         });
         return;
       }

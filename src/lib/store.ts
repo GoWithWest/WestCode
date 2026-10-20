@@ -972,6 +972,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         if (ev.command) known.command = ev.command;
         if (ev.content) known.content = ev.content;
         if (ev.diffs) known.diffs = ev.diffs;
+        if (ev.findings) known.findings = ev.findings;
         if (ev.status) known.status = ev.status;
         continue;
       }
@@ -986,6 +987,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         command: ev.command,
         content: ev.content || "",
         status: ev.status || "done",
+        ...(ev.findings ? { findings: ev.findings } : {}),
       };
       tools.set(key, block);
       asst.blocks.push(block);
@@ -1213,6 +1215,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           content: ev.content || "",
           diffs: ev.diffs,
           status: ev.status || "running",
+          ...(ev.findings ? { findings: ev.findings } : {}),
         };
         if (idx >= 0) {
           const prev = blocks[idx] as ToolBlock;
@@ -1232,6 +1235,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
             diffs: tool.diffs || prev.diffs,
             path: tool.path || prev.path,
             command: tool.command || prev.command,
+            findings: tool.findings || prev.findings,
             // A patch without a status leaves the card where it was.
             status: ev.status || prev.status,
           };
@@ -3391,6 +3395,7 @@ function runSlash(
     "reflect",
     "btw",
     "goal",
+    "code-review",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -3444,6 +3449,18 @@ function runSlash(
       sessionId,
       `Goal: ${arg}\nWork toward this goal. Keep going across turns until it is met; say clearly what is done and what is left at the end of each turn.`,
       { display: `🎯 ${arg}` },
+    );
+    return true;
+  }
+
+  if (cmd === "code-review") {
+    // The CLI's own /code-review, when it has one, wins.
+    if (session.slashCommands?.some((c) => c.cmd === "code-review")) return false;
+    const scope = arg || "the uncommitted changes in this repository (git diff HEAD, plus untracked files)";
+    void get().send(
+      sessionId,
+      `Review ${scope} for real defects: bugs, logic errors, security problems, broken edge cases. Read the surrounding code before judging; check each finding against the code and drop any you cannot confirm. Then call the westcode_report_findings tool once with the verified findings, most severe first (an empty list if none survived), and end with one line on the overall state. Do not change any files.`,
+      { display: `/code-review${arg ? ` ${arg}` : ""}` },
     );
     return true;
   }

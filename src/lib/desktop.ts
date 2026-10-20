@@ -114,6 +114,7 @@ export type SessionEvent = {
   commands?: { cmd: string; hint: string; kind: "builtin" | "skill" }[];
   rpcId?: number;
   fields?: import("./types").QuestionField[];
+  findings?: import("./types").Finding[];
   tool?: string;
   options?: { optionId?: string; kind?: string; name?: string }[];
   message?: string;

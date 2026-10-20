@@ -1,3 +1,4 @@
+import { parseFindings } from "./findings.mjs";
 // Map ACP session/update notifications to WestCode session events.
 //
 // Shapes below are the ones the agents actually send (recorded from
@@ -173,8 +174,10 @@ export function mapUpdate(params, opts = {}) {
     const title = typeof u.title === "string" ? u.title : "";
     const diffs = contentDiffs(u.content);
     const status = toolStatus(u);
+    const findings = /westcode_report_findings/.test(`${name} ${title}`) && raw.findings ? parseFindings(raw) : undefined;
     return {
       type: "tool",
+      ...(findings ? { findings } : {}),
       toolId: u.toolCallId || u.tool_call_id || u.id,
       // Identity name first (the dedupe in extractSendMessages matches on
       // westcode_send_message); a tool_call with nothing better falls back to
