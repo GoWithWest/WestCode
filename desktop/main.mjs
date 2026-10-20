@@ -1440,6 +1440,7 @@ ipcMain.handle("session:fork", (_e, p = {}) =>
     agentSessionId: String(p.agentSessionId || ""),
     model: p.model,
     effort: p.effort,
+    at: p.at && typeof p.at === "object" ? { messageId: String(p.at.messageId || ""), text: String(p.at.text || "") } : undefined,
   }),
 );
 

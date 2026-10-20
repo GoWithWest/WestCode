@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -1045,13 +1046,34 @@ export async function listAcpSessions(providerId, opts = {}) {
  * copies the transcript to a new session id, which then opens like any
  * stored session. Only agents that advertise session fork support it.
  */
-export async function forkAcpSession(providerId, { cwd, agentSessionId, model, effort }) {
+export async function forkAcpSession(providerId, { cwd, agentSessionId, model, effort, at }) {
   try {
     return await withAgent(providerId, { cwd, model, effort }, async (rpc, init) => {
       const caps = init?.agentCapabilities || init?.agent_capabilities || {};
       const can = caps.sessionCapabilities?.fork ?? caps.session_capabilities?.fork;
       if (!can) return { ok: false, error: `${providerId} cannot fork a conversation.` };
-      const res = await rpc("session/fork", { sessionId: agentSessionId, cwd: expandHome(cwd), mcpServers: [] });
+      // At a given reply (Rewind): Claude's adapter takes the fork point as
+      // the AIR extension's fork meta — the API message id, and the
+      // fingerprint of its text as a fallback when the id is not on record.
+      const meta = at?.messageId
+        ? {
+            jetbrains: {
+              air: {
+                fork: {
+                  version: 1,
+                  messageId: String(at.messageId),
+                  ...(at.text ? { messageFingerprint: `sha256:${createHash("sha256").update(String(at.text)).digest("hex")}`, messageOccurrence: 1 } : {}),
+                },
+              },
+            },
+          }
+        : undefined;
+      const res = await rpc("session/fork", {
+        sessionId: agentSessionId,
+        cwd: expandHome(cwd),
+        mcpServers: [],
+        ...(meta ? { _meta: meta } : {}),
+      });
       const id = res?.sessionId || res?.session_id;
       return id ? { ok: true, agentSessionId: id } : { ok: false, error: "The agent returned no session id." };
     });

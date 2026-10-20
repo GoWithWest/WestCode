@@ -73,6 +73,8 @@ export type SshProbe = {
 
 export type SessionEvent = {
   sessionId: string;
+  /** On text chunks: the agent's API message id (Claude), for Rewind. */
+  messageId?: string;
   type:
     | "text"
     | "thought"
@@ -415,6 +417,8 @@ type WestcodeBridge = {
     agentSessionId: string;
     model?: string;
     effort?: string;
+    /** Fork at this reply (Rewind) instead of at the end. */
+    at?: { messageId: string; text: string };
   }) => Promise<{ ok: boolean; agentSessionId?: string; error?: string }>;
   ssh?: {
     list: () => Promise<{ hosts: SshHost[]; config: (Omit<SshHost, "id"> & { hostName?: string })[] }>;

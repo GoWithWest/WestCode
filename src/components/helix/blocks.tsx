@@ -12,6 +12,7 @@ import {
   Eye,
   Globe,
   History,
+  Undo2,
   Search,
   Send,
   SquareTerminal,
@@ -120,6 +121,7 @@ const Message = memo(function Message({
     return (
       <div className="flex flex-col items-end gap-1">
       <div className="group/user flex items-center justify-end gap-2">
+        {sessionId && !queued ? <RewindButton sessionId={sessionId} messageId={message.id} /> : null}
         {message.checkpoint && sessionId ? (
           <button
             type="button"
@@ -751,5 +753,30 @@ function CodeBlock({ lang, body }: { lang?: string; body: string }) {
         {body}
       </pre>
     </div>
+  );
+}
+
+/** "Rewind to here": fork the conversation before this message and edit it. */
+function RewindButton({ sessionId, messageId }: { sessionId: string; messageId: string }) {
+  const can = useHelix((s) => {
+    const ses = s.sessions.find((x) => x.id === sessionId);
+    return Boolean(ses?.agentSessionId && !ses.hostId && ses.status !== "running" && ses.providerId === "claude");
+  });
+  if (!can) return null;
+  return (
+    <button
+      type="button"
+      title="Rewind to here: the conversation goes back to before this message (files too, if a checkpoint exists) and the message returns to the box to edit"
+      aria-label="Rewind to before this message"
+      onClick={() => {
+        if (window.confirm("Rewind to before this message? Later messages leave this conversation (a copy of the full one stays in your CLI history).")) {
+          void useHelix.getState().rewindTo(sessionId, messageId);
+        }
+      }}
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-subtle opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100"
+    >
+      <Undo2 className="size-3" />
+      Rewind
+    </button>
   );
 }

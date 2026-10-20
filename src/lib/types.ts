@@ -72,6 +72,8 @@ export type ChatMessage = {
   fromTitle?: string;
   hop?: number;
   /** Working-tree snapshot taken just before this message's turn ran. */
+  /** Last API message of an agent reply: where Rewind forks the conversation. */
+  lastAcp?: { id: string; text: string };
   checkpoint?: string;
   /** On a "restored" note: the snapshot that undoes the restore. */
   restoreUndo?: string;

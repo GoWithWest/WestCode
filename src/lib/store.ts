@@ -279,6 +279,12 @@ export type HelixState = {
   openNewWith: (p: { cwd?: string; hostId?: string; prompt?: string; providerId?: string }) => void;
   /** Copy the conversation into a new session (Claude Desktop's Fork). */
   forkSession: (sessionId: string) => Promise<string | null>;
+  /**
+   * Rewind to before one of your messages (Claude Desktop's "Rewind to
+   * here"): the conversation is forked at the reply before it, the files go
+   * back to that message's checkpoint, and its text returns to the composer.
+   */
+  rewindTo: (sessionId: string, messageId: string) => Promise<boolean>;
   enabledAddons: string[];
   customAddons: Addon[];
   customProviders: CustomProvider[];
@@ -902,6 +908,12 @@ export function mergeHistory(
 }
 
 /** Turn a session/load replay into transcript messages. */
+/** Follow the agent's API message ids: text of the latest one, for Rewind. */
+function nextAcp(cur: ChatMessage["lastAcp"], ev: { messageId?: string; text?: string }): ChatMessage["lastAcp"] {
+  if (!ev.messageId) return cur;
+  return cur?.id === ev.messageId ? { id: cur.id, text: cur.text + (ev.text ?? "") } : { id: ev.messageId, text: ev.text ?? "" };
+}
+
 export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   let asst: ChatMessage | null = null;
@@ -959,6 +971,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
     // Chunks stream in pieces — keep appending to the trailing block of the
     // same kind instead of making one block per chunk.
     const kind = ev.type === "thought" ? "think" : "text";
+    if (ev.type === "text") asst.lastAcp = nextAcp(asst.lastAcp, ev);
     const last = asst.blocks[asst.blocks.length - 1];
     if (last && last.type === kind) last.text += ev.text ?? "";
     else asst.blocks.push({ type: kind, text: ev.text ?? "" });
@@ -1128,7 +1141,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
         } else {
           blocks.push({ type: "text", text: ev.text! });
         }
-        return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true };
+        return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true, lastAcp: nextAcp(m.lastAcp, ev) };
       }),
     }));
     return;
@@ -1383,6 +1396,54 @@ export const useHelix = create<HelixState>((set, get) => ({
   newOpen: false,
   newProviderId: null,
   newPrefill: null,
+  rewindTo: async (sessionId, messageId) => {
+    const api = westcode();
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    if (!api?.forkSession || !ses?.agentSessionId || ses.hostId || ses.status === "running") return false;
+    const idx = ses.messages.findIndex((m) => m.id === messageId);
+    const msg = ses.messages[idx];
+    if (!msg || msg.role !== "user") return false;
+    const note = (text: string) =>
+      set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, systemNote(text)] })) }));
+    const before = [...ses.messages.slice(0, idx)].reverse().find((m) => m.role === "assistant" && m.lastAcp?.id);
+    let agentSessionId: string | undefined;
+    if (before?.lastAcp) {
+      const r = await api.forkSession({
+        providerId: ses.providerId,
+        cwd: ses.cwd,
+        agentSessionId: ses.agentSessionId,
+        model: ses.model,
+        effort: ses.effort,
+        at: { messageId: before.lastAcp.id, text: before.lastAcp.text },
+      });
+      if (!r.ok || !r.agentSessionId) {
+        note(`Could not rewind: ${r.error ?? "unknown error"}`);
+        return false;
+      }
+      agentSessionId = r.agentSessionId;
+    }
+    // Files back to how they were before that message (undoable).
+    if (msg.checkpoint && api.git?.restore) {
+      const r = await api.git.restore(ses.cwd, msg.checkpoint);
+      if (!r.ok) note(`Conversation rewound, but the files could not be restored: ${r.error ?? "unknown error"}`);
+    }
+    const text = msg.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    void westcode()?.stopSession(sessionId);
+    set((st) => ({
+      sessions: patchSession(st.sessions, sessionId, (x) => ({
+        ...x,
+        agentSessionId,
+        messages: x.messages.slice(0, idx),
+        queued: undefined,
+        updatedAt: Date.now(),
+      })),
+    }));
+    hydrated.add(sessionId);
+    persistDesk();
+    window.dispatchEvent(new CustomEvent("westcode:compose", { detail: { sessionId, text } }));
+    return true;
+  },
+
   forkSession: async (sessionId) => {
     const api = westcode();
     const ses = get().sessions.find((s) => s.id === sessionId);

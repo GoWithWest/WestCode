@@ -158,7 +158,8 @@ export function mapUpdate(params, opts = {}) {
     return { type: "thought", text: extractText(u) };
   }
   if (kind === "agent_message_chunk") {
-    return { type: "text", text: extractText(u) };
+    // The API message id: Rewind forks the conversation at one.
+    return { type: "text", text: extractText(u), ...(u.messageId ? { messageId: String(u.messageId) } : {}) };
   }
   if (kind === "tool_call" || kind === "tool_call_update") {
     const raw = u.rawInput && typeof u.rawInput === "object" ? u.rawInput : {};
