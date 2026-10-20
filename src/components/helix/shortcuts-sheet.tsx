@@ -8,6 +8,8 @@ const KEYS: [string, string][] = [
   ["Ctrl+Tab · ⌘⇧]", "Next session"],
   ["Ctrl+⇧Tab · ⌘⇧[", "Previous session"],
   ["⌘1 · ⌘2 · ⌘3", "Mosaic · Focus · Split"],
+  ["⌘⇧M · ⌘⇧I · ⌘⇧E", "Permission mode · model · effort pickers"],
+  ["Ctrl+`", "Terminal in the session's folder"],
   ["⌘O", "Transcript detail: Normal → Thinking → Verbose"],
   ["⌘⇧G", "Source control"],
   ["⌘,", "Settings"],

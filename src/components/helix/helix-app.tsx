@@ -70,6 +70,8 @@ export function HelixApp() {
         const i = live.findIndex((s) => s.id === state.activeId);
         const step = action === "next" ? 1 : -1;
         state.setActive(live[(i + step + live.length) % live.length]!.id);
+      } else if (action.startsWith("panel-")) {
+        window.dispatchEvent(new CustomEvent("westcode:panel", { detail: { panel: action.slice(6) } }));
       } else if (action === "palette" || action === "find" || action === "shortcuts") {
         window.dispatchEvent(new CustomEvent(`westcode:${action}`));
       } else if (action === "split") {

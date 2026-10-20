@@ -112,6 +112,17 @@ export function Composer({ session }: { session: Session }) {
     return () => window.clearTimeout(t);
   }, [value, files, session.id]);
 
+  // ⌘⇧M / ⌘⇧I / ⌘⇧E open the mode, model and effort pickers (Claude Desktop).
+  useEffect(() => {
+    const onPanel = (e: Event) => {
+      const p = (e as CustomEvent<{ panel: Panel }>).detail?.panel ?? null;
+      if (useHelix.getState().activeId !== session.id) return;
+      setPanel((cur) => (cur === p ? null : p));
+    };
+    window.addEventListener("westcode:panel", onPanel);
+    return () => window.removeEventListener("westcode:panel", onPanel);
+  }, [session.id]);
+
   // "Edit" on a queued message puts its text back here.
   useEffect(() => {
     const onCompose = (e: Event) => {

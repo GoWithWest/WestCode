@@ -20,6 +20,7 @@ export function Sidebar() {
   const learnPending = useHelix((s) => s.learnPending.length);
   const setNewOpen = useHelix((s) => s.setNewOpen);
   const providers = useAllProviders();
+  const hosts = useHelix((s) => s.sshHosts);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const q = query.trim().toLowerCase();
@@ -31,7 +32,8 @@ export function Sidebar() {
         (s) =>
           s.title.toLowerCase().includes(q) ||
           s.providerId.toLowerCase().includes(q) ||
-          s.cwd.toLowerCase().includes(q),
+          s.cwd.toLowerCase().includes(q) ||
+          (s.hostId ?? "").toLowerCase().includes(q),
       )
     : pool;
 
@@ -111,6 +113,12 @@ export function Sidebar() {
                     </span>
                     <span className="flex items-center justify-between gap-2 pl-[1.375rem] text-2xs text-subtle">
                       <SessionState session={ses} unread={!active && ses.updatedAt > (ses.seenAt ?? 0) && ses.status === "waiting"} />
+                      {ses.hostId ? (
+                        <span className="inline-flex min-w-0 shrink items-center gap-0.5 truncate" title="Runs on this SSH host">
+                          <Server className="size-2.5 shrink-0" />
+                          {hosts.find((h) => h.id === ses.hostId)?.name ?? ses.hostId}
+                        </span>
+                      ) : null}
                       <span className="shrink-0 tabular-nums">
                         {relativeTime(ses.updatedAt, clock)}
                       </span>
