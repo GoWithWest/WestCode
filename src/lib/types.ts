@@ -126,6 +126,10 @@ export type Session = {
   turns: number;
   slashCommands?: { cmd: string; args?: string; hint: string; kind: "builtin" | "skill" }[];
   permission?: PermissionPrompt | null;
+  /** A usage limit was hit; it resets at this time (ms). */
+  limitResetAt?: number;
+  /** Continue automatically at this time (ms), after the limit resets. */
+  autoContinueAt?: number;
   /** Open question card (the agent waits for the answer). */
   question?: QuestionPrompt | null;
   availableModels?: { id: string; label: string }[];

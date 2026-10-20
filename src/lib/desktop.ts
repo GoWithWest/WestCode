@@ -102,6 +102,7 @@ export type SessionEvent = {
   diffs?: { path: string; oldText: string; newText: string }[];
   plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
   usage?: { used: number; size: number };
+  rateLimit?: { status?: string; resetsAt?: number; type?: string };
   modeId?: string;
   suggestion?: string | null;
   task?: { id: string; kind: "background" | "subagent"; description?: string; state: string; summary?: string };

@@ -318,6 +318,18 @@ export function SettingsView() {
           <label className="mt-3 flex items-start gap-3">
             <input
               type="checkbox"
+              checked={settings.autoContinueAtReset ?? true}
+              onChange={(e) => update({ autoContinueAtReset: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Continue automatically when a usage limit resets.</span> A
+              Claude session that stops at its limit picks up again a minute after the reset.
+            </span>
+          </label>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
               checked={settings.launchAtLogin}
               onChange={(e) => update({ launchAtLogin: e.target.checked })}
               className="mt-0.5 size-4 accent-[var(--color-accent)]"

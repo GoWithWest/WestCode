@@ -11,6 +11,7 @@ import {
 } from "./catalog";
 import { formatOutgoing, imagesIn } from "./fs";
 import type { SessionPreset } from "./presets";
+import { CONTINUE_PROMPT, limitResetAt, resumeAt, resumeLabel } from "./limits";
 import {
   DEFAULT_ENABLED,
   LIBRARY,
@@ -150,6 +151,8 @@ export type AppSettings = {
   claudeOutputStyle?: string;
   /** Saved setups shown in the New session dialog. */
   sessionPresets?: SessionPreset[];
+  /** Continue a session automatically when the usage limit it hit resets. */
+  autoContinueAtReset?: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -341,6 +344,8 @@ export type HelixState = {
   applyCliUpdate: (id: string) => Promise<void>;
   dismissCliUpdate: (id: string) => void;
   answerPermission: (sessionId: string, optionId: string) => void;
+  /** Stop waiting for the usage limit to reset; or continue right away. */
+  cancelAutoContinue: (sessionId: string, continueNow?: boolean) => void;
   /** answers null = decline. */
   answerQuestion: (sessionId: string, answers: Record<string, string | string[]> | null) => void;
   rememberFolder: (folder: RecentFolder) => void;
@@ -1023,7 +1028,12 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     return;
   }
   if (ev.type === "usage" && ev.usage) {
-    patch((ses) => ({ ...ses, usage: ev.usage }));
+    const reset = limitResetAt(ev.rateLimit);
+    patch((ses) => ({
+      ...ses,
+      usage: ev.usage,
+      ...(reset !== undefined ? { limitResetAt: reset ?? undefined } : {}),
+    }));
     return;
   }
   if (ev.type === "info") {
@@ -1237,6 +1247,45 @@ function spawnableProviderId(providerId: string, state: HelixState): string {
   return PROVIDER_ORDER[0]!;
 }
 
+// Auto-continue after a usage limit resets: one timer per waiting session.
+const continueTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function armContinue(sessionId: string, at: number) {
+  clearTimeout(continueTimers.get(sessionId));
+  const wait = Math.min(Math.max(0, at - Date.now()), 2 ** 31 - 1);
+  continueTimers.set(
+    sessionId,
+    setTimeout(() => {
+      continueTimers.delete(sessionId);
+      const st = useHelix.getState();
+      const ses = st.sessions.find((s) => s.id === sessionId);
+      if (!ses?.autoContinueAt || ses.archivedAt) return;
+      if (ses.autoContinueAt > Date.now() + 1000) return armContinue(sessionId, ses.autoContinueAt);
+      useHelix.setState((s) => ({
+        sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, autoContinueAt: undefined, limitResetAt: undefined })),
+      }));
+      if (ses.status !== "running") void st.send(sessionId, CONTINUE_PROMPT);
+    }, wait),
+  );
+}
+
+/** A turn ended while a usage limit was hit: continue when it resets (setting on by default). */
+function maybeAutoContinue(sessionId: string) {
+  const st = useHelix.getState();
+  const ses = st.sessions.find((s) => s.id === sessionId);
+  if (!ses || ses.autoContinueAt || st.settings.autoContinueAtReset === false) return;
+  const at = resumeAt(ses.limitResetAt);
+  if (!at) return;
+  useHelix.setState((s) => ({
+    sessions: patchSession(s.sessions, sessionId, (x) => ({
+      ...x,
+      autoContinueAt: at,
+      messages: [...x.messages, systemNote(`Usage limit reached. Continues automatically at ${resumeLabel(at)}.`)],
+    })),
+  }));
+  armContinue(sessionId, at);
+}
+
 let eventsBound = false;
 function bindDesktopEvents() {
   const api = westcode();
@@ -1265,6 +1314,7 @@ function bindDesktopEvents() {
     applyEvent(ev.sessionId, pending, ev);
     if (ev.type === "done" || ev.type === "error") {
       promptAsst.delete(ev.sessionId);
+      maybeAutoContinue(ev.sessionId);
     }
   });
   api.onScheduleFire?.((p) => {
@@ -1660,6 +1710,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       Boolean,
     ) as string[];
     for (const id of new Set(onScreen)) void get().hydrateSession(id);
+    for (const s of get().sessions) if (s.autoContinueAt && !s.archivedAt) armContinue(s.id, s.autoContinueAt);
     bindDeskPersist();
     void get().refreshCli();
     void get().refreshSshHosts();
@@ -1754,6 +1805,15 @@ export const useHelix = create<HelixState>((set, get) => ({
     } catch {
       set({ liveAddons: had, libraryStatus: "ready" });
     }
+  },
+
+  cancelAutoContinue: (sessionId, continueNow) => {
+    clearTimeout(continueTimers.get(sessionId));
+    continueTimers.delete(sessionId);
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, autoContinueAt: undefined, ...(continueNow ? { limitResetAt: undefined } : {}) })),
+    }));
+    if (continueNow) void get().send(sessionId, CONTINUE_PROMPT);
   },
 
   answerQuestion: (sessionId, answers) => {
@@ -2819,6 +2879,12 @@ export const useHelix = create<HelixState>((set, get) => ({
 
     const replay = Boolean(opts?.replay);
     const outgoing = replay ? trimmed : formatOutgoing(trimmed, attachments);
+    // A message from the user replaces the wait for the usage limit to reset.
+    if (!opts?.incoming && !replay && session.autoContinueAt) {
+      clearTimeout(continueTimers.get(sessionId));
+      continueTimers.delete(sessionId);
+      set((s) => ({ sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, autoContinueAt: undefined })) }));
+    }
 
     // Persona assignment happens when the human message is first ACCEPTED —
     // including messages queued while a turn runs. The replay drain skips it

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Circle, CircleDot, Layers, MessageCircleQuestion, ShieldQuestion, Target } from "lucide-react";
+import { Check, ChevronDown, Circle, CircleDot, Hourglass, Layers, MessageCircleQuestion, ShieldQuestion, Target } from "lucide-react";
+import { resumeLabel } from "@/lib/limits";
 import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import type { QuestionField, Session } from "@/lib/types";
@@ -197,6 +198,29 @@ export function PermissionCard({ session, agentName }: { session: Session; agent
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Waiting for a usage limit to reset; the session then continues by itself. */
+export function LimitCard({ session }: { session: Session }) {
+  const cancel = useHelix((s) => s.cancelAutoContinue);
+  if (!session.autoContinueAt) return null;
+  return (
+    <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
+      <div className="flex items-center gap-2.5 rounded-xl border border-border bg-surface px-3.5 py-2.5" role="status">
+        <Hourglass className="size-4 shrink-0 text-muted-foreground" />
+        <p className="min-w-0 flex-1 text-xs">
+          Usage limit reached. Continues automatically at{" "}
+          <span className="font-medium">{resumeLabel(session.autoContinueAt)}</span>.
+        </p>
+        <Button size="sm" variant="ghost" onClick={() => cancel(session.id)}>
+          Cancel
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => cancel(session.id, true)}>
+          Continue now
+        </Button>
       </div>
     </div>
   );

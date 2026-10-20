@@ -108,7 +108,13 @@ export function mapUpdate(params, opts = {}) {
     const used = Number(u.used);
     const size = Number(u.size);
     if (!Number.isFinite(used)) return { type: "noop" };
-    return { type: "usage", usage: { used, size: Number.isFinite(size) ? size : 0 } };
+    // Claude: the CLI's rate-limit state rides along (status, resetsAt epoch seconds).
+    const rl = u._meta?.["_claude/rateLimit"];
+    const rateLimit =
+      rl && typeof rl === "object" && typeof rl.status === "string"
+        ? { status: rl.status, ...(typeof rl.resetsAt === "number" ? { resetsAt: rl.resetsAt } : {}), ...(rl.rateLimitType ? { type: String(rl.rateLimitType) } : {}) }
+        : undefined;
+    return { type: "usage", usage: { used, size: Number.isFinite(size) ? size : 0 }, ...(rateLimit ? { rateLimit } : {}) };
   }
   if (kind === "session_info_update") {
     const title = typeof u.title === "string" ? u.title.trim() : "";
