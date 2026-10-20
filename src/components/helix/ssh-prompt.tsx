@@ -25,7 +25,7 @@ export function SshPromptDialog() {
   const cur = queue[0];
   if (!api?.reply || !cur) return null;
   const yesNo = /yes\/no/i.test(cur.prompt);
-  const isPassword = /password/i.test(cur.prompt) && !yesNo;
+  const isPassword = /pass(word|phrase)/i.test(cur.prompt) && !/(one[- ]time|verification|code|otp|token)/i.test(cur.prompt) && !yesNo;
 
   const answer = (v: string | null) => {
     api.reply!(cur.id, v, isPassword && remember);
@@ -73,7 +73,7 @@ export function SshPromptDialog() {
                 {isPassword && cur.canRemember ? (
                   <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                     <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-                    Remember this password (encrypted with your keychain)
+                    Remember it (encrypted with your keychain)
                   </label>
                 ) : null}
                 <div className="mt-4 flex justify-end gap-2">

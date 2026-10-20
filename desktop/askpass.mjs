@@ -89,9 +89,9 @@ export function hasSavedPassword(hostId) {
   return Boolean(readSecrets()[hostId]);
 }
 
-/** A password prompt (not a one-time code, host key question, etc.). */
+/** A password or key passphrase prompt (not a one-time code, host key question, etc.). */
 export function isPasswordPrompt(prompt) {
-  return /password/i.test(prompt) && !/(one[- ]time|verification|code|otp|token|yes\/no)/i.test(prompt);
+  return /pass(word|phrase)/i.test(prompt) && !/(one[- ]time|verification|code|otp|token|yes\/no)/i.test(prompt);
 }
 
 /**
