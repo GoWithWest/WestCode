@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { FolderOpen } from "lucide-react";
+import { ChevronLeft, Folder, FolderOpen, Laptop, Server } from "lucide-react";
 import { defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
+import { westcode } from "@/lib/desktop";
 import { pickDirectory } from "@/lib/fs";
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -28,6 +29,11 @@ export function NewSessionDialog() {
   const [projectId, setProjectId] = useState("scratch");
   const [cwd, setCwd] = useState(settings.defaultCwd);
   const [title, setTitle] = useState("");
+  const sshHosts = useHelix((s) => s.sshHosts);
+  const setView = useHelix((s) => s.setView);
+  const [hostId, setHostId] = useState("");
+  // Folder browser for an SSH host (the native picker only sees this Mac).
+  const [remote, setRemote] = useState<{ path: string; dirs: string[]; error?: string; loading?: boolean } | null>(null);
   const scoped = settings.defaultProviderId === initialProvider;
   const [model, setModel] = useState(
     (scoped && settings.defaultModel) ||
@@ -74,7 +80,29 @@ export function NewSessionDialog() {
     setEffort(defaultEffortFor(id));
   }
 
+  async function browseRemote(path?: string) {
+    const api = westcode()?.ssh;
+    if (!api || !hostId) return;
+    setRemote((r) => ({ path: r?.path ?? "", dirs: r?.dirs ?? [], loading: true }));
+    const res = await api.ls(hostId, path);
+    if (!res.ok) setRemote((r) => ({ path: r?.path ?? "", dirs: r?.dirs ?? [], error: res.error }));
+    else {
+      setRemote({ path: res.path ?? "", dirs: res.dirs ?? [] });
+      setCwd(res.path ?? "");
+    }
+  }
+
+  function pickHost(id: string) {
+    setHostId(id);
+    setRemote(null);
+    setCwd(id ? "" : settings.defaultCwd);
+  }
+
   async function browse() {
+    if (hostId) {
+      await browseRemote(cwd.trim() || undefined);
+      return;
+    }
     const folder = await pickDirectory();
     if (!folder) return;
     rememberFolder(folder);
@@ -92,6 +120,7 @@ export function NewSessionDialog() {
       title: title.trim(),
       model,
       effort,
+      ...(hostId ? { hostId } : {}),
     });
     setTitle("");
   }
@@ -108,6 +137,40 @@ export function NewSessionDialog() {
             Pick a provider and the folder it should work in. Browse this Mac,
             or use a recent project.
           </Dialog.Description>
+
+          <div className="mt-4">
+            <span className="text-2xs font-medium tracking-wide text-subtle uppercase">Runs on</span>
+            <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Runs on">
+              {[{ id: "", name: "This Mac" }, ...sshHosts].map((h) => (
+                <button
+                  key={h.id || "local"}
+                  type="button"
+                  role="radio"
+                  aria-checked={hostId === h.id}
+                  onClick={() => pickHost(h.id)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
+                    hostId === h.id
+                      ? "border-accent bg-muted text-foreground"
+                      : "border-border text-muted-foreground hover:border-border-strong",
+                  )}
+                >
+                  {h.id ? <Server className="size-3" /> : <Laptop className="size-3" />}
+                  {h.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setNewOpen(false);
+                  setView("settings");
+                }}
+                className="rounded-full border border-dashed border-border px-2.5 py-1 text-xs text-subtle hover:text-foreground"
+              >
+                + SSH host
+              </button>
+            </div>
+          </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
             {list.map((p) => {
@@ -197,8 +260,48 @@ export function NewSessionDialog() {
               </Button>
             </div>
           </label>
+          {hostId && remote ? (
+            <div className="mt-2 rounded-md border border-border bg-window" aria-label="Folders on the host">
+              <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
+                <button
+                  type="button"
+                  aria-label="Up one folder"
+                  className="rounded p-0.5 text-subtle hover:bg-muted hover:text-foreground"
+                  onClick={() => void browseRemote(remote.path.replace(/\/[^/]+\/?$/, "") || "/")}
+                >
+                  <ChevronLeft className="size-3.5" />
+                </button>
+                <span className="min-w-0 flex-1 truncate font-mono text-2xs">{remote.path}</span>
+                {remote.loading ? <span className="text-2xs text-subtle">Loading…</span> : null}
+              </div>
+              {remote.error ? (
+                <p className="px-2.5 py-2 text-2xs text-destructive" role="alert">
+                  {remote.error}
+                </p>
+              ) : (
+                <ul className="scrollbar-thin max-h-44 overflow-y-auto py-1">
+                  {remote.dirs.length ? (
+                    remote.dirs.map((d) => (
+                      <li key={d}>
+                        <button
+                          type="button"
+                          onClick={() => void browseRemote(`${remote.path.replace(/\/$/, "")}/${d}`)}
+                          className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-xs hover:bg-muted"
+                        >
+                          <Folder className="size-3 text-subtle" />
+                          {d}
+                        </button>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="px-2.5 py-1 text-2xs text-subtle">No folders here.</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {recents.map((f) => (
+            {(hostId ? [] : recents).map((f) => (
               <button
                 key={f.path}
                 type="button"

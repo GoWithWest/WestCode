@@ -8,6 +8,14 @@ import { childEnv, which } from "./path.mjs";
 import { deskDir } from "./desk-paths.mjs";
 import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate, modelsFrom } from "./acp-map.mjs";
 import { cliHasWestcreate, sessionServer } from "./westcreate.mjs";
+import {
+  claudeRemoteEnv,
+  getHost,
+  listRemoteClaude,
+  localStandIn,
+  q,
+  remoteAcpSpawn,
+} from "./ssh.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let deskUrl = "";
@@ -138,6 +146,7 @@ function spawnSpec(providerId, model, effort, opts = {}) {
   const modelId = mapModel(providerId, model);
   const effortId = mapEffort(providerId, effort);
   const perm = permissionFlag(providerId, opts.permissionMode);
+  if (opts.remote) return remoteSpawnSpec(providerId, modelId, effortId, perm, opts, env);
 
   if (providerId === "grok") {
     const bin = which("grok", env);
@@ -204,6 +213,46 @@ function spawnSpec(providerId, model, effort, opts = {}) {
   throw new Error(`Unknown provider: ${providerId}`);
 }
 
+/**
+ * The same agents on an SSH host. Grok and Codex run whole over ssh. Claude's
+ * adapter stays local (it needs Node 22) and drives the host's Claude Code
+ * through the ssh wrapper; see ssh.mjs.
+ */
+function remoteSpawnSpec(providerId, modelId, effortId, perm, opts, env) {
+  const h = opts.remote;
+  if (providerId === "grok") {
+    const flags = ["--no-auto-update", "--permission-mode", perm];
+    if (perm === "bypassPermissions") flags.push("--always-approve");
+    if (opts.unsandboxed) flags.push("--sandbox", "none");
+    flags.push("agent");
+    if (perm === "bypassPermissions") flags.push("--always-approve");
+    flags.push("-m", modelId, "--reasoning-effort", effortId, "stdio");
+    const cmd = `grok ${flags.map(q).join(" ")}`;
+    return { ...remoteAcpSpawn(h, opts.remoteCwd, cmd), env };
+  }
+  if (providerId === "codex") {
+    const cmd = `if command -v npx >/dev/null 2>&1; then exec npx -y ${ADAPTERS.codex}; else exec codex acp; fi`;
+    return { ...remoteAcpSpawn(h, opts.remoteCwd, `sh -c '${cmd}'`), env };
+  }
+  if (providerId === "claude") {
+    const npx = which("npx", env);
+    if (!npx) {
+      throw new Error("npx is required on this Mac to host Claude Code over ACP. Install Node, then retry.");
+    }
+    return {
+      command: npx,
+      args: ["-y", ADAPTERS.claude],
+      env: {
+        ...npmCacheEnv(env),
+        ...claudeRemoteEnv(h),
+        CLAUDE_CODE_MODEL: modelId,
+        CLAUDE_CODE_PERMISSION_MODE: perm,
+      },
+    };
+  }
+  throw new Error(`${providerId} cannot run on an SSH host.`);
+}
+
 class AcpSession {
   constructor(id, providerId, cwd, model, effort, permissionMode, emit) {
     this.id = id;
@@ -237,6 +286,8 @@ class AcpSession {
     this.readOnly = false;
     /** Learning reviewer: {doMemory, doSkill, origin}; reads and proposes only. */
     this.reviewer = null;
+    /** SSH host this session runs on (ssh.mjs), or null for this Mac. */
+    this.remote = null;
   }
 
   takeReplay() {
@@ -302,15 +353,24 @@ class AcpSession {
     const spec = spawnSpec(this.providerId, this.model, this.effort, {
       unsandboxed: this.unsandboxed,
       permissionMode: this.permissionMode,
+      remote: this.remote,
+      remoteCwd: this.cwd,
     });
-    if (!existsSync(this.cwd)) {
+    // On a host the folder is the host's; locally the process starts in a
+    // stand-in (Claude's adapter needs an existing cwd) or in the home folder.
+    const spawnCwd = this.remote
+      ? this.providerId === "claude"
+        ? localStandIn(this.remote, this.cwd)
+        : homedir()
+      : this.cwd;
+    if (!this.remote && !existsSync(this.cwd)) {
       this.dead = true;
       throw new Error(
         `Folder ${this.cwd} no longer exists — pick another folder for this session.`,
       );
     }
     this.proc = spawn(spec.command, spec.args, {
-      cwd: this.cwd,
+      cwd: spawnCwd,
       env: spec.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -355,7 +415,9 @@ class AcpSession {
       protocolVersion: 1,
       clientInfo: { name: "westcode", title: "WestCode", version: "1.0.0" },
       clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
+        // On an SSH host the files are the host's: the agent reads and writes
+        // them itself, never through this Mac.
+        fs: this.remote ? { readTextFile: false, writeTextFile: false } : { readTextFile: true, writeTextFile: true },
         terminal: false,
         // Claude's adapter sends its task plan, predicted next prompt and
         // background-task updates only to clients that declare the
@@ -371,11 +433,15 @@ class AcpSession {
     if (this.canSteer) this.emit({ type: "caps", steering: true });
 
     // A history read needs no tools and must not join the desk bus.
-    const mcpServers = this.reviewer
-      ? learnMcp(this.id, this.reviewer)
-      : this.readOnly
-        ? []
-        : deskMcp(this.id, this.providerId);
+    // Local MCP servers are commands on this Mac; a CLI on a host cannot
+    // start them, so a remote session gets none.
+    const mcpServers = this.remote
+      ? []
+      : this.reviewer
+        ? learnMcp(this.id, this.reviewer)
+        : this.readOnly
+          ? []
+          : deskMcp(this.id, this.providerId);
     const resumeId = this.resumeId;
     if (resumeId) {
       // session/load replays the whole transcript as session/update
@@ -450,6 +516,8 @@ class AcpSession {
       });
     } catch (err) {
       if (/already|authenticated|logged in/i.test(err.message)) return;
+      // A host's CLI signs in on the host; this Mac's login state is not it.
+      if (this.remote) return;
       throw new Error(
         `Could not authenticate ${this.providerId}. Run login from Connections. ${err.message}`,
       );
@@ -823,6 +891,7 @@ export function ensureSession(opts, emit) {
     existing.cwd === cwd &&
     existing.model === opts.model &&
     existing.effort === opts.effort &&
+    (existing.remote?.id || null) === (opts.hostId || null) &&
     // Permission flags are spawn-time (--always-approve, env) — a mode
     // change must respawn, or Bypass→Ask would leave approvals wide open.
     (existing.permissionMode || "ask") === (opts.permissionMode || "ask")
@@ -841,6 +910,10 @@ export function ensureSession(opts, emit) {
   );
   s.resumeId = opts.agentSessionId || null;
   s.reviewer = opts.reviewer || null;
+  if (opts.hostId) {
+    s.remote = getHost(opts.hostId);
+    if (!s.remote) throw new Error(`SSH host "${opts.hostId}" is not set up any more — add it again in Settings → SSH hosts.`);
+  }
   s.readOnly = Boolean(opts.readOnly && s.resumeId);
   sessions.set(opts.sessionId, s);
   return s;
@@ -854,10 +927,15 @@ export function ensureSession(opts, emit) {
  * spawned only for the query and killed straight after.
  */
 export async function listAcpSessions(providerId, opts = {}) {
+  const remote = opts.hostId ? getHost(opts.hostId) : null;
+  if (opts.hostId && !remote) return { ok: false, output: `Unknown SSH host ${opts.hostId}.`, sessions: [] };
+  // Claude's sessions on a host are files there; read them with sh, no agent.
+  if (remote && providerId === "claude") return listRemoteClaude(remote, opts.limit);
   const spec = spawnSpec(providerId, opts.model || "", opts.effort || "", {
     permissionMode: "ask",
+    remote,
   });
-  const cwd = expandHome(opts.cwd || homedir());
+  const cwd = remote ? homedir() : expandHome(opts.cwd || homedir());
   const proc = spawn(spec.command, spec.args, {
     cwd,
     env: spec.env,
@@ -929,6 +1007,7 @@ export async function listAcpSessions(providerId, opts = {}) {
         cwd: s.cwd || "",
         title: String(s.title || "").trim(),
         updatedAt: Date.parse(s.updatedAt || s.updated_at || "") || 0,
+        ...(remote ? { hostId: remote.id } : {}),
       }))
       .filter((s) => s.agentSessionId);
     return { ok: true, sessions: rows };

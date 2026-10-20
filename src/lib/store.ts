@@ -57,6 +57,7 @@ import {
   type CliUpdate,
   type LiveAddon,
   type SessionEvent,
+  type SshHost,
 } from "./desktop";
 import type {
   AgentRosterItem,
@@ -243,6 +244,8 @@ type CreateOpts = {
   agentId?: string;
   /** Do not steal focus — used when the desk bus spawns a session. */
   background?: boolean;
+  /** Run on this SSH host instead of this Mac. */
+  hostId?: string;
 };
 
 export type HelixState = {
@@ -284,6 +287,13 @@ export type HelixState = {
   cliSessionStatus: "idle" | "loading" | "ready";
   /** Providers that failed to list, so a broken CLI is not silently empty. */
   cliSessionErrors: string[];
+  /** Sessions a CLI here lists whose folder is on another machine. */
+  cliSessionsElsewhere: number;
+  /** Machines sessions can run on over SSH (Settings → SSH hosts). */
+  sshHosts: SshHost[];
+  /** Hosts named in ~/.ssh/config, offered for import. */
+  sshConfigHosts: (Omit<SshHost, "id"> & { hostName?: string })[];
+  refreshSshHosts: () => Promise<void>;
 
   setView: (v: LayoutView) => void;
   setActive: (id: string) => void;
@@ -1363,6 +1373,19 @@ export const useHelix = create<HelixState>((set, get) => ({
   cliSessions: [],
   cliSessionStatus: "idle",
   cliSessionErrors: [],
+  cliSessionsElsewhere: 0,
+  sshHosts: [],
+  sshConfigHosts: [],
+  refreshSshHosts: async () => {
+    const api = westcode()?.ssh;
+    if (!api) return;
+    try {
+      const r = await api.list();
+      set({ sshHosts: r.hosts ?? [], sshConfigHosts: r.config ?? [] });
+    } catch {
+      /* keep what we had */
+    }
+  },
 
   setView: (view) => {
     viewTouched = true;
@@ -1475,6 +1498,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     for (const id of new Set(onScreen)) void get().hydrateSession(id);
     bindDeskPersist();
     void get().refreshCli();
+    void get().refreshSshHosts();
     void get().refreshLibrary();
     void get().refreshUpdates();
     void get().refreshLearning();
@@ -1600,6 +1624,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       set({
         cliSessions: res.ok ? res.sessions : had,
         cliSessionErrors: res.errors ?? [],
+        cliSessionsElsewhere: res.elsewhere ?? 0,
         cliSessionStatus: "ready",
       });
     } catch (err) {
@@ -1631,6 +1656,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         effort: ses.effort,
         permissionMode: ses.permissionMode,
         agentSessionId: ses.agentSessionId!,
+        hostId: ses.hostId,
       });
       const messages = res.ok
         ? replayToMessages(res.history ?? [])
@@ -1661,7 +1687,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     // opening a second view of one agent-side session. A pane whose history
     // never loaded is retried instead of being a dead end.
     const existing = get().sessions.find(
-      (s) => s.agentSessionId === row.agentSessionId,
+      (s) => s.agentSessionId === row.agentSessionId && (s.hostId || null) === (row.hostId || null),
     );
     if (existing) {
       set((state) => ({
@@ -1694,6 +1720,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       messages: [],
       turns: 0,
       agentSessionId: row.agentSessionId,
+      ...(row.hostId ? { hostId: row.hostId } : {}),
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -1709,6 +1736,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       effort: session.effort,
       permissionMode: session.permissionMode,
       agentSessionId: row.agentSessionId,
+      hostId: row.hostId,
     });
     set((state) => ({
       sessions: patchSession(state.sessions, session.id, (ses) => ({
@@ -1745,6 +1773,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     agentId,
     background,
     sideOf,
+    hostId,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
     const settings = get().settings;
@@ -1774,6 +1803,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       turns: 0,
       agentId,
       sideOf,
+      ...(hostId ? { hostId } : {}),
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -2764,7 +2794,9 @@ export const useHelix = create<HelixState>((set, get) => ({
     promptAsst.set(sessionId, asstId);
     // Snapshot the folder first (git repos only), so this turn's file
     // changes can be rolled back from the message.
-    if (userMsg && userMsg.role === "user" && api.git?.checkpoint) {
+    // Checkpoints are git snapshots of a folder on this Mac; a session on an
+    // SSH host keeps its files there.
+    if (userMsg && userMsg.role === "user" && api.git?.checkpoint && !latest.hostId) {
       try {
         const cp = await api.git.checkpoint(latest.cwd, trimmed.slice(0, 60));
         if (cp.ok && cp.sha) {
@@ -2879,6 +2911,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         effort: latest.effort,
         permissionMode: latest.permissionMode,
         agentSessionId: latest.agentSessionId,
+        hostId: latest.hostId,
         history,
         text: promptText,
       });
@@ -3132,6 +3165,7 @@ Question: ${arg}`;
       permissionMode: "plan",
       title: `Side: ${arg.slice(0, 40)}`,
       sideOf: parent.id,
+      hostId: parent.hostId,
     });
     set((s) => ({
       sessions: patchSession(s.sessions, parent.id, (x) => ({ ...x, sideOpen: sideId, updatedAt: Date.now() })),

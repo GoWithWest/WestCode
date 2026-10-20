@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, GitBranch, Pencil, Terminal, X } from "lucide-react";
+import { Code2, Download, Folder, GitBranch, Pencil, Server, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -73,13 +73,17 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-2xs text-muted-foreground">
             <ProviderChip id={session.providerId} />
             <AgentBadge session={session} />
+            {session.hostId ? <HostChip hostId={session.hostId} /> : null}
             <CwdPicker session={session} />
-            <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
+            {/* Source control and the editor act on this Mac's files. */}
+            {!session.hostId ? (
+              <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
+            ) : null}
             {!compact ? (
               <>
                 <ExportButton session={session} />
                 <ResumeButton session={session} />
-                <EditorButton session={session} />
+                {!session.hostId ? <EditorButton session={session} /> : null}
               </>
             ) : null}
           </div>
@@ -241,6 +245,7 @@ function ExportButton({ session }: { session: Session }) {
 
 function ResumeButton({ session }: { session: Session }) {
   const [copied, setCopied] = useState(false);
+  const host = useHelix((s) => s.sshHosts.find((h) => h.id === session.hostId));
   const bin =
     session.providerId === "grok"
       ? "grok"
@@ -256,7 +261,11 @@ function ResumeButton({ session }: { session: Session }) {
       : session.agentSessionId
         ? `${bin} --resume ${session.agentSessionId}`
         : `${bin} --resume`;
-  const cmd = `cd ${JSON.stringify(session.cwd)} && ${resume}`;
+  const local = `cd ${JSON.stringify(session.cwd)} && ${resume}`;
+  // On an SSH host the CLI and its transcript are there: resume there.
+  const cmd = host
+    ? `ssh -t ${host.port ? `-p ${host.port} ` : ""}${host.user ? `${host.user}@` : ""}${host.host} ${JSON.stringify(local)}`
+    : local;
   return (
     <button
       type="button"
@@ -271,6 +280,19 @@ function ResumeButton({ session }: { session: Session }) {
       <Terminal className="size-3" />
       {copied ? "Copied" : "Terminal"}
     </button>
+  );
+}
+
+function HostChip({ hostId }: { hostId: string }) {
+  const host = useHelix((s) => s.sshHosts.find((h) => h.id === hostId));
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-px text-foreground"
+      title={host ? `Runs on ${host.user ? `${host.user}@` : ""}${host.host} over SSH` : "SSH host not set up any more"}
+    >
+      <Server className="size-3" />
+      {host?.name ?? hostId}
+    </span>
   );
 }
 
@@ -296,8 +318,9 @@ function CwdPicker({ session }: { session: Session }) {
   return (
     <button
       type="button"
+      disabled={Boolean(session.hostId)}
       onClick={async () => {
-        if (!api?.pickFolder) return;
+        if (!api?.pickFolder || session.hostId) return;
         const folder = await api.pickFolder();
         if (folder) setCwd(session.id, folder.path);
       }}

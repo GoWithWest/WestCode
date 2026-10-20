@@ -114,6 +114,8 @@ export type Session = {
    */
   checkpoints?: { text: string; sha: string }[];
     agentSessionId?: string;
+  /** Runs on this SSH host (Settings → SSH hosts); absent = this Mac. */
+  hostId?: string;
   /** Persona from the Agents menu ("You are @Oz" assigns it). */
   agentId?: string;
   /** Hidden from the default sidebar list; restorable. */

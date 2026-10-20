@@ -28,6 +28,27 @@ export type CliSession = {
   cwd: string;
   title: string;
   updatedAt: number;
+  /** Stored on this SSH host (see SshHost); absent = this Mac. */
+  hostId?: string;
+};
+
+/** A machine sessions can run on over SSH (Settings → SSH hosts). */
+export type SshHost = {
+  id: string;
+  name: string;
+  host: string;
+  user?: string;
+  port?: number;
+  identityFile?: string;
+};
+
+export type SshProbe = {
+  ok: boolean;
+  error?: string;
+  home?: string;
+  os?: string;
+  clis?: Record<"claude" | "grok" | "codex", { path: string; version?: string } | null>;
+  git?: boolean;
 };
 
 export type SessionEvent = {
@@ -359,7 +380,17 @@ type WestcodeBridge = {
     ok: boolean;
     sessions: CliSession[];
     errors: string[];
+    /** Sessions a CLI here lists whose folder is on another machine. */
+    elsewhere?: number;
   }>;
+  ssh?: {
+    list: () => Promise<{ hosts: SshHost[]; config: (Omit<SshHost, "id"> & { hostName?: string })[] }>;
+    save: (host: Partial<SshHost>) => Promise<{ ok: boolean; host?: SshHost; error?: string }>;
+    remove: (id: string) => Promise<{ ok: boolean }>;
+    test: (host: string | Partial<SshHost>) => Promise<SshProbe>;
+    ls: (hostId: string, path?: string) => Promise<{ ok: boolean; path?: string; dirs?: string[]; error?: string }>;
+    installClaude?: (hostId: string) => Promise<{ ok: boolean; error?: string }>;
+  };
   openSession: (payload: {
     sessionId: string;
     providerId: string;
@@ -368,6 +399,7 @@ type WestcodeBridge = {
     effort: string;
     permissionMode?: string;
     agentSessionId: string;
+    hostId?: string;
   }) => Promise<{
     ok: boolean;
     output?: string;
@@ -382,6 +414,7 @@ type WestcodeBridge = {
     effort: string;
     permissionMode?: string;
     agentSessionId?: string;
+    hostId?: string;
     history?: { role: string; text: string }[];
     text: string;
   }) => Promise<{ ok: boolean; error?: string }>;

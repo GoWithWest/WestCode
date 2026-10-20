@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, Blocks, Brain, CircleDashed, Hammer, Plus, Search, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
+import { Archive, ArchiveRestore, Blocks, Brain, CircleDashed, Hammer, Plus, Search, Server, Settings2, SlidersHorizontal, Users, X } from "lucide-react";
 import { dotActivity, dotStateFor } from "@/lib/dots";
 import type { Session } from "@/lib/types";
 import { AgentAvatar } from "./agents-view";
@@ -245,6 +245,10 @@ function CliSessionList({ query }: { query: string }) {
   const sessions = useHelix((s) => s.sessions);
   const refresh = useHelix((s) => s.refreshCliSessions);
   const open = useHelix((s) => s.openCliSession);
+  const elsewhere = useHelix((s) => s.cliSessionsElsewhere);
+  const hosts = useHelix((s) => s.sshHosts);
+  const setView = useHelix((s) => s.setView);
+  const hostName = (id?: string) => (id ? (hosts.find((h) => h.id === id)?.name ?? id) : "");
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -267,11 +271,12 @@ function CliSessionList({ query }: { query: string }) {
         (r) =>
           cliSessionTitle(r).toLowerCase().includes(query) ||
           r.providerId.toLowerCase().includes(query) ||
-          r.cwd.toLowerCase().includes(query),
+          r.cwd.toLowerCase().includes(query) ||
+          hostName(r.hostId).toLowerCase().includes(query),
       )
     : pool;
   const visible = expanded || query ? matched : matched.slice(0, 5);
-  if (!matched.length && !errors.length) return null;
+  if (!matched.length && !errors.length && !elsewhere) return null;
 
   return (
     <div className="mt-3 border-t border-border pt-2">
@@ -293,9 +298,19 @@ function CliSessionList({ query }: { query: string }) {
           {errors.join(" · ").slice(0, 200)}
         </p>
       ) : null}
+      {elsewhere && !hosts.length ? (
+        <button
+          type="button"
+          onClick={() => setView("settings")}
+          className="px-2.5 pb-1 text-left text-2xs leading-relaxed text-subtle hover:text-foreground"
+        >
+          {elsewhere} session{elsewhere === 1 ? " is" : "s are"} on another machine (SSH). Add the SSH host to open
+          {elsewhere === 1 ? " it" : " them"} →
+        </button>
+      ) : null}
       <ul className="flex flex-col">
         {visible.map((r) => (
-          <li key={`${r.providerId}:${r.agentSessionId}`}>
+          <li key={`${r.hostId ?? "local"}:${r.providerId}:${r.agentSessionId}`}>
             <button
               type="button"
               disabled={busy === r.agentSessionId}
@@ -316,6 +331,12 @@ function CliSessionList({ query }: { query: string }) {
                 </span>
               </span>
               <span className="mt-0.5 flex items-center gap-1.5 pl-4 text-2xs text-subtle">
+                {r.hostId ? (
+                  <span className="inline-flex shrink-0 items-center gap-0.5 text-muted-foreground" title={`On ${hostName(r.hostId)} over SSH`}>
+                    <Server className="size-2.5" />
+                    {hostName(r.hostId)}
+                  </span>
+                ) : null}
                 <span className="min-w-0 flex-1 truncate">
                   {r.cwd.split("/").filter(Boolean).pop() || r.cwd}
                 </span>

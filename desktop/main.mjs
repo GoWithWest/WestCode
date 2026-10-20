@@ -18,6 +18,7 @@ import * as learn from "./learn.mjs";
 import * as memoryHub from "./memory-hub.mjs";
 import * as memoryFlow from "./memory-flow.mjs";
 import * as artifacts from "./artifact-server.mjs";
+import * as sshHosts from "./ssh.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -1005,6 +1006,7 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
     effort,
     permissionMode,
     agentSessionId,
+    hostId,
     text,
     history,
   } = payload;
@@ -1024,10 +1026,15 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
       effort,
       permissionMode,
       agentSessionId,
+      hostId,
     },
     emit,
   );
   try {
+    if (hostId && providerId === "claude" && agentSessionId) {
+      const host = sshHosts.getHost(hostId);
+      if (host) await sshHosts.ensureClaudeTranscript(host, agentSessionId);
+    }
     await session.prompt(text, history || []);
     emit({ type: "done" });
     return { ok: true };
@@ -1051,18 +1058,90 @@ ipcMain.handle("sessions:cli-list", async (_e, payload) => {
   );
   const sessions = [];
   const errors = [];
+  let elsewhere = 0;
   for (const { id, res } of results) {
+    if (!res.ok) {
+      errors.push(`${id}: ${res.output}`);
+      continue;
+    }
+    // A CLI on this Mac can also list sessions whose folder is on another
+    // machine (Claude Desktop keeps a copy of its SSH sessions here). Opening
+    // those here cannot work; they are listed under their SSH host instead.
+    for (const row of res.sessions) {
+      if (row.cwd && !existsSync(row.cwd)) elsewhere += 1;
+      else sessions.push(row);
+    }
+  }
+  // Every SSH host: what its CLIs have stored there.
+  const hosts = payload?.hosts === false ? [] : sshHosts.loadHosts();
+  const remote = await Promise.all(
+    hosts.flatMap((h) =>
+      wanted
+        .filter((id) => PROVIDERS[id])
+        .map(async (id) => ({ h, id, res: await listAcpSessions(id, { hostId: h.id }) })),
+    ),
+  );
+  for (const { h, id, res } of remote) {
     if (res.ok) sessions.push(...res.sessions);
-    else errors.push(`${id}: ${res.output}`);
+    // A host without that CLI is not an error worth showing.
+    else if (!/not found|command not found|exited \(127\)/i.test(res.output)) errors.push(`${h.name} · ${id}: ${res.output}`);
   }
   sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-  return { ok: true, sessions, errors };
+  return { ok: true, sessions, errors, elsewhere };
+});
+
+// ------------------------------------------------------------------ SSH hosts
+ipcMain.handle("ssh:list", () => ({ hosts: sshHosts.loadHosts(), config: sshHosts.sshConfigHosts() }));
+ipcMain.handle("ssh:save", (_e, host) => {
+  try {
+    return { ok: true, host: sshHosts.saveHost(host) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle("ssh:remove", (_e, id) => {
+  sshHosts.removeHost(String(id || ""));
+  return { ok: true };
+});
+ipcMain.handle("ssh:test", async (_e, host) => {
+  try {
+    const h = typeof host === "string" ? sshHosts.getHost(host) : sshHosts.normalizeHost(host);
+    if (!h) return { ok: false, error: "Unknown host." };
+    return await sshHosts.probeHost(h);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+// Claude Desktop installs Claude Code on a host that lacks it; so do we, with
+// Anthropic's installer, as the SSH user, into ~/.local (no sudo).
+ipcMain.handle("ssh:install-claude", async (_e, hostId) => {
+  const h = sshHosts.getHost(String(hostId || ""));
+  if (!h) return { ok: false, error: "Unknown host." };
+  const r = await sshHosts.runRemote(h, "curl -fsSL https://claude.ai/install.sh | bash", { timeout: 600_000 });
+  if (r.code !== 0) return { ok: false, error: `Install failed: ${sshHosts.sshError(r)}` };
+  return { ok: true };
+});
+
+// Folders on a host, for the new-session folder picker.
+ipcMain.handle("ssh:ls", async (_e, { hostId, path }) => {
+  const h = sshHosts.getHost(String(hostId || ""));
+  if (!h) return { ok: false, error: "Unknown host." };
+  const dir = String(path || "");
+  const r = await sshHosts.runRemote(
+    h,
+    `cd ${dir ? sshHosts.q(dir) : '"$HOME"'} 2>/dev/null || exit 3; pwd; ls -1Ap 2>/dev/null | grep '/$' | head -n 300`,
+    { timeout: 20_000 },
+  );
+  if (r.code === 3) return { ok: false, error: "No such folder on the host." };
+  if (r.code !== 0) return { ok: false, error: sshHosts.sshError(r) };
+  const [cwd, ...dirs] = r.stdout.split("\n").filter(Boolean);
+  return { ok: true, path: cwd, dirs: dirs.map((d) => d.replace(/\/$/, "")).filter((d) => d !== "./" && d !== "../") };
 });
 
 // Start a session against an agent-side session id and hand back the
 // transcript session/load replayed, so the pane opens already filled in.
 ipcMain.handle("session:open", async (_e, payload) => {
-  const { sessionId, providerId, cwd, model, effort, permissionMode, agentSessionId } =
+  const { sessionId, providerId, cwd, model, effort, permissionMode, agentSessionId, hostId } =
     payload || {};
   if (!sessionId || !providerId || !agentSessionId) {
     return { ok: false, output: "sessionId, providerId and agentSessionId are required." };
@@ -1071,22 +1150,39 @@ ipcMain.handle("session:open", async (_e, payload) => {
   // the user sends while the replay is still in flight owns the pane's
   // session, and tearing this one down must not touch that turn.
   const readerId = `history:${sessionId}:${Date.now()}`;
-  const session = ensureSession(
-    {
-      sessionId: readerId,
-      providerId,
-      cwd,
-      model,
-      effort,
-      // Never the pane's mode: Bypass/Auto spawn a CLI that runs tools
-      // WITHOUT asking, and a reader would then execute them while merely
-      // showing history. Ask means it asks, and readOnly declines.
-      permissionMode: "ask",
-      agentSessionId,
-      readOnly: true,
-    },
-    () => {},
-  );
+  // Claude's adapter replays from its own config folder: bring the host's
+  // transcript into the mirror first. The other CLIs replay on the host.
+  if (hostId && providerId === "claude") {
+    const host = sshHosts.getHost(hostId);
+    if (!host) return { ok: false, output: `SSH host ${hostId} is not set up any more.`, history: [] };
+    try {
+      await sshHosts.fetchClaudeTranscript(host, agentSessionId);
+    } catch (err) {
+      return { ok: false, output: err.message, history: [] };
+    }
+  }
+  let session;
+  try {
+    session = ensureSession(
+      {
+        sessionId: readerId,
+        providerId,
+        cwd,
+        model,
+        effort,
+        // Never the pane's mode: Bypass/Auto spawn a CLI that runs tools
+        // WITHOUT asking, and a reader would then execute them while merely
+        // showing history. Ask means it asks, and readOnly declines.
+        permissionMode: "ask",
+        agentSessionId,
+        hostId,
+        readOnly: true,
+      },
+      () => {},
+    );
+  } catch (err) {
+    return { ok: false, output: err.message, history: [] };
+  }
   try {
     await session.start();
     const history = session.takeReplay();

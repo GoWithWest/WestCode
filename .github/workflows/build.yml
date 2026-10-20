@@ -68,6 +68,13 @@ jobs:
               console.log(cmp(process.env.BASE, candidate) > 0 ? norm(process.env.BASE).join('.') : candidate);
             ")
           fi
+          # A manual run on a branch is a development build: same app, a
+          # prerelease version, published as a prerelease that is never
+          # "latest" (users and the update banner never see it).
+          if [ "$GITHUB_REF_NAME" != "main" ]; then
+            NEXT="$NEXT-dev.${GITHUB_SHA::7}"
+            echo "DEV_BUILD=true" >> "$GITHUB_ENV"
+          fi
           npm version "$NEXT" --no-git-tag-version --allow-same-version
           echo "RELEASE_VERSION=$NEXT" >> "$GITHUB_ENV"
           echo "Version for this build: $NEXT (latest tag: ${LATEST:-none}, package.json: $BASE, tag at SHA: ${EXISTING:-none})"
@@ -151,6 +158,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$DEV_BUILD" = "true" ]; then
+            TAG="dev-${GITHUB_SHA::7}"
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag > /dev/null 2>&1 || true
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "WestCode dev build $RELEASE_VERSION ($GITHUB_REF_NAME)" \
+              --notes "Development build from branch $GITHUB_REF_NAME at $GITHUB_SHA. Not a release." release/*.dmg release/*.zip
+            exit 0
+          fi
           TAG="v$RELEASE_VERSION"
           echo "Releasing $TAG"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
