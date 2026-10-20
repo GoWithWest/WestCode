@@ -1,9 +1,10 @@
 import { ServersButton } from "./servers-button";
 import { FilesPane } from "./files-pane";
+import { DetailsRail } from "./details-rail";
 import { TerminalPane } from "./terminal-pane";
 import { PrChip } from "./pr-chip";
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, FolderTree, GitBranch, GitFork, Pencil, Server, SquareTerminal, Terminal, X } from "lucide-react";
+import { Code2, Download, Folder, FolderTree, GitBranch, GitFork, PanelRight, Pencil, Server, SquareTerminal, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -29,6 +30,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
   const [scmOpen, setScmOpen] = useState(false);
   const [termOpen, setTermOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const side = useHelix((s) =>
     session.sideOpen ? s.sessions.find((x) => x.id === session.sideOpen) : undefined,
   );
@@ -122,6 +124,16 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
                   Files
                 </button>
                 {!session.hostId ? <ServersButton session={session} /> : null}
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen((v) => !v)}
+                  aria-pressed={detailsOpen}
+                  className={`inline-flex items-center gap-1 hover:text-foreground ${detailsOpen ? "text-foreground" : ""}`}
+                  title="Session details: environment, context, changes, servers"
+                >
+                  <PanelRight className="size-3" />
+                  Details
+                </button>
                 <ResumeButton session={session} />
                 {!session.hostId ? <EditorButton session={session} /> : null}
               </>
@@ -172,6 +184,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
           ) : null}
         </div>
         {filesOpen && !compact ? <FilesPane session={session} onClose={() => setFilesOpen(false)} /> : null}
+        {detailsOpen && !compact ? <DetailsRail session={session} onClose={() => setDetailsOpen(false)} /> : null}
         {scmOpen ? (
           <SourceControlPanel session={session} onClose={() => setScmOpen(false)} />
         ) : null}
