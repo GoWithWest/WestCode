@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
@@ -32,6 +32,32 @@ const ICON_PNG = join(here, "icon.png");
 
 // A late async failure (e.g. a child process that cannot spawn) must not
 // take the whole app down with Electron's crash dialog.
+// Errors and warnings also go to ~/.westcode/logs/main.log (Help → Show
+// Logs), capped so it never grows without bound.
+const LOG_DIR = join(process.env.WESTCODE_HOME || join(homedir(), ".westcode"), "logs");
+const LOG_FILE = join(LOG_DIR, "main.log");
+function logLine(level, args) {
+  try {
+    mkdirSync(LOG_DIR, { recursive: true });
+    try {
+      if (statSync(LOG_FILE).size > 2_000_000) renameSync(LOG_FILE, `${LOG_FILE}.1`);
+    } catch {
+      /* no log yet */
+    }
+    const text = args.map((a) => (a instanceof Error ? a.stack || a.message : typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+    appendFileSync(LOG_FILE, `${new Date().toISOString()} ${level} ${text}\n`);
+  } catch {
+    /* logging must never break the app */
+  }
+}
+for (const level of ["error", "warn"]) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    logLine(level.toUpperCase(), args);
+    orig(...args);
+  };
+}
+
 process.on("uncaughtException", (err) => {
   console.error("[westcode] uncaught exception:", err);
 });
@@ -120,6 +146,7 @@ async function startAppServer() {
 }
 
 function send(sessionId, event) {
+  if (event?.type === "error") console.warn(`[session ${sessionId}]`, event.message);
   win?.webContents.send("session:event", { sessionId, ...event });
 }
 
@@ -194,6 +221,19 @@ function installMenu() {
     },
     { role: "editMenu" },
     { role: "windowMenu" },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "Copy WestCode Version",
+          click: () => clipboard.writeText(`WestCode ${app.getVersion()} (Electron ${process.versions.electron}, ${process.platform} ${process.arch})`),
+        },
+        { label: "Show Logs", click: () => void shell.openPath(LOG_DIR) },
+        { label: "Open Data Folder", click: () => void shell.openPath(process.env.WESTCODE_HOME || join(homedir(), ".westcode")) },
+        { type: "separator" },
+        { label: "Report an Issue…", click: () => void shell.openExternal("https://github.com/GoWithWest/WestCode/issues/new") },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
