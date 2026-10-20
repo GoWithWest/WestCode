@@ -8,7 +8,7 @@ import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { exportTranscript, lastSnippet } from "@/lib/parse-agent";
 import { relativeTime } from "@/lib/utils";
-import type { Session } from "@/lib/types";
+import { gitCwdOf, type Session } from "@/lib/types";
 import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
@@ -86,9 +86,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
             {session.hostId ? <HostChip hostId={session.hostId} /> : null}
             <CwdPicker session={session} />
             {/* Source control and the editor act on this Mac's files. */}
-            {!session.hostId ? (
-              <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
-            ) : null}
+            <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
             {!session.hostId ? <PrChip session={session} /> : null}
             {session.worktree ? (
               <span
@@ -415,7 +413,7 @@ function GitChip({
   const [git, setGit] = useState<GitStatus | null>(null);
   const api = westcode();
   const status = session.status;
-  const cwd = session.cwd;
+  const cwd = gitCwdOf(session);
 
   useEffect(() => {
     if (!api?.gitStatus) return;

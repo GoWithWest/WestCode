@@ -1,4 +1,10 @@
 export type SessionStatus = "running" | "waiting" | "idle" | "error";
+/** The folder git runs in: an SSH session's is ssh://<host>/<path>. */
+export function gitCwdOf(s: { cwd: string; hostId?: string; scmRepo?: string }): string {
+  const dir = s.scmRepo || s.cwd;
+  return s.hostId ? `ssh://${s.hostId}${dir.startsWith("/") ? dir : `/${dir}`}` : dir;
+}
+
 export type LayoutView =
   | "mosaic"
   | "focus"

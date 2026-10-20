@@ -22,6 +22,12 @@ const hostsFile = () => join(westcodeHome(), "ssh-hosts.json");
 const REMOTE_PATH =
   'PATH="$HOME/.local/bin:$HOME/.claude/local:$HOME/.grok/bin:$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"';
 
+/** "ssh://<hostId>/abs/path" → {hostId, path}; anything else → null. */
+export function parseRemoteCwd(cwd) {
+  const m = /^ssh:\/\/([a-z0-9-]+)(\/.*)$/.exec(String(cwd || ""));
+  return m ? { hostId: m[1], path: m[2] } : null;
+}
+
 /** Single-quote for a POSIX shell. */
 export function q(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;

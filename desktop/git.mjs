@@ -4,18 +4,35 @@
 // NUL separators, NUL-delimited for-each-ref/log formats, the commit flow
 // that rebuilds the index from the selected files, and progress parsing.
 import { spawn } from "node:child_process";
+import { getHost, parseRemoteCwd, q, remoteShell, sshArgs, sshEnv } from "./ssh.mjs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 // ------------------------------------------------------------------ runner
 
-/** Run git, resolve {code, stdout, stderr}. Never rejects. */
+/**
+ * Run git, resolve {code, stdout, stderr}. Never rejects. A folder written
+ * as ssh://<host>/<path> is on an SSH host: git runs there (the source
+ * control panel works for SSH sessions as in Claude Desktop).
+ */
 export function runGit(cwd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn("git", args, {
-      cwd,
-      env: { ...(opts.env || process.env), TERM: "dumb", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
-    });
+    const remote = parseRemoteCwd(cwd);
+    const host = remote ? getHost(remote.hostId) : null;
+    if (remote && !host) {
+      resolve({ code: -1, stdout: "", stderr: "That SSH host is not set up any more." });
+      return;
+    }
+    const child = host
+      ? spawn(
+          "ssh",
+          [...sshArgs(host), remoteShell(`cd ${q(remote.path)} || exit 1; TERM=dumb GIT_TERMINAL_PROMPT=0 LC_ALL=C exec git ${args.map(q).join(" ")}`)],
+          { env: sshEnv(host) },
+        )
+      : spawn("git", args, {
+          cwd,
+          env: { ...(opts.env || process.env), TERM: "dumb", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+        });
     const out = [];
     let err = "";
     child.stdout.on("data", (c) => out.push(c));
@@ -115,6 +132,7 @@ function gitDir(cwd) {
 
 /** Merge/rebase/cherry-pick in progress (file checks, as Desktop does). */
 export function operationInProgress(cwd) {
+  if (parseRemoteCwd(cwd)) return null;
   const g = gitDir(cwd);
   if (existsSync(join(g, "MERGE_HEAD"))) return "merge";
   if (existsSync(join(g, "rebase-merge")) || existsSync(join(g, "rebase-apply"))) return "rebase";
@@ -235,7 +253,9 @@ export async function discard(cwd, files, trash) {
     const created = files.filter((f) => f.kind === "untracked" || f.kind === "new").map((f) => f.path);
     for (const p of created) {
       await runGit(cwd, ["rm", "-q", "--cached", "--ignore-unmatch", "--", p]);
-      if (trash) await trash(join(cwd, p));
+      // Untracked files go to this Mac's Trash; a host has no Trash, and
+      // deleting there could not be undone, so they are left alone.
+      if (trash && !parseRemoteCwd(cwd)) await trash(join(cwd, p));
     }
     if (tracked.length) {
       await runGit(cwd, ["reset", "-q", "HEAD", "--", ...tracked]);

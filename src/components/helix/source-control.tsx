@@ -19,7 +19,7 @@ import { parsePatch } from "@/lib/diff";
 import { westcode, type GitChanges, type GitCommit, type GitFile } from "@/lib/desktop";
 import { cn, relativeTime } from "@/lib/utils";
 import { useHelix } from "@/lib/store";
-import type { Session } from "@/lib/types";
+import { gitCwdOf, type Session } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { DiffRows } from "./blocks";
 
@@ -47,7 +47,7 @@ export function SourceControlPanel({
 }) {
   const api = westcode()?.git;
   // The session's folder, or a repository inside it the user picked.
-  const cwd = session.scmRepo || session.cwd;
+  const cwd = gitCwdOf(session);
   const pickRepo = (path: string | undefined) =>
     useHelix.setState((st) => ({
       sessions: st.sessions.map((x) => (x.id === session.id ? { ...x, scmRepo: path } : x)),

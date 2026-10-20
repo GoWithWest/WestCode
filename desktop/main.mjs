@@ -821,6 +821,9 @@ ipcMain.handle("fs:pickFile", async () => {
 });
 
 function git(cwd, args) {
+  if (sshHosts.parseRemoteCwd(cwd)) {
+    return gitOps.runGit(cwd, args).then((r) => (r.code === 0 ? r.stdout.trim() : null));
+  }
   return new Promise((resolve) => {
     const child = spawn("git", args, { cwd, env: childEnv() });
     let out = "";
@@ -855,6 +858,7 @@ ipcMain.handle("git:status", async (_e, cwd) => {
 
 // ---- Source control panel (GitHub Desktop's Changes / History / Sync).
 function repoDir(cwd) {
+  if (sshHosts.parseRemoteCwd(cwd)) return cwd;
   const dir = typeof cwd === "string" && cwd.startsWith("~/") ? join(homedir(), cwd.slice(2)) : cwd;
   if (typeof dir !== "string" || !dir || !existsSync(dir)) throw new Error(`Folder ${cwd} does not exist.`);
   return dir;
