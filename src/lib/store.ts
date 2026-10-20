@@ -9,7 +9,7 @@ import {
   modelsFor,
   slashFor,
 } from "./catalog";
-import { formatOutgoing } from "./fs";
+import { formatOutgoing, imagesIn } from "./fs";
 import {
   DEFAULT_ENABLED,
   LIBRARY,
@@ -3128,6 +3128,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         hostId: latest.hostId,
         outputStyle:
           latest.providerId === "claude" ? (latest.outputStyle ?? get().settings.claudeOutputStyle ?? "") : undefined,
+        images: imagesIn(promptText),
         history,
         text: promptText,
       });

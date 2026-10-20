@@ -1247,6 +1247,7 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
     agentSessionId,
     hostId,
     outputStyle,
+    images,
     text,
     history,
   } = payload;
@@ -1276,7 +1277,7 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
       const host = sshHosts.getHost(hostId);
       if (host) await sshHosts.ensureClaudeTranscript(host, agentSessionId);
     }
-    await session.prompt(text, history || []);
+    await session.prompt(text, history || [], Array.isArray(images) ? images : []);
     emit({ type: "done" });
     return { ok: true };
   } catch (err) {

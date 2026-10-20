@@ -456,6 +456,8 @@ class AcpSession {
     await this._authenticate(init);
     // Claude's adapter can take a message into the running turn.
     this.canSteer = Boolean(init?._meta?.steering?.supported);
+    const agentCaps = init?.agentCapabilities || init?.agent_capabilities || {};
+    this.acceptsImages = Boolean((agentCaps.promptCapabilities || agentCaps.prompt_capabilities)?.image);
     if (this.canSteer) this.emit({ type: "caps", steering: true });
 
     // A history read needs no tools and must not join the desk bus.
@@ -558,7 +560,7 @@ class AcpSession {
     this.emit({ type: "models", models });
   }
 
-  async prompt(text, history = []) {
+  async prompt(text, history = [], images = []) {
     await this.start();
     if (this.dead) throw new Error("Agent process is not running.");
     let body = text;
@@ -566,9 +568,15 @@ class AcpSession {
       this.replayed = true;
       body = `${formatRestoredHistory(history)}\n\n${text}`;
     }
+    // Image blocks only for agents that said they take them (ACP promptCapabilities.image).
+    const pics = this.acceptsImages
+      ? images
+          .filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.mimeType) && typeof i.data === "string" && i.data)
+          .map((i) => ({ type: "image", mimeType: i.mimeType, data: i.data }))
+      : [];
     return this.rpc("session/prompt", {
       sessionId: this.agentSessionId,
-      prompt: [{ type: "text", text: body }],
+      prompt: [{ type: "text", text: body }, ...pics],
     });
   }
 

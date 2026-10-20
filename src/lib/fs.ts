@@ -14,6 +14,32 @@ const TEXT_EXT =
 
 const MAX_TEXT = 80_000;
 const MAX_FILES = 8;
+/** Largest image sent to the agent as an image (the API's own limit is ~5 MB per image). */
+const MAX_IMAGE = 5 * 1024 * 1024;
+
+/**
+ * Bytes of attached/pasted images, by attachment id. Kept in memory only (not
+ * in saved sessions); the message's <attached … id="…"/> tag points here and
+ * the prompt sends the image itself to agents that accept images.
+ */
+const imageData = new Map<string, { mimeType: string; data: string }>();
+
+/** Images referenced by id in an outgoing message, for the agent prompt. */
+export function imagesIn(text: string): { mimeType: string; data: string }[] {
+  const out: { mimeType: string; data: string }[] = [];
+  for (const m of text.matchAll(/<attached [^>]*\bimage="([^"]+)"/g)) {
+    const img = imageData.get(m[1]!);
+    if (img) out.push(img);
+  }
+  return out;
+}
+
+async function base64Of(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
 
 export function prettySize(n: number) {
   if (n < 1024) return `${n} B`;
@@ -58,9 +84,13 @@ export async function readAttachments(
       });
       continue;
     }
+    const id = uid("file");
+    const image = /^image\/(png|jpeg|gif|webp)$/.test(mime);
+    if (image && file.size <= MAX_IMAGE) imageData.set(id, { mimeType: mime, data: await base64Of(file) });
     out.push({
-      id: uid("file"),
-      name: file.name,
+      id,
+      // A pasted screenshot arrives as "image.png"; keep it recognisable.
+      name: file.name || `pasted.${mime.split("/")[1] ?? "png"}`,
       size: file.size,
       mime,
       kind: mime.startsWith("image/") ? "image" : "binary",
@@ -79,7 +109,8 @@ export function formatOutgoing(
     if (a.kind === "text" && a.text) {
       return `<attached name="${a.name}">\n${a.text.slice(0, 12_000)}\n</attached>`;
     }
-    return `<attached name="${a.name}" mime="${a.mime}" size="${a.size}" />`;
+    const img = a.kind === "image" && imageData.has(a.id) ? ` image="${a.id}"` : "";
+    return `<attached name="${a.name}" mime="${a.mime}" size="${a.size}"${img} />`;
   });
   return [body, ...parts].filter(Boolean).join("\n\n");
 }

@@ -461,6 +461,8 @@ type WestcodeBridge = {
     hostId?: string;
     /** Claude Code output style for this session ("" = the CLI's own setting). */
     outputStyle?: string;
+    /** Attached images, sent as image blocks to agents that accept them. */
+    images?: { mimeType: string; data: string }[];
     history?: { role: string; text: string }[];
     text: string;
   }) => Promise<{ ok: boolean; error?: string }>;
