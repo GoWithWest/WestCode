@@ -13,6 +13,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { askpassEnv } from "./askpass.mjs";
 
 const westcodeHome = () => process.env.WESTCODE_HOME || join(homedir(), ".westcode");
 const hostsFile = () => join(westcodeHome(), "ssh-hosts.json");
@@ -133,12 +134,14 @@ export function controlDir() {
   mkdirSync(d, { recursive: true, mode: 0o700 });
   return d;
 }
-const muxArgs = () => ["-o", "ControlMaster=auto", "-o", `ControlPath=${join(controlDir(), "%C")}`, "-o", "ControlPersist=120"];
+const muxArgs = () => ["-o", "ControlMaster=auto", "-o", `ControlPath=${join(controlDir(), "%C")}`, "-o", "ControlPersist=600"];
 
-/** ssh arguments up to (and including) the destination. */
-export function sshArgs(h, { batch = true } = {}) {
-  const args = ["-T", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4", ...muxArgs()];
-  if (batch) args.push("-o", "BatchMode=yes");
+/**
+ * ssh arguments up to (and including) the destination. Passwords, one-time
+ * codes and host-key questions go to the app through SSH_ASKPASS (sshEnv).
+ */
+export function sshArgs(h) {
+  const args = ["-T", "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4", "-o", "NumberOfPasswordPrompts=2", ...muxArgs()];
   if (h.port) args.push("-p", String(h.port));
   if (h.identityFile) args.push("-i", h.identityFile.replace(/^~(?=\/)/, homedir()));
   args.push("--", h.user ? `${h.user}@${h.host}` : h.host);
@@ -150,10 +153,15 @@ export function remoteShell(cmd) {
   return `sh -c ${q(`${REMOTE_PATH}; ${cmd}`)}`;
 }
 
+/** Env for an ssh process: prompts are answered by the app. */
+export function sshEnv(h, base = process.env) {
+  return { ...base, ...askpassEnv(h.id) };
+}
+
 /** Run one command on the host. */
 export function runRemote(h, cmd, { timeout = 30_000, binary = false } = {}) {
   return new Promise((resolve) => {
-    const proc = spawn("ssh", [...sshArgs(h), remoteShell(cmd)], { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn("ssh", [...sshArgs(h), remoteShell(cmd)], { stdio: ["ignore", "pipe", "pipe"], env: sshEnv(h) });
     const out = [];
     let err = "";
     const timer = setTimeout(() => {
@@ -244,8 +252,8 @@ case "$dir" in "$root"*) dir="\${dir#"$root"}" ;; esac
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\\\\\''/g")"; }
 cmd="${REMOTE_PATH.replace(/["$]/g, (c) => `\\${c}`)}; cd $(q "$dir") || exit 1; exec claude"
 for a in "$@"; do cmd="$cmd $(q "$a")"; done
-set -- -T -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes
-[ -n "$WESTCODE_SSH_CONTROL" ] && set -- "$@" -o ControlMaster=auto -o "ControlPath=$WESTCODE_SSH_CONTROL/%C" -o ControlPersist=120
+set -- -T -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o NumberOfPasswordPrompts=2
+[ -n "$WESTCODE_SSH_CONTROL" ] && set -- "$@" -o ControlMaster=auto -o "ControlPath=$WESTCODE_SSH_CONTROL/%C" -o ControlPersist=600
 [ -n "$WESTCODE_SSH_PORT" ] && set -- "$@" -p "$WESTCODE_SSH_PORT"
 [ -n "$WESTCODE_SSH_KEY" ] && set -- "$@" -i "$WESTCODE_SSH_KEY"
 exec ssh "$@" -- "$WESTCODE_SSH_TARGET" "sh -c $(q "$cmd")"
@@ -276,6 +284,7 @@ export function claudeRemoteEnv(h) {
     CLAUDE_CONFIG_DIR: claudeConfig,
     WESTCODE_FS_ROOT: fsRoot,
     WESTCODE_SSH_CONTROL: controlDir(),
+    ...askpassEnv(h.id),
     WESTCODE_SSH_TARGET: h.user ? `${h.user}@${h.host}` : h.host,
     ...(h.port ? { WESTCODE_SSH_PORT: String(h.port) } : {}),
     ...(h.identityFile ? { WESTCODE_SSH_KEY: h.identityFile.replace(/^~(?=\/)/, homedir()) } : {}),

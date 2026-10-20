@@ -423,6 +423,11 @@ type WestcodeBridge = {
     test: (host: string | Partial<SshHost>) => Promise<SshProbe>;
     ls: (hostId: string, path?: string) => Promise<{ ok: boolean; path?: string; dirs?: string[]; error?: string }>;
     installClaude?: (hostId: string) => Promise<{ ok: boolean; error?: string }>;
+    forgetPassword?: (hostId: string) => Promise<{ ok: boolean }>;
+    onPrompt?: (
+      fn: (p: { id: string; hostId: string; hostName: string; prompt: string; secret: boolean; canRemember: boolean }) => void,
+    ) => () => void;
+    reply?: (id: string, value: string | null, remember?: boolean) => void;
   };
   openSession: (payload: {
     sessionId: string;
@@ -471,6 +476,15 @@ type WestcodeBridge = {
   onDeepLink?: (
     fn: (link: { action: "new"; folder: string; prompt: string; host: string; provider: string }) => void,
   ) => () => void;
+  files?: {
+    list: (root: string, path: string, hostId?: string) => Promise<{ ok: boolean; entries?: { name: string; path: string; dir: boolean }[]; error?: string }>;
+    read: (
+      root: string,
+      path: string,
+      hostId?: string,
+    ) => Promise<{ ok: boolean; text?: string; binary?: boolean; tooLarge?: boolean; readOnly?: boolean; error?: string }>;
+    write: (root: string, path: string, content: string, expected?: string) => Promise<{ ok: boolean; conflict?: boolean; error?: string }>;
+  };
   term?: {
     open: (p: { id: string; cwd: string; hostId?: string; cols: number; rows: number }) => Promise<{ ok: boolean; error?: string }>;
     write: (id: string, data: string) => void;

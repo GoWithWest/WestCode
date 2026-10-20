@@ -22,6 +22,8 @@ import * as sshHosts from "./ssh.mjs";
 import { parseDeepLink } from "./deeplink.mjs";
 import * as prs from "./pr.mjs";
 import * as terminals from "./terminal.mjs";
+import * as filesPane from "./files.mjs";
+import * as askpass from "./askpass.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -290,7 +292,38 @@ app.on("open-url", (event, url) => {
 });
 if (!process.env.WESTCODE_DEV) app.setAsDefaultProtocolClient("westcode");
 
+// SSH prompts (passwords, one-time codes, new host keys) are asked in the
+// window; answers go back to ssh's SSH_ASKPASS helper.
+const sshPrompts = new Map();
+ipcMain.on("ssh:prompt-reply", (_e, { id, value, remember } = {}) => {
+  const done = sshPrompts.get(id);
+  if (!done) return;
+  sshPrompts.delete(id);
+  done(value == null ? null : { value: String(value), remember: Boolean(remember) });
+});
+function askInWindow({ hostId, prompt, secret }) {
+  return new Promise((resolve) => {
+    if (!win) return resolve(null);
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    sshPrompts.set(id, resolve);
+    const host = sshHosts.getHost(hostId);
+    win.webContents.send("ssh:prompt", { id, hostId, hostName: host?.name || hostId, prompt, secret, canRemember: safeStorage.isEncryptionAvailable() });
+    if (!win.isFocused()) {
+      app.dock?.bounce?.("informational");
+      win.show();
+    }
+    setTimeout(() => {
+      if (sshPrompts.delete(id)) resolve(null);
+    }, 280_000);
+  });
+}
+
 app.whenReady().then(async () => {
+  await askpass.startAskpass({
+    ask: askInWindow,
+    encrypt: (s) => safeStorage.encryptString(s).toString("base64"),
+    decrypt: (b) => safeStorage.decryptString(Buffer.from(b, "base64")),
+  });
   if (process.platform === "darwin" && existsSync(ICON_PNG)) {
     app.dock?.setIcon(nativeImage.createFromPath(ICON_PNG));
   }
@@ -385,6 +418,25 @@ ipcMain.handle("term:open", async (_e, p = {}) => {
 ipcMain.on("term:write", (_e, { id, data } = {}) => terminals.writeTerminal(String(id || ""), data));
 ipcMain.on("term:resize", (_e, { id, cols, rows } = {}) => terminals.resizeTerminal(String(id || ""), cols, rows));
 ipcMain.on("term:close", (_e, id) => terminals.closeTerminal(String(id || "")));
+
+// Files pane: the session folder only (paths are checked to stay inside).
+const filesCall = (fn) => async (_e, p = {}) => {
+  try {
+    return await fn(p);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+};
+ipcMain.handle("files:list", filesCall((p) => filesPane.listDir(String(p.root || ""), String(p.path || ""), { hostId: p.hostId })));
+ipcMain.handle("files:read", filesCall((p) => filesPane.readText(String(p.root || ""), String(p.path || ""), { hostId: p.hostId })));
+ipcMain.handle(
+  "files:write",
+  filesCall((p) =>
+    p.hostId
+      ? { ok: false, error: "Files on an SSH host are view-only." }
+      : filesPane.writeText(String(p.root || ""), String(p.path || ""), String(p.content ?? ""), { expected: p.expected }),
+  ),
+);
 
 ipcMain.on("find:start", (_e, { text, forward = true, next = false } = {}) => {
   const t = String(text || "");
@@ -1229,7 +1281,12 @@ ipcMain.handle("ssh:save", (_e, host) => {
     return { ok: false, error: err.message };
   }
 });
+ipcMain.handle("ssh:forget-password", (_e, id) => {
+  askpass.forgetPassword(String(id || ""));
+  return { ok: true };
+});
 ipcMain.handle("ssh:remove", (_e, id) => {
+  askpass.forgetPassword(String(id || ""));
   sshHosts.removeHost(String(id || ""));
   return { ok: true };
 });

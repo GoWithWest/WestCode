@@ -1,6 +1,7 @@
 import { CommandPalette } from "./command-palette";
 import { FindBar } from "./find-bar";
 import { ShortcutsSheet } from "./shortcuts-sheet";
+import { SshPromptDialog } from "./ssh-prompt";
 import { useEffect } from "react";
 import { Columns2, LayoutGrid, Plus, PanelLeft } from "lucide-react";
 import { Group, Panel, Separator } from "react-resizable-panels";
@@ -133,6 +134,7 @@ export function HelixApp() {
       <FindBar />
       <CommandPalette />
       <ShortcutsSheet />
+      <SshPromptDialog />
 
       <div className="flex min-h-0 flex-1">
         <div

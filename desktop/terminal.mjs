@@ -4,7 +4,7 @@
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { childEnv } from "./path.mjs";
-import { getHost, q, sshArgs } from "./ssh.mjs";
+import { getHost, q, sshArgs, sshEnv } from "./ssh.mjs";
 
 const terms = new Map();
 let ptyMod = null;
@@ -23,7 +23,7 @@ export function terminalCommand({ cwd, hostId }) {
     const args = sshArgs(h).filter((a) => a !== "-T");
     const dest = args.pop();
     const remote = `cd ${cwd ? q(cwd) : '"$HOME"'} 2>/dev/null; exec "\${SHELL:-/bin/sh}" -l`;
-    return { file: "ssh", args: ["-tt", ...args.slice(0, -1), "--", dest, remote], cwd: homedir() };
+    return { file: "ssh", args: ["-tt", ...args.slice(0, -1), "--", dest, remote], cwd: homedir(), env: sshEnv(h, {}) };
   }
   const shell = process.env.SHELL || (process.platform === "win32" ? "powershell.exe" : "/bin/zsh");
   return { file: shell, args: process.platform === "win32" ? [] : ["-l"], cwd: cwd && existsSync(cwd) ? cwd : homedir() };
@@ -31,14 +31,14 @@ export function terminalCommand({ cwd, hostId }) {
 
 export async function openTerminal({ id, cwd, hostId, cols = 100, rows = 30 }, onData, onExit) {
   closeTerminal(id);
-  const { file, args, cwd: dir } = terminalCommand({ cwd, hostId });
+  const { file, args, cwd: dir, env: extra } = terminalCommand({ cwd, hostId });
   const { spawn } = await pty();
   const p = spawn(file, args, {
     name: "xterm-256color",
     cols: Math.max(20, cols | 0),
     rows: Math.max(5, rows | 0),
     cwd: dir,
-    env: { ...childEnv(), TERM: "xterm-256color", COLORTERM: "truecolor", TERM_PROGRAM: "WestCode" },
+    env: { ...childEnv(), ...(extra || {}), TERM: "xterm-256color", COLORTERM: "truecolor", TERM_PROGRAM: "WestCode" },
   });
   p.onData((d) => onData(d));
   p.onExit(({ exitCode }) => {

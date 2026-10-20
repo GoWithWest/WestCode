@@ -97,6 +97,13 @@ contextBridge.exposeInMainWorld("westcode", {
     test: (host) => ipcRenderer.invoke("ssh:test", host),
     ls: (hostId, path) => ipcRenderer.invoke("ssh:ls", { hostId, path }),
     installClaude: (hostId) => ipcRenderer.invoke("ssh:install-claude", hostId),
+    forgetPassword: (hostId) => ipcRenderer.invoke("ssh:forget-password", hostId),
+    onPrompt: (fn) => {
+      const h = (_e, p) => fn(p);
+      ipcRenderer.on("ssh:prompt", h);
+      return () => ipcRenderer.removeListener("ssh:prompt", h);
+    },
+    reply: (id, value, remember) => ipcRenderer.send("ssh:prompt-reply", { id, value, remember }),
   },
   prompt: (payload) => ipcRenderer.invoke("session:prompt", payload),
   cancel: (sessionId) => ipcRenderer.invoke("session:cancel", sessionId),
@@ -125,6 +132,11 @@ contextBridge.exposeInMainWorld("westcode", {
     const handler = (_e, link) => fn(link);
     ipcRenderer.on("deeplink", handler);
     return () => ipcRenderer.removeListener("deeplink", handler);
+  },
+  files: {
+    list: (root, path, hostId) => ipcRenderer.invoke("files:list", { root, path, hostId }),
+    read: (root, path, hostId) => ipcRenderer.invoke("files:read", { root, path, hostId }),
+    write: (root, path, content, expected) => ipcRenderer.invoke("files:write", { root, path, content, expected }),
   },
   term: {
     open: (p) => ipcRenderer.invoke("term:open", p),

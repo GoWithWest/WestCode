@@ -15,6 +15,7 @@ import {
   localStandIn,
   q,
   remoteAcpSpawn,
+  sshEnv,
 } from "./ssh.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -228,11 +229,11 @@ function remoteSpawnSpec(providerId, modelId, effortId, perm, opts, env) {
     if (perm === "bypassPermissions") flags.push("--always-approve");
     flags.push("-m", modelId, "--reasoning-effort", effortId, "stdio");
     const cmd = `grok ${flags.map(q).join(" ")}`;
-    return { ...remoteAcpSpawn(h, opts.remoteCwd, cmd), env };
+    return { ...remoteAcpSpawn(h, opts.remoteCwd, cmd), env: sshEnv(h, env) };
   }
   if (providerId === "codex") {
     const cmd = `if command -v npx >/dev/null 2>&1; then exec npx -y ${ADAPTERS.codex}; else exec codex acp; fi`;
-    return { ...remoteAcpSpawn(h, opts.remoteCwd, `sh -c '${cmd}'`), env };
+    return { ...remoteAcpSpawn(h, opts.remoteCwd, `sh -c '${cmd}'`), env: sshEnv(h, env) };
   }
   if (providerId === "claude") {
     const npx = which("npx", env);
