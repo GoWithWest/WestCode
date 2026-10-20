@@ -10,6 +10,7 @@ import {
   slashFor,
 } from "./catalog";
 import { formatOutgoing, imagesIn } from "./fs";
+import type { SessionPreset } from "./presets";
 import {
   DEFAULT_ENABLED,
   LIBRARY,
@@ -147,6 +148,8 @@ export type AppSettings = {
   worktreeLocation?: string;
   /** Output style for new Claude sessions; empty = Claude Code's own setting. */
   claudeOutputStyle?: string;
+  /** Saved setups shown in the New session dialog. */
+  sessionPresets?: SessionPreset[];
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {

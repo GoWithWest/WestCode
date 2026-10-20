@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Folder, FolderOpen, Laptop, Server } from "lucide-react";
+import { ChevronLeft, Folder, FolderOpen, Laptop, Server, X } from "lucide-react";
 import { defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
 import { westcode } from "@/lib/desktop";
 import { pickDirectory } from "@/lib/fs";
 import { useHelix } from "@/lib/store";
-import { cn } from "@/lib/utils";
+import { presetName, upsertPreset, type SessionPreset } from "@/lib/presets";
+import { cn, uid } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useAllProviders } from "./provider";
 
@@ -41,6 +42,8 @@ export function NewSessionDialog() {
   // Folder browser for an SSH host (the native picker only sees this Mac).
   const [remote, setRemote] = useState<{ path: string; dirs: string[]; error?: string; loading?: boolean } | null>(null);
   const scoped = settings.defaultProviderId === initialProvider;
+  const updateSettings = useHelix((s) => s.updateSettings);
+  const presets = settings.sessionPresets ?? [];
   const [model, setModel] = useState(
     (scoped && settings.defaultModel) ||
       list.find((p) => p.id === initialProvider)?.defaultModel ||
@@ -127,6 +130,36 @@ export function NewSessionDialog() {
     setCwd(folder.path);
   }
 
+  function applyPreset(p: SessionPreset) {
+    const prov = list.find((x) => x.id === p.providerId);
+    if (prov) {
+      setProviderId(prov.id);
+      setModel(p.model || prov.defaultModel || "");
+      setEffort(p.effort || defaultEffortFor(prov.id));
+    }
+    setHostId(p.hostId && sshHosts.some((h) => h.id === p.hostId) ? p.hostId : "");
+    setRemote(null);
+    setCwd(p.cwd);
+    setProjectId("scratch");
+    setWorktree(Boolean(p.worktree) && !p.hostId);
+  }
+
+  function savePreset() {
+    if (!provider || !cwd.trim()) return;
+    const base = {
+      providerId: provider.id,
+      ...(hostId ? { hostId } : {}),
+      cwd: cwd.trim(),
+      ...(worktree && !hostId ? { worktree: true } : {}),
+      model,
+      effort,
+    };
+    const hostName = sshHosts.find((h) => h.id === hostId)?.name;
+    updateSettings({
+      sessionPresets: upsertPreset(presets, { id: uid("env"), name: presetName(base, provider.short || provider.name, hostName), ...base }),
+    });
+  }
+
   async function start() {
     if (!provider) return;
     if (!cwd.trim() || starting) return;
@@ -179,6 +212,38 @@ export function NewSessionDialog() {
             Pick a provider and the folder it should work in. Browse this Mac,
             or use a recent project.
           </Dialog.Description>
+
+          {presets.length ? (
+            <div className="mt-4">
+              <span className="text-2xs font-medium tracking-wide text-subtle uppercase">Saved</span>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {presets.map((p) => (
+                  <span
+                    key={p.id}
+                    className="inline-flex items-center rounded-full border border-border text-xs text-muted-foreground hover:border-border-strong"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => applyPreset(p)}
+                      className="inline-flex items-center gap-1.5 py-1 pr-1 pl-2.5 hover:text-foreground"
+                      title={`${p.hostId ? `${p.hostId}:` : ""}${p.cwd}`}
+                    >
+                      <ProviderDot id={p.providerId} />
+                      {p.name}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Forget ${p.name}`}
+                      onClick={() => updateSettings({ sessionPresets: presets.filter((x) => x.id !== p.id) })}
+                      className="py-1 pr-2 pl-0.5 text-subtle hover:text-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="mt-4">
             <span className="text-2xs font-medium tracking-wide text-subtle uppercase">Runs on</span>
@@ -416,6 +481,15 @@ export function NewSessionDialog() {
           ) : null}
 
           <div className="mt-4 flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              className="mr-auto"
+              disabled={!cwd.trim() || !provider}
+              onClick={savePreset}
+              title="Keep this provider, machine, folder and model as a one-click setup"
+            >
+              Save setup
+            </Button>
             <Button variant="ghost" onClick={() => setNewOpen(false)}>
               Cancel
             </Button>
