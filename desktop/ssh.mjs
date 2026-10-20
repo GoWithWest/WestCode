@@ -362,9 +362,26 @@ export async function fetchClaudeTranscript(h, sessionId) {
   const rel = r.stderr.split("\n").map((l) => l.trim()).filter((l) => l.endsWith(".jsonl")).pop();
   if (!rel || rel.includes("..")) throw new Error("Unexpected transcript path from the host.");
   const dest = join(hostDirs(h).claudeConfig, "projects", rel);
+  const body = gunzipSync(r.stdout);
   mkdirSync(dirname(dest), { recursive: true });
-  writeFileSync(dest, gunzipSync(r.stdout));
+  writeFileSync(dest, body);
+  // The adapter knows the session by the local stand-in folder, so the
+  // transcript is also kept under that folder's project name.
+  const cwd = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(body.subarray(0, 200_000).toString("utf8"))?.[1];
+  if (cwd) {
+    const standIn = localStandIn(h, JSON.parse(`"${cwd}"`));
+    const alt = join(hostDirs(h).claudeConfig, "projects", claudeProjectName(standIn), `${sessionId}.jsonl`);
+    if (alt !== dest) {
+      mkdirSync(dirname(alt), { recursive: true });
+      writeFileSync(alt, body);
+    }
+  }
   return dest;
+}
+
+/** Claude Code's project folder name for a working directory. */
+export function claudeProjectName(cwd) {
+  return String(cwd).replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 /** Fetch the transcript only if the mirror does not have it yet. */

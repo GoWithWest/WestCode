@@ -295,6 +295,15 @@ class AcpSession {
     this.remote = null;
   }
 
+  /**
+   * The folder as the agent process sees it. Claude's adapter runs on this
+   * Mac for a host session and checks the folder exists here, so it gets
+   * the local stand-in (the wrapper turns it back into the host's path).
+   */
+  agentCwd() {
+    return this.remote && this.providerId === "claude" ? localStandIn(this.remote, this.cwd) : this.cwd;
+  }
+
   takeReplay() {
     const out = this.replay;
     this.replay = [];
@@ -464,7 +473,7 @@ class AcpSession {
         try {
           const loaded = await this.rpc(method, {
             sessionId: resumeId,
-            cwd: this.cwd,
+            cwd: this.agentCwd(),
             mcpServers,
           });
           this.agentSessionId =
@@ -493,7 +502,7 @@ class AcpSession {
     }
 
     const created = await this.rpc("session/new", {
-      cwd: this.cwd,
+      cwd: this.agentCwd(),
       mcpServers,
     });
     this.agentSessionId = created?.sessionId || created?.session_id || this.id;
