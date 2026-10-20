@@ -450,6 +450,9 @@ function GitChip({
   const status = session.status;
   const cwd = gitCwdOf(session);
 
+  // Another session's folder: never show the previous one's branch meanwhile.
+  useEffect(() => setGit(null), [cwd]);
+
   useEffect(() => {
     if (!api?.gitStatus) return;
     let dead = false;
