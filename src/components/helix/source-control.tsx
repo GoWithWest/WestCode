@@ -346,7 +346,7 @@ export function SourceControlPanel({
               </ul>
               <div className="flex min-h-0 flex-1 flex-col p-2">
                 {selectedFile ? (
-                  <PatchPane patch={patch} path={selectedFile.path} />
+                  <PatchPane patch={patch} path={selectedFile.path} sessionId={session.id} />
                 ) : (
                   <p className="m-auto text-xs text-subtle">Select a file to see its diff.</p>
                 )}
@@ -509,7 +509,7 @@ function UndoStrip({ sha, onUndo }: { sha: string; onUndo: () => void }) {
   );
 }
 
-function PatchPane({ patch, path }: { patch: string | null; path: string }) {
+function PatchPane({ patch, path, sessionId }: { patch: string | null; path: string; sessionId?: string }) {
   if (patch === null) return <p className="m-auto text-xs text-subtle">Loading diff…</p>;
   if (patch === "__binary__")
     return <p className="m-auto text-xs text-subtle">Binary file — no text diff.</p>;
@@ -519,7 +519,7 @@ function PatchPane({ patch, path }: { patch: string | null; path: string }) {
   const rows = parsed.flatMap((f) => f.rows);
   if (!rows.length)
     return <p className="m-auto text-xs text-subtle">No text changes (mode or rename only).</p>;
-  return <DiffRows rows={rows} path={path} fill />;
+  return <DiffRows rows={rows} path={path} fill commentFor={sessionId} />;
 }
 
 function HistoryTab({ cwd, refreshKey }: { cwd: string; refreshKey: string }) {

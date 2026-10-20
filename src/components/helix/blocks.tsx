@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type ComponentType } from "react";
+import { Fragment, memo, useEffect, useState, type ComponentType } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -540,14 +540,27 @@ export function DiffRows({
   path,
   compact,
   fill,
+  commentFor,
 }: {
   rows: DiffRow[];
   path?: string;
   compact?: boolean;
   /** Fill the parent's height instead of capping it. */
   fill?: boolean;
+  /** Session id: line numbers take a comment that goes into its next message. */
+  commentFor?: string;
 }) {
   const name = path?.split("/").slice(-2).join("/");
+  const [commentAt, setCommentAt] = useState<number | null>(null);
+  const [comment, setComment] = useState("");
+  const addComment = (line: number) => {
+    if (!commentFor || !comment.trim()) return;
+    window.dispatchEvent(
+      new CustomEvent("westcode:compose", { detail: { sessionId: commentFor, text: `${path ?? ""}:${line}: ${comment.trim()}` } }),
+    );
+    setComment("");
+    setCommentAt(null);
+  };
   return (
     <div
       className={cn(
@@ -579,8 +592,8 @@ export function DiffRows({
                   </td>
                 </tr>
               ) : (
+                <Fragment key={i}>
                 <tr
-                  key={i}
                   className={cn(
                     r.kind === "add" && "bg-success/12",
                     r.kind === "del" && "bg-danger/12",
@@ -590,7 +603,20 @@ export function DiffRows({
                     {r.kind === "add" ? "" : r.a}
                   </td>
                   <td className="w-8 px-1.5 text-right text-subtle select-none">
-                    {r.kind === "del" ? "" : r.b}
+                    {commentFor && r.kind !== "del" ? (
+                      <button
+                        type="button"
+                        title="Comment on this line (goes into the session's next message)"
+                        onClick={() => setCommentAt(Number(r.b))}
+                        className="hover:text-foreground"
+                      >
+                        {r.b}
+                      </button>
+                    ) : r.kind === "del" ? (
+                      ""
+                    ) : (
+                      r.b
+                    )}
                   </td>
                   <td className="px-2 whitespace-pre text-foreground/90">
                     <span
@@ -608,6 +634,31 @@ export function DiffRows({
                     {r.text}
                   </td>
                 </tr>
+                {commentFor && commentAt != null && r.kind !== "del" && Number(r.b) === commentAt ? (
+                  <tr>
+                    <td colSpan={3} className="px-2 py-1">
+                      <form
+                        className="flex gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          addComment(commentAt);
+                        }}
+                      >
+                        <input
+                          autoFocus
+                          value={comment}
+                          onChange={(e) => setComment(e.target.value)}
+                          placeholder={`Comment on line ${commentAt}…`}
+                          className="h-7 flex-1 rounded-md border border-border bg-surface px-2 font-sans text-xs outline-none focus:ring-1 focus:ring-ring"
+                        />
+                        <button type="submit" className="rounded-md border border-border px-2 font-sans text-xs hover:bg-muted">
+                          Add
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                ) : null}
+                </Fragment>
               ),
             )}
           </tbody>
