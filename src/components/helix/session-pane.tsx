@@ -1,3 +1,4 @@
+import { ServersButton } from "./servers-button";
 import { FilesPane } from "./files-pane";
 import { TerminalPane } from "./terminal-pane";
 import { PrChip } from "./pr-chip";
@@ -120,6 +121,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
                   <FolderTree className="size-3" />
                   Files
                 </button>
+                {!session.hostId ? <ServersButton session={session} /> : null}
                 <ResumeButton session={session} />
                 {!session.hostId ? <EditorButton session={session} /> : null}
               </>

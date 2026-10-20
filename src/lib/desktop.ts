@@ -476,6 +476,17 @@ type WestcodeBridge = {
   onDeepLink?: (
     fn: (link: { action: "new"; folder: string; prompt: string; host: string; provider: string }) => void,
   ) => () => void;
+  dev?: {
+    list: (cwd: string) => Promise<{
+      ok: boolean;
+      error?: string;
+      missing?: boolean;
+      configs?: { name: string; port?: number; runtimeExecutable: string }[];
+      running?: { name: string; url: string; port: number; log: string }[];
+    }>;
+    start: (cwd: string, name: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    stop: (cwd: string, name: string) => Promise<{ ok: boolean }>;
+  };
   files?: {
     list: (root: string, path: string, hostId?: string) => Promise<{ ok: boolean; entries?: { name: string; path: string; dir: boolean }[]; error?: string }>;
     read: (

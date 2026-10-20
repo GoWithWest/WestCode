@@ -133,6 +133,11 @@ contextBridge.exposeInMainWorld("westcode", {
     ipcRenderer.on("deeplink", handler);
     return () => ipcRenderer.removeListener("deeplink", handler);
   },
+  dev: {
+    list: (cwd) => ipcRenderer.invoke("dev:list", { cwd }),
+    start: (cwd, name) => ipcRenderer.invoke("dev:start", { cwd, name }),
+    stop: (cwd, name) => ipcRenderer.invoke("dev:stop", { cwd, name }),
+  },
   files: {
     list: (root, path, hostId) => ipcRenderer.invoke("files:list", { root, path, hostId }),
     read: (root, path, hostId) => ipcRenderer.invoke("files:read", { root, path, hostId }),

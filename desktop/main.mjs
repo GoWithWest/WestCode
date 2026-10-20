@@ -24,6 +24,7 @@ import * as prs from "./pr.mjs";
 import * as terminals from "./terminal.mjs";
 import * as filesPane from "./files.mjs";
 import * as askpass from "./askpass.mjs";
+import * as devServers from "./devservers.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -435,6 +436,15 @@ ipcMain.handle(
   ),
 );
 
+// Dev servers from the project's .claude/launch.json (this Mac's folders).
+ipcMain.handle("dev:list", filesCall((p) => {
+  const cwd = repoDir(String(p.cwd || ""));
+  return { ...devServers.readLaunch(cwd), running: devServers.listRunning(cwd) };
+}));
+ipcMain.handle("dev:start", filesCall((p) => devServers.startServer(repoDir(String(p.cwd || "")), String(p.name || ""))));
+ipcMain.handle("dev:stop", filesCall((p) => devServers.stopServer(repoDir(String(p.cwd || "")), String(p.name || ""))));
+
+
 ipcMain.on("app:keep-awake", (_e, enabled) => {
   keepAwakeWanted = Boolean(enabled);
   applyKeepAwake();
@@ -476,6 +486,7 @@ app.on("before-quit", (event) => {
   }
   quitConfirmed = true;
   terminals.closeAllTerminals();
+  devServers.stopAllServers();
   globalShortcut.unregisterAll();
   stopAll();
   killAppServer();
