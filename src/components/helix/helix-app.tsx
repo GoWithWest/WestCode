@@ -18,6 +18,7 @@ import { LibraryView } from "./library-view";
 import { Mosaic } from "./mosaic";
 import { NewSessionDialog } from "./new-session";
 import { ProvidersView } from "./providers-view";
+import { PopOutWindow } from "./pop-out";
 import { SessionPane } from "./session-pane";
 import { Sidebar } from "./sidebar";
 import { UpdateBanner } from "./update-banner";
@@ -115,6 +116,7 @@ export function HelixApp() {
   }, [tick, restoreState]);
 
   const liveSessions = sessions.filter((s) => !s.archivedAt);
+  const poppedOut = useHelix((s) => s.poppedOut);
   const active =
     sessions.find((s) => s.id === activeId) ?? liveSessions[0] ?? null;
   const left =
@@ -144,6 +146,9 @@ export function HelixApp() {
       <CommandPalette />
       <ShortcutsSheet />
       <SshPromptDialog />
+      {poppedOut.map((id) => (
+        <PopOutWindow key={id} sessionId={id} />
+      ))}
 
       <div className="flex min-h-0 flex-1">
         <div
@@ -168,7 +173,9 @@ export function HelixApp() {
           {view === "westcreate" ? <WestCreateView /> : null}
           {view === "memory" ? <MemoryView /> : null}
           {view === "settings" ? <SettingsView /> : null}
-          {view === "focus" && active ? <SessionPane session={active} /> : null}
+          {view === "focus" && active ? (
+            poppedOut.includes(active.id) ? <PoppedPlaceholder id={active.id} /> : <SessionPane session={active} />
+          ) : null}
           {view === "split" && left && right ? (
             <Group orientation="horizontal" className="h-full min-h-0 flex-1">
               <Panel defaultSize="50%" minSize="28%" className="min-h-0">
@@ -268,6 +275,19 @@ function TitleBar({
           New
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** Where a popped-out session would be: it lives in its own window now. */
+function PoppedPlaceholder({ id }: { id: string }) {
+  const popIn = useHelix((s) => s.popIn);
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+      <p className="text-sm font-medium">This session is open in its own window.</p>
+      <button type="button" onClick={() => popIn(id)} className="text-xs text-muted-foreground underline hover:text-foreground">
+        Bring it back here
+      </button>
     </div>
   );
 }

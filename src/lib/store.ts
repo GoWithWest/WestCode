@@ -400,6 +400,10 @@ export type HelixState = {
   steerNow: (sessionId: string, msgId: string) => void;
   /** Take a queued message back before the agent reads it. */
   unqueue: (sessionId: string, msgId: string) => void;
+  /** Sessions shown in their own window (not persisted). */
+  poppedOut: string[];
+  popOut: (sessionId: string) => void;
+  popIn: (sessionId: string) => void;
   /** Move a queued message one place earlier (-1) or later (1). */
   reorderQueued: (sessionId: string, msgId: string, dir: -1 | 1) => void;
   /** Preview a file the agent made, or inline html/svg, in the artifact pane. */
@@ -2711,6 +2715,10 @@ export const useHelix = create<HelixState>((set, get) => ({
     });
     }
   },
+
+  poppedOut: [],
+  popOut: (sessionId) => set((s) => (s.poppedOut.includes(sessionId) ? s : { poppedOut: [...s.poppedOut, sessionId] })),
+  popIn: (sessionId) => set((s) => ({ poppedOut: s.poppedOut.filter((id) => id !== sessionId) })),
 
   reorderQueued: (sessionId, msgId, dir) => {
     set((s) => ({

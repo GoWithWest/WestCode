@@ -4,7 +4,7 @@ import { DetailsRail } from "./details-rail";
 import { TerminalPane } from "./terminal-pane";
 import { PrChip } from "./pr-chip";
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, FolderTree, GitBranch, GitFork, PanelRight, Pencil, Server, SquareTerminal, Terminal, X } from "lucide-react";
+import { Code2, Download, ExternalLink, Folder, FolderTree, GitBranch, GitFork, PanelRight, Pencil, Server, SquareTerminal, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
@@ -134,6 +134,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
                   <PanelRight className="size-3" />
                   Details
                 </button>
+                <PopOutButton sessionId={session.id} />
                 <ResumeButton session={session} />
                 {!session.hostId ? <EditorButton session={session} /> : null}
               </>
@@ -340,6 +341,23 @@ function ResumeButton({ session }: { session: Session }) {
     >
       <Terminal className="size-3" />
       {copied ? "Copied" : "Copy resume"}
+    </button>
+  );
+}
+
+function PopOutButton({ sessionId }: { sessionId: string }) {
+  const popped = useHelix((s) => s.poppedOut.includes(sessionId));
+  const popOut = useHelix((s) => s.popOut);
+  const popIn = useHelix((s) => s.popIn);
+  return (
+    <button
+      type="button"
+      onClick={() => (popped ? popIn(sessionId) : popOut(sessionId))}
+      className="inline-flex items-center gap-1 hover:text-foreground"
+      title={popped ? "Bring this session back into the main window" : "Open this session in its own window"}
+    >
+      <ExternalLink className="size-3" />
+      {popped ? "Pop in" : "Pop out"}
     </button>
   );
 }

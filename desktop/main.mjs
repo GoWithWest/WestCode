@@ -304,7 +304,14 @@ async function createWindow() {
     win?.show();
   });
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    // A session popped out into its own window: a blank child the app renders into.
+    if (url === "about:blank" && String(frameName || "").startsWith("westcode-pop-")) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { width: 780, height: 860, minWidth: 420, minHeight: 360, backgroundColor: "#0e0e10", autoHideMenuBar: true },
+      };
+    }
     void shell.openExternal(url);
     return { action: "deny" };
   });
