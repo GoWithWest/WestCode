@@ -338,6 +338,8 @@ export type HelixState = {
   applyCliUpdate: (id: string) => Promise<void>;
   dismissCliUpdate: (id: string) => void;
   answerPermission: (sessionId: string, optionId: string) => void;
+  /** answers null = decline. */
+  answerQuestion: (sessionId: string, answers: Record<string, string | string[]> | null) => void;
   rememberFolder: (folder: RecentFolder) => void;
   createSession: (opts: CreateOpts) => string;
   send: (sessionId: string, text: string, opts?: SendOpts) => Promise<void>;
@@ -517,6 +519,7 @@ function sanitizeSession(s: Session): Session {
     checkpoints: checkpoints.length ? checkpoints : undefined,
     status: s.status === "running" ? "waiting" : s.status,
     permission: null,
+    question: null,
     queued: undefined,
     permissionMode: s.permissionMode || DEFAULT_PERMISSION,
     agentSessionId: s.agentSessionId,
@@ -1068,6 +1071,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       ...ses,
       status: "error",
       permission: null,
+      question: null,
       updatedAt: Date.now(),
       messages: ses.messages.map((m) =>
         m.id === asstId
@@ -1081,6 +1085,16 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           : m,
       ),
     }));
+    return;
+  }
+  if (ev.type === "question" && ev.rpcId != null) {
+    patch((ses) => ({
+      ...ses,
+      question: { rpcId: ev.rpcId!, message: ev.message || "", fields: ev.fields || [] },
+      updatedAt: Date.now(),
+    }));
+    const ses = useHelix.getState().sessions.find((s) => s.id === sessionId);
+    notifyBackground(sessionId, `${ses?.title ?? "Session"} has a question`, ev.message || "Waiting for your answer.");
     return;
   }
   if (ev.type === "permission" && ev.rpcId != null) {
@@ -1231,6 +1245,7 @@ function bindDesktopEvents() {
       if (
         ev.type === "commands" ||
         ev.type === "permission" ||
+        ev.type === "question" ||
         ev.type === "models" ||
         ev.type === "ready" ||
         ev.type === "plan" ||
@@ -1485,6 +1500,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       sideOpen: undefined,
       queued: undefined,
       permission: null,
+      question: null,
       checkpoints: undefined,
       worktree: undefined,
     };
@@ -1735,6 +1751,13 @@ export const useHelix = create<HelixState>((set, get) => ({
     } catch {
       set({ liveAddons: had, libraryStatus: "ready" });
     }
+  },
+
+  answerQuestion: (sessionId, answers) => {
+    const rpcId = get().sessions.find((s) => s.id === sessionId)?.question?.rpcId;
+    set((s) => ({ sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, question: null })) }));
+    if (rpcId == null) return;
+    void westcode()?.question?.({ sessionId, rpcId, answers });
   },
 
   answerPermission: (sessionId, optionId) => {
@@ -2608,6 +2631,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...x,
         status: "waiting",
         permission: null,
+        question: null,
         queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
         messages: x.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
       })),
@@ -2699,6 +2723,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...s,
         status: "waiting",
         permission: null,
+        question: null,
         updatedAt: Date.now(),
         // Stop discards pending work: queued rows are already visible in the
         // transcript and must not auto-replay after some later send.
@@ -3435,6 +3460,7 @@ Question: ${arg}`;
         updatedAt: Date.now(),
         status: "idle",
         permission: null,
+        question: null,
         queued: [],
         slashCommands: undefined,
       })),

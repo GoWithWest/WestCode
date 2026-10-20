@@ -1488,6 +1488,11 @@ ipcMain.handle("session:stop", (_e, sessionId) => {
   return { ok: true };
 });
 
+ipcMain.handle("session:question", (_e, { sessionId, rpcId, answers }) => {
+  getSession(sessionId)?.answerQuestion(rpcId, answers && typeof answers === "object" ? answers : null);
+  return { ok: true };
+});
+
 ipcMain.handle("session:permission", (_e, { sessionId, rpcId, optionId }) => {
   getSession(sessionId)?.answerPermission(rpcId, optionId);
   return { ok: true };

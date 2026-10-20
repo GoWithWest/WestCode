@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Circle, CircleDot, Layers, ShieldQuestion, Target } from "lucide-react";
+import { Check, ChevronDown, Circle, CircleDot, Layers, MessageCircleQuestion, ShieldQuestion, Target } from "lucide-react";
 import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
-import type { Session } from "@/lib/types";
+import type { QuestionField, Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DiffView } from "./blocks";
@@ -198,6 +198,109 @@ export function PermissionCard({ session, agentName }: { session: Session; agent
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The agent asks the user something (Claude's AskUserQuestion, or an MCP
+ * server's form): pick an option per question, or type an answer. The agent
+ * waits until it is answered or declined.
+ */
+export function QuestionCard({ session, agentName }: { session: Session; agentName: string }) {
+  const answer = useHelix((s) => s.answerQuestion);
+  const q = session.question;
+  const [values, setValues] = useState<Record<string, string | string[]>>({});
+  useEffect(() => setValues({}), [q?.rpcId]);
+  if (!q) return null;
+  const set = (k: string, v: string | string[]) => setValues((cur) => ({ ...cur, [k]: v }));
+  const filled = (f: QuestionField) => {
+    const v = values[f.key];
+    return Array.isArray(v) ? v.length > 0 : Boolean(v && String(v).trim());
+  };
+  // A choice and its "Other" text answer the same question: either one will do.
+  const otherOf = (f: QuestionField) => q.fields.find((g) => g.key === `${f.key}_custom`);
+  const ready = q.fields.every((f) => !f.required || filled(f) || (otherOf(f) ? filled(otherOf(f)!) : false));
+  const answered = q.fields.some(filled);
+  return (
+    <div className="mx-auto w-full max-w-3xl px-3 md:px-5">
+      <form
+        id="question-card"
+        className="rounded-xl border border-accent/40 bg-surface shadow-window"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready && answered) answer(session.id, values);
+        }}
+      >
+        <div className="flex items-start gap-2.5 px-3.5 pt-3">
+          <MessageCircleQuestion className="mt-0.5 size-4 shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <p className="text-2xs font-medium tracking-wide text-subtle uppercase">{agentName} asks</p>
+            <p className="mt-0.5 text-sm font-medium whitespace-pre-wrap">{q.message}</p>
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 px-3.5 pt-3">
+          {q.fields.map((f) => (
+            <fieldset key={f.key} className="min-w-0">
+              {f.title || f.description ? (
+                <legend className="mb-1.5">
+                  {f.title ? <span className="block text-xs font-medium">{f.title}</span> : null}
+                  {f.description ? <span className="block text-2xs text-muted-foreground">{f.description}</span> : null}
+                </legend>
+              ) : null}
+              {f.kind === "text" ? (
+                <input
+                  value={String(values[f.key] ?? "")}
+                  onChange={(e) => set(f.key, e.target.value)}
+                  aria-label={f.title || f.key}
+                  className="h-8 w-full rounded-md border border-border bg-window px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+                />
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {(f.options ?? []).map((o) => {
+                    const cur = values[f.key];
+                    const on = f.kind === "multi" ? Array.isArray(cur) && cur.includes(o.value) : cur === o.value;
+                    return (
+                      <button
+                        key={o.value}
+                        type="button"
+                        role={f.kind === "multi" ? "checkbox" : "radio"}
+                        aria-checked={on}
+                        onClick={() => {
+                          if (f.kind === "multi") {
+                            const list = Array.isArray(cur) ? cur : [];
+                            set(f.key, on ? list.filter((x) => x !== o.value) : [...list, o.value]);
+                          } else set(f.key, on ? "" : o.value);
+                        }}
+                        className={cn(
+                          "rounded-md border px-2.5 py-1.5 text-left",
+                          on ? "border-accent bg-muted" : "border-border hover:border-border-strong",
+                        )}
+                      >
+                        <span className="flex items-center gap-1.5 text-xs">
+                          {on ? <Check className="size-3 text-accent" /> : <Circle className="size-3 text-subtle" />}
+                          {o.label}
+                        </span>
+                        {o.description ? (
+                          <span className="mt-0.5 block pl-[18px] text-2xs text-muted-foreground">{o.description}</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+          ))}
+        </div>
+        <div className="flex justify-end gap-1.5 px-3.5 py-3">
+          <Button type="button" size="sm" variant="ghost" onClick={() => answer(session.id, null)}>
+            Skip
+          </Button>
+          <Button type="submit" size="sm" disabled={!ready || !answered}>
+            Answer
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }

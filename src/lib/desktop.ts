@@ -81,6 +81,7 @@ export type SessionEvent = {
     | "tool"
     | "commands"
     | "permission"
+    | "question"
     | "done"
     | "error"
     | "models"
@@ -111,6 +112,7 @@ export type SessionEvent = {
   status?: "running" | "done" | "error";
   commands?: { cmd: string; hint: string; kind: "builtin" | "skill" }[];
   rpcId?: number;
+  fields?: import("./types").QuestionField[];
   tool?: string;
   options?: { optionId?: string; kind?: string; name?: string }[];
   message?: string;
@@ -466,6 +468,11 @@ type WestcodeBridge = {
   steer?: (sessionId: string, text: string) => Promise<{ ok: boolean; error?: string }>;
   stopTask?: (sessionId: string, taskId: string) => Promise<{ ok: boolean; error?: string }>;
   stopSession: (sessionId: string) => Promise<{ ok: boolean }>;
+  question?: (payload: {
+    sessionId: string;
+    rpcId: number;
+    answers: Record<string, string | string[]> | null;
+  }) => Promise<{ ok: boolean }>;
   permission: (payload: {
     sessionId: string;
     rpcId: number;

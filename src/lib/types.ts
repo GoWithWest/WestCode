@@ -97,6 +97,19 @@ export type PermissionPrompt = {
   options: { optionId?: string; kind?: string; name?: string }[];
 };
 
+/** A form the agent asks the user to fill (AskUserQuestion, MCP elicitation). */
+export type QuestionField = {
+  key: string;
+  title: string;
+  description: string;
+  kind: "choice" | "multi" | "text";
+  options?: { value: string; label: string; description: string }[];
+  required?: boolean;
+  type?: string;
+};
+
+export type QuestionPrompt = { rpcId: number; message: string; fields: QuestionField[] };
+
 export type Session = {
   id: string;
   title: string;
@@ -113,6 +126,8 @@ export type Session = {
   turns: number;
   slashCommands?: { cmd: string; args?: string; hint: string; kind: "builtin" | "skill" }[];
   permission?: PermissionPrompt | null;
+  /** Open question card (the agent waits for the answer). */
+  question?: QuestionPrompt | null;
   availableModels?: { id: string; label: string }[];
   queued?: { text: string; incoming?: IncomingRef; msgId?: string }[];
 /**

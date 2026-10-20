@@ -13,7 +13,7 @@ import { gitCwdOf, type Session } from "@/lib/types";
 import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
-import { GoalCard, PermissionCard, PlanCard, TasksCard } from "./session-extras";
+import { GoalCard, PermissionCard, PlanCard, QuestionCard, TasksCard } from "./session-extras";
 import { AgentAvatar } from "./agents-view";
 import { SourceControlPanel } from "./source-control";
 import { ArtifactPane } from "./artifact-pane";
@@ -49,11 +49,11 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
 
   // An approval request always comes into view, wherever the reader was.
   useEffect(() => {
-    if (!session.permission) return;
+    if (!session.permission && !session.question) return;
     pinned.current = true;
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [session.permission]);
+  }, [session.permission, session.question]);
 
   // ⌘⇧G toggles source control for the focused pane (not split panes).
   useEffect(() => {
@@ -157,6 +157,7 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
 
           <div className="flex flex-col gap-2 pb-2 empty:hidden">
             <PermissionCard session={session} agentName={agentName} />
+            <QuestionCard session={session} agentName={agentName} />
             {!session.permission ? <PlanCard session={session} /> : null}
           {!session.permission ? <TasksCard session={session} /> : null}
           <GoalCard session={session} />

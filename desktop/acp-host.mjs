@@ -10,6 +10,7 @@ import { deskDir } from "./desk-paths.mjs";
 import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate, modelsFrom } from "./acp-map.mjs";
 import { cliHasWestcreate, sessionServer } from "./westcreate.mjs";
 import { envFor, exportsFor } from "./session-env.mjs";
+import { formContent, formFields } from "./elicitation.mjs";
 import {
   claudeRemoteEnv,
   getHost,
@@ -293,6 +294,8 @@ class AcpSession {
     this.reviewer = null;
     /** SSH host this session runs on (ssh.mjs), or null for this Mac. */
     this.remote = null;
+    /** Open elicitation/create requests: rpc id → fields. */
+    this.questions = new Map();
   }
 
   /**
@@ -439,6 +442,9 @@ class AcpSession {
         // them itself, never through this Mac.
         fs: this.remote ? { readTextFile: false, writeTextFile: false } : { readTextFile: true, writeTextFile: true },
         terminal: false,
+        // Question cards: Claude's AskUserQuestion and MCP servers' forms.
+        // A history reader has no one to ask.
+        ...(this.readOnly || this.reviewer ? {} : { elicitation: { form: {} } }),
         // Claude's adapter sends its task plan, predicted next prompt and
         // background-task updates only to clients that declare the
         // (JetBrains) AIR extension. Version 1 with asyncTasks only: no
@@ -807,6 +813,18 @@ class AcpSession {
       });
       return;
     }
+    if (method === "elicitation/create") {
+      // Claude's AskUserQuestion and MCP servers' questions. Never answered
+      // for the user — not even in Bypass: a question is not a tool to approve.
+      if (this.readOnly || this.reviewer || params.mode === "url") {
+        this.reply(msg.id, { action: params.mode === "url" ? "decline" : "cancel" });
+        return;
+      }
+      const fields = formFields(params.requestedSchema);
+      this.questions.set(msg.id, fields);
+      this.emit({ type: "question", rpcId: msg.id, message: String(params.message || ""), fields });
+      return;
+    }
     if (method === "fs/read_text_file" && this.readOnly) {
       this.write({
         jsonrpc: "2.0",
@@ -856,6 +874,14 @@ class AcpSession {
       id: msg.id,
       error: { code: -32601, message: `Method not found: ${method}` },
     });
+  }
+
+  /** answers = {fieldKey: value} to accept, or null to decline. */
+  answerQuestion(rpcId, answers) {
+    const fields = this.questions.get(rpcId);
+    this.questions.delete(rpcId);
+    if (!fields) return;
+    this.reply(rpcId, answers ? { action: "accept", content: formContent(fields, answers) } : { action: "decline" });
   }
 
   answerPermission(rpcId, optionId) {

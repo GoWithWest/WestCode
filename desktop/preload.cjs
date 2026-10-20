@@ -111,6 +111,7 @@ contextBridge.exposeInMainWorld("westcode", {
   stopTask: (sessionId, taskId) => ipcRenderer.invoke("session:stop-task", { sessionId, taskId }),
   stopSession: (sessionId) => ipcRenderer.invoke("session:stop", sessionId),
   permission: (payload) => ipcRenderer.invoke("session:permission", payload),
+  question: (payload) => ipcRenderer.invoke("session:question", payload),
   onEvent: (fn) => {
     const handler = (_e, data) => fn(data);
     ipcRenderer.on("session:event", handler);
