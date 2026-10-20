@@ -288,6 +288,18 @@ export function SettingsView() {
           <label className="mt-3 flex items-start gap-3">
             <input
               type="checkbox"
+              checked={settings.autoArchivePr ?? false}
+              onChange={(e) => update({ autoArchivePr: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Archive a session when its pull request is merged or closed.</span>{" "}
+              Its worktree goes with it (kept if it has uncommitted changes).
+            </span>
+          </label>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
               checked={settings.keepAwake ?? true}
               onChange={(e) => update({ keepAwake: e.target.checked })}
               className="mt-0.5 size-4 accent-[var(--color-accent)]"

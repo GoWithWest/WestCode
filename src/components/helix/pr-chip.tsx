@@ -36,6 +36,14 @@ export function PrChip({ session }: { session: Session }) {
     if (session.status === "idle" || session.status === "waiting") void refresh();
   }, [session.status, refresh]);
 
+  // Claude Desktop's "Auto-archive after PR merge or close".
+  const autoArchive = useHelix((s) => s.settings.autoArchivePr ?? false);
+  const prState = st?.pr?.state;
+  useEffect(() => {
+    if (!autoArchive || !prState || prState === "OPEN" || session.archivedAt) return;
+    useHelix.getState().archiveSession(session.id, true);
+  }, [autoArchive, prState, session.id, session.archivedAt]);
+
   if (!api || !st || st.missing || st.noRemote) return null;
   if (!st.ok) return null;
   const pr = st.pr;

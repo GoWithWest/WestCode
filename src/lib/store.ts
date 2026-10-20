@@ -133,6 +133,8 @@ export type AppSettings = {
   theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
+  /** Archive a session once its branch's PR is merged or closed. */
+  autoArchivePr?: boolean;
   /** Last permission mode chosen per folder (Plan is per session only). */
   folderModes?: Record<string, string>;
   /** Keep the Mac from sleeping while an agent is mid-turn. */
