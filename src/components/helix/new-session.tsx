@@ -32,6 +32,10 @@ export function NewSessionDialog() {
   const sshHosts = useHelix((s) => s.sshHosts);
   const setView = useHelix((s) => s.setView);
   const [hostId, setHostId] = useState("");
+  // Claude Desktop's "Worktree": the session gets its own branch and copy.
+  const [worktree, setWorktree] = useState(false);
+  const [startError, setStartError] = useState("");
+  const [starting, setStarting] = useState(false);
   // Folder browser for an SSH host (the native picker only sees this Mac).
   const [remote, setRemote] = useState<{ path: string; dirs: string[]; error?: string; loading?: boolean } | null>(null);
   const scoped = settings.defaultProviderId === initialProvider;
@@ -110,19 +114,42 @@ export function NewSessionDialog() {
     setCwd(folder.path);
   }
 
-  function start() {
+  async function start() {
     if (!provider) return;
-    if (!cwd.trim()) return;
+    if (!cwd.trim() || starting) return;
+    setStartError("");
+    let folder = cwd.trim();
+    let wt: { path: string; branch: string; repo: string } | undefined;
+    if (worktree && !hostId) {
+      const add = westcode()?.git?.worktreeAdd;
+      if (!add) return;
+      setStarting(true);
+      const name = title.trim() || folder.split("/").filter(Boolean).pop() || "session";
+      const r = await add(folder, {
+        name,
+        branchPrefix: settings.worktreeBranchPrefix,
+        location: settings.worktreeLocation || undefined,
+      });
+      setStarting(false);
+      if (!r.ok || !r.path) {
+        setStartError(r.error || "Could not create the worktree.");
+        return;
+      }
+      wt = { path: r.path, branch: r.branch!, repo: r.repo! };
+      folder = r.path;
+    }
     createSession({
       providerId: provider.id,
       projectId,
-      cwd: cwd.trim(),
-      title: title.trim(),
+      cwd: folder,
+      title: title.trim() || (wt ? wt.branch.split("/").pop() : ""),
       model,
       effort,
       ...(hostId ? { hostId } : {}),
+      ...(wt ? { worktree: wt } : {}),
     });
     setTitle("");
+    setWorktree(false);
   }
 
   return (
@@ -331,7 +358,7 @@ export function NewSessionDialog() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  start();
+                  void start();
                 }
               }}
               placeholder="Optional — defaults to the folder name"
@@ -339,12 +366,35 @@ export function NewSessionDialog() {
             />
           </label>
 
+          {!hostId ? (
+            <label className="mt-3 flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={worktree}
+                onChange={(e) => setWorktree(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">Worktree</span>
+                <span className="block text-2xs text-muted-foreground">
+                  Work on a new branch in its own copy of the repository, so parallel sessions never touch the same
+                  files. Removed when you archive the session (kept if it has uncommitted changes).
+                </span>
+              </span>
+            </label>
+          ) : null}
+          {startError ? (
+            <p className="mt-2 text-2xs text-destructive" role="alert">
+              {startError}
+            </p>
+          ) : null}
+
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setNewOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={start} disabled={!cwd.trim() || !provider}>
-              Start session
+            <Button onClick={() => void start()} disabled={!cwd.trim() || !provider || starting}>
+              {starting ? "Creating worktree…" : "Start session"}
             </Button>
           </div>
         </Dialog.Content>

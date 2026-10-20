@@ -134,6 +134,27 @@ export function SettingsView() {
               </Button>
             ) : null}
           </Row>
+        
+          <Row label="Worktree branch">
+            <input
+              value={settings.worktreeBranchPrefix ?? "westcode/"}
+              onChange={(e) => update({ worktreeBranchPrefix: e.target.value })}
+              spellCheck={false}
+              aria-label="Worktree branch prefix"
+              className="h-8 w-40 rounded-md border border-border bg-window px-2 font-mono text-xs outline-none"
+            />
+            <span className="text-2xs text-subtle">prefix for a session&apos;s worktree branch</span>
+          </Row>
+          <Row label="Worktrees in">
+            <input
+              value={settings.worktreeLocation ?? ""}
+              onChange={(e) => update({ worktreeLocation: e.target.value })}
+              placeholder="<repo>/.claude/worktrees"
+              spellCheck={false}
+              aria-label="Worktree location"
+              className="h-8 min-w-0 flex-1 rounded-md border border-border bg-window px-2 font-mono text-xs outline-none placeholder:text-subtle"
+            />
+          </Row>
         </section>
 
         <SshHostsSection />

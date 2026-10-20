@@ -498,3 +498,98 @@ export async function initRepo(dir) {
   const r = await runGit(dir, ["init", "-q"]);
   return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr.trim() };
 }
+
+// ------------------------------------------------------------------ worktrees
+
+function slugName(s) {
+  return String(s || "session").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "session";
+}
+
+/**
+ * A session's own copy of the repository (Claude Desktop's "Worktree"): a
+ * git worktree on a new branch, so parallel sessions never edit the same
+ * files. Lives in <repo>/.claude/worktrees/ (kept out of `git status` via
+ * .git/info/exclude) unless a location is given. Untracked files listed in
+ * .worktreeinclude (e.g. .env) are copied in.
+ */
+export async function addWorktree(cwd, { name, branchPrefix = "westcode/", location } = {}) {
+  const top = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  if (top.code !== 0) return { ok: false, error: "This folder is not a git repository." };
+  const repo = top.stdout.trim();
+  const head = await runGit(repo, ["rev-parse", "--verify", "HEAD"]);
+  if (head.code !== 0) return { ok: false, error: "The repository has no commits yet — commit once, then a worktree can branch from it." };
+  const { basename } = await import("node:path");
+  const { appendFileSync, cpSync, mkdirSync, readFileSync } = await import("node:fs");
+  const { randomBytes } = await import("node:crypto");
+  const id = randomBytes(2).toString("hex");
+  const slug = slugName(name);
+  const prefix = String(branchPrefix ?? "").replace(/[^A-Za-z0-9._/-]/g, "");
+  const branch = `${prefix}${slug}-${id}`;
+  const dir = location
+    ? join(String(location).replace(/^~(?=\/)/, (await import("node:os")).homedir()), `${basename(repo)}-${id}`, slug)
+    : join(repo, ".claude", "worktrees", `${slug}-${id}`);
+  return withRepoLock(repo, async () => {
+    if (!location) {
+      const common = await runGit(repo, ["rev-parse", "--git-common-dir"]);
+      const exclude = join(repo, common.stdout.trim(), "info", "exclude");
+      let text = "";
+      try {
+        text = readFileSync(exclude, "utf8");
+      } catch {
+        /* no exclude file yet */
+      }
+      if (!/^\/?\.claude\/worktrees\/?$/m.test(text)) {
+        mkdirSync(join(exclude, ".."), { recursive: true });
+        appendFileSync(exclude, `${text && !text.endsWith("\n") ? "\n" : ""}/.claude/worktrees/\n`);
+      }
+    }
+    mkdirSync(join(dir, ".."), { recursive: true });
+    const add = await runGit(repo, ["worktree", "add", "-b", branch, dir, "HEAD"]);
+    if (add.code !== 0) return { ok: false, error: add.stderr.trim() || "git worktree add failed." };
+    const copied = [];
+    if (existsSync(join(repo, ".worktreeinclude"))) {
+      const listed = await runGit(repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-from=.worktreeinclude"]);
+      for (const rel of listed.stdout.split("\0").filter(Boolean)) {
+        if (rel.startsWith(".claude/worktrees/")) continue;
+        try {
+          mkdirSync(join(dir, rel, ".."), { recursive: true });
+          cpSync(join(repo, rel), join(dir, rel));
+          copied.push(rel);
+        } catch {
+          /* unreadable file: skip */
+        }
+      }
+    }
+    return { ok: true, path: dir, branch, repo, copied };
+  });
+}
+
+/**
+ * Remove a session's worktree. Refuses while it has uncommitted changes
+ * (unless forced), and keeps its branch so committed work is never lost.
+ */
+export async function removeWorktree(path, { force = false } = {}) {
+  if (!existsSync(path)) return { ok: true, gone: true };
+  const st = await runGit(path, ["status", "--porcelain"]);
+  if (st.code !== 0) return { ok: false, error: "Not a git worktree." };
+  if (st.stdout.trim() && !force) return { ok: false, dirty: true, error: "The worktree has uncommitted changes." };
+  const common = await runGit(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const repo = join(common.stdout.trim(), "..");
+  return withRepoLock(repo, async () => {
+    const r = await runGit(repo, ["worktree", "remove", ...(force ? ["--force"] : []), path]);
+    if (r.code !== 0) return { ok: false, error: r.stderr.trim() };
+    return { ok: true };
+  });
+}
+
+/** Bring back a removed session worktree from its branch (on unarchive). */
+export async function reattachWorktree(repo, path, branch) {
+  if (existsSync(path)) return { ok: true, path };
+  if (!/^[A-Za-z0-9._/-]+$/.test(String(branch))) return { ok: false, error: "Bad branch name." };
+  return withRepoLock(repo, async () => {
+    await runGit(repo, ["worktree", "prune"]);
+    const r = await runGit(repo, ["worktree", "add", path, branch]);
+    if (r.code !== 0) return { ok: false, error: r.stderr.trim() };
+    return { ok: true, path };
+  });
+}

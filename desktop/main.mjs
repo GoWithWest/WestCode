@@ -736,6 +736,24 @@ gitHandler("git:find-repos", (dir) => gitOps.findRepos(dir).then((repos) => ({ o
 gitHandler("git:init", (dir) => gitOps.initRepo(dir));
 gitHandler("git:checkpoint", (dir, p) => gitOps.checkpoint(dir, String(p.label || "turn").slice(0, 80)));
 gitHandler("git:restore", (dir, p) => gitOps.restoreCheckpoint(dir, p.sha));
+gitHandler("git:worktree-add", (dir, p) =>
+  gitOps.addWorktree(dir, { name: String(p.name || "session"), branchPrefix: p.branchPrefix, location: p.location || undefined }),
+);
+ipcMain.handle("git:worktree-reattach", async (_e, { repo, path, branch } = {}) => {
+  try {
+    return await gitOps.reattachWorktree(repoDir(repo), String(path || ""), String(branch || ""));
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+// The worktree folder may already be gone, so not through repoDir().
+ipcMain.handle("git:worktree-remove", async (_e, { path, force } = {}) => {
+  try {
+    return await gitOps.removeWorktree(String(path || ""), { force: Boolean(force) });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
 
 // App state (sessions, library, agents, providers, colors…) persists in
 // ~/.westcode/state.json so it survives app replacement — the packaged

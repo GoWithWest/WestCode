@@ -133,6 +133,10 @@ export type AppSettings = {
   theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
+  /** Branch name prefix for session worktrees. */
+  worktreeBranchPrefix?: string;
+  /** Where worktrees go; empty = <repo>/.claude/worktrees. */
+  worktreeLocation?: string;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -149,6 +153,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   memoryRepo: "",
   memorySync: false,
   launchAtLogin: false,
+  worktreeBranchPrefix: "westcode/",
+  worktreeLocation: "",
 };
 
 type AgentsPersist = {
@@ -246,6 +252,8 @@ type CreateOpts = {
   background?: boolean;
   /** Run on this SSH host instead of this Mac. */
   hostId?: string;
+  /** The session's own git worktree (cwd is its path). */
+  worktree?: Session["worktree"];
 };
 
 export type HelixState = {
@@ -1774,6 +1782,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     background,
     sideOf,
     hostId,
+    worktree,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
     const settings = get().settings;
@@ -1804,6 +1813,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       agentId,
       sideOf,
       ...(hostId ? { hostId } : {}),
+      ...(worktree ? { worktree } : {}),
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -1935,6 +1945,30 @@ export const useHelix = create<HelixState>((set, get) => ({
       };
     });
     persistDesk();
+    // A session's worktree goes with it (Claude Desktop keeps it until
+    // archive); one with uncommitted changes stays, and says where.
+    const wt = get().sessions.find((x) => x.id === id)?.worktree;
+    const git = westcode()?.git;
+    if (!wt || !git) return;
+    const note = (text: string) =>
+      set((st) => ({
+        sessions: patchSession(st.sessions, id, (x) => ({ ...x, messages: [...x.messages, systemNote(text)] })),
+      }));
+    if (archived) {
+      void git.worktreeRemove?.(wt.path).then((r) => {
+        if (r && !r.ok) {
+          note(
+            r.dirty
+              ? `Worktree kept: ${wt.path} has uncommitted changes. Commit or discard them, then archive again to remove it. Branch ${wt.branch} keeps your commits either way.`
+              : `Could not remove the worktree at ${wt.path}: ${r.error ?? "unknown error"}`,
+          );
+        }
+      });
+    } else {
+      void git.worktreeReattach?.(wt.repo, wt.path, wt.branch).then((r) => {
+        if (r && !r.ok) note(`Could not bring back the worktree for ${wt.branch}: ${r.error ?? "unknown error"}`);
+      });
+    }
   },
 
   removeSession: (id) => {

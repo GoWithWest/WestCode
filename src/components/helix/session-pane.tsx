@@ -79,6 +79,14 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
             {!session.hostId ? (
               <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
             ) : null}
+            {session.worktree ? (
+              <span
+                className="rounded-full border border-border px-1.5 py-px text-foreground"
+                title={`Its own worktree on branch ${session.worktree.branch}, at ${session.worktree.path}. Removed when the session is archived.`}
+              >
+                worktree
+              </span>
+            ) : null}
             {!compact ? (
               <>
                 <ExportButton session={session} />

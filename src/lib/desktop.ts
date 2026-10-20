@@ -177,6 +177,12 @@ export type GitBridge = {
   init?: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   checkpoint?: (cwd: string, label: string) => Promise<{ ok: boolean; sha?: string; error?: string }>;
   restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; skipped?: string[]; error?: string }>;
+  worktreeAdd?: (
+    cwd: string,
+    payload: { name: string; branchPrefix?: string; location?: string },
+  ) => Promise<{ ok: boolean; path?: string; branch?: string; repo?: string; copied?: string[]; error?: string }>;
+  worktreeRemove?: (path: string, force?: boolean) => Promise<{ ok: boolean; dirty?: boolean; gone?: boolean; error?: string }>;
+  worktreeReattach?: (repo: string, path: string, branch: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
   onProgress: (
     fn: (p: { cwd: string; title: string; percent: number }) => void,
   ) => () => void;

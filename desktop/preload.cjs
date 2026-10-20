@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld("westcode", {
     init: (cwd) => ipcRenderer.invoke("git:init", { cwd }),
     checkpoint: (cwd, label) => ipcRenderer.invoke("git:checkpoint", { cwd, label }),
     restore: (cwd, sha) => ipcRenderer.invoke("git:restore", { cwd, sha }),
+    worktreeAdd: (cwd, payload) => ipcRenderer.invoke("git:worktree-add", { cwd, ...(payload || {}) }),
+    worktreeRemove: (path, force) => ipcRenderer.invoke("git:worktree-remove", { path, force }),
+    worktreeReattach: (repo, path, branch) => ipcRenderer.invoke("git:worktree-reattach", { repo, path, branch }),
     onProgress: (fn) => {
       const handler = (_e, data) => fn(data);
       ipcRenderer.on("git:progress", handler);
