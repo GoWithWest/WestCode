@@ -12,6 +12,7 @@ import {
 import { formatOutgoing, imagesIn } from "./fs";
 import type { SessionPreset } from "./presets";
 import { CONTINUE_PROMPT, limitResetAt, resumeAt, resumeLabel } from "./limits";
+import { moveQueued } from "./queue";
 import {
   DEFAULT_ENABLED,
   LIBRARY,
@@ -397,6 +398,8 @@ export type HelixState = {
   steerNow: (sessionId: string, msgId: string) => void;
   /** Take a queued message back before the agent reads it. */
   unqueue: (sessionId: string, msgId: string) => void;
+  /** Move a queued message one place earlier (-1) or later (1). */
+  reorderQueued: (sessionId: string, msgId: string, dir: -1 | 1) => void;
   /** Preview a file the agent made, or inline html/svg, in the artifact pane. */
   openArtifact: (sessionId: string, what: { path?: string; code?: string; lang?: string }) => Promise<string | null>;
   /** Put the session's folder back to a checkpoint (undoable). */
@@ -2703,6 +2706,15 @@ export const useHelix = create<HelixState>((set, get) => ({
       void get().send(sessionId, item!.text, { incoming: item!.incoming, replay: true, replayOf: item!.msgId });
     });
     }
+  },
+
+  reorderQueued: (sessionId, msgId, dir) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => {
+        const moved = moveQueued(x.queued ?? [], x.messages, msgId, dir);
+        return moved ? { ...x, ...moved } : x;
+      }),
+    }));
   },
 
   unqueue: (sessionId, msgId) => {

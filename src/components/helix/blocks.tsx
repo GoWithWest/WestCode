@@ -186,6 +186,24 @@ const Message = memo(function Message({
           >
             Remove
           </button>
+          <button
+            type="button"
+            aria-label="Send earlier"
+            title="Send earlier"
+            onClick={() => useHelix.getState().reorderQueued(sessionId, message.id, -1)}
+            className="hover:text-foreground"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label="Send later"
+            title="Send later"
+            onClick={() => useHelix.getState().reorderQueued(sessionId, message.id, 1)}
+            className="hover:text-foreground"
+          >
+            ↓
+          </button>
         </div>
       ) : null}
       </div>
