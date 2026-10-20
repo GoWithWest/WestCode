@@ -28,6 +28,18 @@ export function setDeskUrl(url) {
   deskUrl = url || "";
 }
 
+/**
+ * MCP servers WestCode adds start in "/". The CLI starts them in the session
+ * folder, and Node starting in a folder on a network share is slow — measured
+ * on a Mac: `node -e 0` took 9.7 s in /Volumes/<share>/… against 0.05 s in
+ * /tmp — which, with the CLI's other startup, ran past its 30 s MCP connect
+ * limit (CONNECT_TIMEOUT). ACP's stdio server config has no cwd, hence sh.
+ */
+export function neutralCwd(server) {
+  if (!server || process.platform === "win32") return server;
+  return { ...server, command: "/bin/sh", args: ["-c", 'cd / && exec "$0" "$@"', server.command, ...(server.args || [])] };
+}
+
 function deskMcp(sessionId, providerId) {
   const nodeBin = which("node") || process.execPath;
   const env = [
@@ -53,7 +65,7 @@ function deskMcp(sessionId, providerId) {
     const wc = sessionServer(which("node"), process.execPath);
     if (wc) servers.push(wc);
   }
-  return servers;
+  return servers.map(neutralCwd);
 }
 
 /** The learning reviewer's only extra tools: read skills/memory, propose. */
@@ -69,7 +81,7 @@ function learnMcp(sessionId, opts) {
     if (process.env[k]) env.push({ name: k, value: process.env[k] });
   }
   if (nodeBin === process.execPath) env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
-  return [{ type: "stdio", name: "westcode-learn", command: nodeBin, args: [join(here, "learn-mcp.mjs")], env }];
+  return [neutralCwd({ type: "stdio", name: "westcode-learn", command: nodeBin, args: [join(here, "learn-mcp.mjs")], env })];
 }
 
 function expandHome(p) {
@@ -381,11 +393,16 @@ class AcpSession {
     });
     // On a host the folder is the host's; locally the process starts in a
     // stand-in (Claude's adapter needs an existing cwd) or in the home folder.
+    // Claude's adapter (Node) takes the folder from session/new and gives it
+    // to Claude Code, so locally it starts in the home folder: Node starting
+    // in a folder on a network share costs ~10 s (see neutralCwd).
     const spawnCwd = this.remote
       ? this.providerId === "claude"
         ? localStandIn(this.remote, this.cwd)
         : homedir()
-      : this.cwd;
+      : this.providerId === "claude"
+        ? homedir()
+        : this.cwd;
     if (!this.remote && !existsSync(this.cwd)) {
       this.dead = true;
       throw new Error(
