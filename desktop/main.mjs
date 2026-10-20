@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell, Tray } from "electron";
+import { trayTemplate, trayTitle } from "./tray.mjs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -444,8 +445,52 @@ function applyKeepAwake() {
     awakeId = null;
   }
 }
+// Menu bar icon (Settings → Show WestCode in the menu bar).
+let tray = null;
+let trayRows = [];
+function showWindow() {
+  if (!win || win.isDestroyed()) return void createWindow();
+  win.show();
+  win.focus();
+}
+function refreshTray() {
+  if (!tray) return;
+  tray.setContextMenu(
+    Menu.buildFromTemplate(
+      trayTemplate(trayRows, {
+        open: (id) => {
+          showWindow();
+          sendMenu(`open:${id}`);
+        },
+        newSession: () => {
+          showWindow();
+          sendMenu("new");
+        },
+        show: showWindow,
+        quit: () => app.quit(),
+      }),
+    ),
+  );
+  if (process.platform === "darwin") tray.setTitle(trayTitle(trayRows));
+}
+function setTrayEnabled(on) {
+  if (on && !tray) {
+    const img = nativeImage.createFromPath(join(here, "trayTemplate.png"));
+    img.setTemplateImage(true);
+    tray = new Tray(img);
+    tray.setToolTip("WestCode");
+    refreshTray();
+  } else if (!on && tray) {
+    tray.destroy();
+    tray = null;
+  }
+}
+ipcMain.on("app:tray", (_e, enabled) => setTrayEnabled(enabled !== false));
+
 ipcMain.on("desk:sync", (_e, rows) => {
   setRoster(rows);
+  trayRows = Array.isArray(rows) ? rows : [];
+  refreshTray();
   deskRunning = (Array.isArray(rows) ? rows : []).filter((r) => r?.status === "running").length;
   applyKeepAwake();
 });

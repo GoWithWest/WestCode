@@ -484,6 +484,8 @@ type WestcodeBridge = {
   onEvent: (fn: (e: SessionEvent) => void) => () => void;
   onMenu: (fn: (action: string) => void) => () => void;
   setKeepAwake?: (enabled: boolean) => void;
+  /** Menu bar icon on/off. */
+  setTray?: (enabled: boolean) => void;
   pr?: {
     status: (cwd: string) => Promise<PrStatus>;
     create: (cwd: string, p?: { title?: string; body?: string; draft?: boolean }) => Promise<{ ok: boolean; url?: string; error?: string }>;

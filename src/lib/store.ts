@@ -154,6 +154,8 @@ export type AppSettings = {
   sessionPresets?: SessionPreset[];
   /** Continue a session automatically when the usage limit it hit resets. */
   autoContinueAtReset?: boolean;
+  /** WestCode icon in the menu bar: running sessions, new session. */
+  menuBarIcon?: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -1718,6 +1720,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     void get().refreshCli();
     void get().refreshSshHosts();
     westcode()?.setKeepAwake?.(get().settings.keepAwake ?? true);
+    westcode()?.setTray?.(get().settings.menuBarIcon ?? true);
     void get().refreshLibrary();
     void get().refreshUpdates();
     void get().refreshLearning();
@@ -2313,6 +2316,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       void westcode()?.setLoginItem?.(settings.launchAtLogin);
     }
     if ("keepAwake" in patch) westcode()?.setKeepAwake?.(settings.keepAwake ?? true);
+    if ("menuBarIcon" in patch) westcode()?.setTray?.(settings.menuBarIcon ?? true);
   },
 
   addSchedule: (t) => {

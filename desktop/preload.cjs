@@ -124,6 +124,7 @@ contextBridge.exposeInMainWorld("westcode", {
   },
   syncDesk: (rows) => ipcRenderer.send("desk:sync", rows),
   setKeepAwake: (enabled) => ipcRenderer.send("app:keep-awake", enabled),
+  setTray: (enabled) => ipcRenderer.send("app:tray", enabled),
   pr: {
     status: (cwd) => ipcRenderer.invoke("pr:status", { cwd }),
     create: (cwd, payload) => ipcRenderer.invoke("pr:create", { cwd, ...(payload || {}) }),

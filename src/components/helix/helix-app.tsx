@@ -74,6 +74,13 @@ export function HelixApp() {
         window.dispatchEvent(new CustomEvent("westcode:panel", { detail: { panel: action.slice(6) } }));
       } else if (action === "palette" || action === "find" || action === "shortcuts") {
         window.dispatchEvent(new CustomEvent(`westcode:${action}`));
+      } else if (action.startsWith("open:")) {
+        // From the menu bar icon: jump to that session.
+        const sid = action.slice(5);
+        if (state.sessions.some((s) => s.id === sid)) {
+          if (state.view !== "focus" && state.view !== "mosaic") state.setView("focus");
+          state.setActive(sid);
+        }
       } else if (action === "split") {
         const live = state.sessions.filter((s) => !s.archivedAt);
         if (live.length >= 2) state.setSplit([live[0]!.id, live[1]!.id]);
