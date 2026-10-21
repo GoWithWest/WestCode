@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ExternalLink, FolderOpen, Plus, Trash2 } from "lucide-react";
 import { PERMISSION_MODES, defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
 import { pickDirectory } from "@/lib/fs";
+import { westcode } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useAllProviders } from "./provider";
+import { SshHostsSection } from "./ssh-hosts";
+import { EnvVarsSection } from "./env-vars";
 
 export function SettingsView() {
   const settings = useHelix((s) => s.settings);
@@ -108,6 +111,8 @@ export function SettingsView() {
             </span>
           </Row>
 
+          <OutputStyleRow value={settings.claudeOutputStyle ?? ""} onChange={(v) => update({ claudeOutputStyle: v })} />
+
           <Row label="Folder">
             <span className="min-w-0 flex-1 truncate font-mono text-2xs text-muted-foreground">
               {settings.defaultCwd || "Ask every time"}
@@ -133,7 +138,32 @@ export function SettingsView() {
               </Button>
             ) : null}
           </Row>
+        
+          <Row label="Worktree branch">
+            <input
+              value={settings.worktreeBranchPrefix ?? "westcode/"}
+              onChange={(e) => update({ worktreeBranchPrefix: e.target.value })}
+              spellCheck={false}
+              aria-label="Worktree branch prefix"
+              className="h-8 w-40 rounded-md border border-border bg-window px-2 font-mono text-xs outline-none"
+            />
+            <span className="text-2xs text-subtle">prefix for a session&apos;s worktree branch</span>
+          </Row>
+          <Row label="Worktrees in">
+            <input
+              value={settings.worktreeLocation ?? ""}
+              onChange={(e) => update({ worktreeLocation: e.target.value })}
+              placeholder="<repo>/.claude/worktrees"
+              spellCheck={false}
+              aria-label="Worktree location"
+              className="h-8 min-w-0 flex-1 rounded-md border border-border bg-window px-2 font-mono text-xs outline-none placeholder:text-subtle"
+            />
+          </Row>
         </section>
+
+        <SshHostsSection />
+
+        <EnvVarsSection />
 
         <section className="mt-4 rounded-lg border border-border bg-surface p-4">
           <h3 className="text-sm font-medium">Delegation</h3>
@@ -264,6 +294,54 @@ export function SettingsView() {
           <label className="mt-3 flex items-start gap-3">
             <input
               type="checkbox"
+              checked={settings.autoArchivePr ?? false}
+              onChange={(e) => update({ autoArchivePr: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Archive a session when its pull request is merged or closed.</span>{" "}
+              Its worktree goes with it (kept if it has uncommitted changes).
+            </span>
+          </label>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={settings.keepAwake ?? true}
+              onChange={(e) => update({ keepAwake: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Keep this Mac awake while agents work.</span> Sleep is
+              held off only while a turn is running, then released.
+            </span>
+          </label>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={settings.autoContinueAtReset ?? true}
+              onChange={(e) => update({ autoContinueAtReset: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Continue automatically when a usage limit resets.</span> A
+              Claude session that stops at its limit picks up again a minute after the reset.
+            </span>
+          </label>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={settings.menuBarIcon ?? true}
+              onChange={(e) => update({ menuBarIcon: e.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Show WestCode in the menu bar.</span> See which sessions are
+              working or waiting for you, jump to one, or start a new session.
+            </span>
+          </label>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
               checked={settings.launchAtLogin}
               onChange={(e) => update({ launchAtLogin: e.target.checked })}
               className="mt-0.5 size-4 accent-[var(--color-accent)]"
@@ -384,6 +462,42 @@ export function SettingsView() {
         </section>
       </div>
     </div>
+  );
+}
+
+/** Default Claude Code output style for sessions that have not picked one. */
+function OutputStyleRow({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [styles, setStyles] = useState<{ name: string; custom?: boolean }[]>([]);
+  const api = westcode()?.outputStyles;
+  useEffect(() => {
+    if (!api) return;
+    let dead = false;
+    void api("").then((r) => {
+      if (!dead) setStyles(r.styles ?? []);
+    });
+    return () => {
+      dead = true;
+    };
+  }, [api]);
+  if (!api) return null;
+  return (
+    <Row label="Output style">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Claude output style"
+        className="h-8 rounded-md border border-border bg-window px-2 text-xs outline-none"
+      >
+        <option value="">Claude Code&apos;s setting</option>
+        {styles.map((st) => (
+          <option key={st.name} value={st.name}>
+            {st.name === "default" ? "Default" : st.name}
+          </option>
+        ))}
+        {value && !styles.some((st) => st.name === value) ? <option value={value}>{value}</option> : null}
+      </select>
+      <span className="text-2xs text-subtle">for Claude sessions; each session can change it in the prompt box</span>
+    </Row>
   );
 }
 

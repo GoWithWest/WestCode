@@ -1,3 +1,7 @@
+import { CommandPalette } from "./command-palette";
+import { FindBar } from "./find-bar";
+import { ShortcutsSheet } from "./shortcuts-sheet";
+import { SshPromptDialog } from "./ssh-prompt";
 import { useEffect } from "react";
 import { Columns2, LayoutGrid, Plus, PanelLeft } from "lucide-react";
 import { Group, Panel, Separator } from "react-resizable-panels";
@@ -14,6 +18,7 @@ import { LibraryView } from "./library-view";
 import { Mosaic } from "./mosaic";
 import { NewSessionDialog } from "./new-session";
 import { ProvidersView } from "./providers-view";
+import { PopOutWindow } from "./pop-out";
 import { SessionPane } from "./session-pane";
 import { Sidebar } from "./sidebar";
 import { UpdateBanner } from "./update-banner";
@@ -59,10 +64,36 @@ export function HelixApp() {
       else if (action === "focus") {
         const id = state.activeId ?? state.sessions[0]?.id;
         if (id) state.setActive(id);
+      } else if (action === "next" || action === "prev") {
+        // Ctrl+Tab / ⌘⇧] and ⌘⇧[: step through the open sessions.
+        const live = state.sessions.filter((s) => !s.archivedAt && !s.sideOf);
+        if (!live.length) return;
+        const i = live.findIndex((s) => s.id === state.activeId);
+        const step = action === "next" ? 1 : -1;
+        state.setActive(live[(i + step + live.length) % live.length]!.id);
+      } else if (action.startsWith("panel-")) {
+        window.dispatchEvent(new CustomEvent("westcode:panel", { detail: { panel: action.slice(6) } }));
+      } else if (action === "palette" || action === "find" || action === "shortcuts") {
+        window.dispatchEvent(new CustomEvent(`westcode:${action}`));
+      } else if (action.startsWith("open:")) {
+        // From the menu bar icon: jump to that session.
+        const sid = action.slice(5);
+        if (state.sessions.some((s) => s.id === sid)) {
+          if (state.view !== "focus" && state.view !== "mosaic") state.setView("focus");
+          state.setActive(sid);
+        }
       } else if (action === "split") {
         const live = state.sessions.filter((s) => !s.archivedAt);
         if (live.length >= 2) state.setSplit([live[0]!.id, live[1]!.id]);
       }
+    });
+    const offLink = westcode()?.onDeepLink?.((link) => {
+      useHelix.getState().openNewWith({
+        cwd: link.folder || undefined,
+        hostId: link.host || undefined,
+        prompt: link.prompt || undefined,
+        providerId: link.provider || undefined,
+      });
     });
     // ⌘O / Ctrl+O cycles how much agent activity shows (Normal → Thinking →
     // Verbose), the same key Claude Code uses for its transcript views.
@@ -80,10 +111,12 @@ export function HelixApp() {
       window.clearInterval(id);
       window.removeEventListener("keydown", onKey);
       offMenu?.();
+      offLink?.();
     };
   }, [tick, restoreState]);
 
   const liveSessions = sessions.filter((s) => !s.archivedAt);
+  const poppedOut = useHelix((s) => s.poppedOut);
   const active =
     sessions.find((s) => s.id === activeId) ?? liveSessions[0] ?? null;
   const left =
@@ -109,6 +142,13 @@ export function HelixApp() {
         }
       />
       <UpdateBanner />
+      <FindBar />
+      <CommandPalette />
+      <ShortcutsSheet />
+      <SshPromptDialog />
+      {poppedOut.map((id) => (
+        <PopOutWindow key={id} sessionId={id} />
+      ))}
 
       <div className="flex min-h-0 flex-1">
         <div
@@ -133,7 +173,9 @@ export function HelixApp() {
           {view === "westcreate" ? <WestCreateView /> : null}
           {view === "memory" ? <MemoryView /> : null}
           {view === "settings" ? <SettingsView /> : null}
-          {view === "focus" && active ? <SessionPane session={active} /> : null}
+          {view === "focus" && active ? (
+            poppedOut.includes(active.id) ? <PoppedPlaceholder id={active.id} /> : <SessionPane session={active} />
+          ) : null}
           {view === "split" && left && right ? (
             <Group orientation="horizontal" className="h-full min-h-0 flex-1">
               <Panel defaultSize="50%" minSize="28%" className="min-h-0">
@@ -233,6 +275,19 @@ function TitleBar({
           New
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** Where a popped-out session would be: it lives in its own window now. */
+function PoppedPlaceholder({ id }: { id: string }) {
+  const popIn = useHelix((s) => s.popIn);
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+      <p className="text-sm font-medium">This session is open in its own window.</p>
+      <button type="button" onClick={() => popIn(id)} className="text-xs text-muted-foreground underline hover:text-foreground">
+        Bring it back here
+      </button>
     </div>
   );
 }

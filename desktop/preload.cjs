@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld("westcode", {
     init: (cwd) => ipcRenderer.invoke("git:init", { cwd }),
     checkpoint: (cwd, label) => ipcRenderer.invoke("git:checkpoint", { cwd, label }),
     restore: (cwd, sha) => ipcRenderer.invoke("git:restore", { cwd, sha }),
+    worktreeAdd: (cwd, payload) => ipcRenderer.invoke("git:worktree-add", { cwd, ...(payload || {}) }),
+    worktreeRemove: (path, force) => ipcRenderer.invoke("git:worktree-remove", { path, force }),
+    worktreeReattach: (repo, path, branch) => ipcRenderer.invoke("git:worktree-reattach", { repo, path, branch }),
     onProgress: (fn) => {
       const handler = (_e, data) => fn(data);
       ipcRenderer.on("git:progress", handler);
@@ -86,12 +89,29 @@ contextBridge.exposeInMainWorld("westcode", {
   stateSave: (key, value) => ipcRenderer.invoke("state:save", { key, value }),
   cliSessions: (providerIds) => ipcRenderer.invoke("sessions:cli-list", { providerIds }),
   openSession: (payload) => ipcRenderer.invoke("session:open", payload),
+  forkSession: (payload) => ipcRenderer.invoke("session:fork", payload),
+  ssh: {
+    list: () => ipcRenderer.invoke("ssh:list"),
+    save: (host) => ipcRenderer.invoke("ssh:save", host),
+    remove: (id) => ipcRenderer.invoke("ssh:remove", id),
+    test: (host) => ipcRenderer.invoke("ssh:test", host),
+    ls: (hostId, path) => ipcRenderer.invoke("ssh:ls", { hostId, path }),
+    installClaude: (hostId) => ipcRenderer.invoke("ssh:install-claude", hostId),
+    forgetPassword: (hostId) => ipcRenderer.invoke("ssh:forget-password", hostId),
+    onPrompt: (fn) => {
+      const h = (_e, p) => fn(p);
+      ipcRenderer.on("ssh:prompt", h);
+      return () => ipcRenderer.removeListener("ssh:prompt", h);
+    },
+    reply: (id, value, remember) => ipcRenderer.send("ssh:prompt-reply", { id, value, remember }),
+  },
   prompt: (payload) => ipcRenderer.invoke("session:prompt", payload),
   cancel: (sessionId) => ipcRenderer.invoke("session:cancel", sessionId),
   steer: (sessionId, text) => ipcRenderer.invoke("session:steer", { sessionId, text }),
   stopTask: (sessionId, taskId) => ipcRenderer.invoke("session:stop-task", { sessionId, taskId }),
   stopSession: (sessionId) => ipcRenderer.invoke("session:stop", sessionId),
   permission: (payload) => ipcRenderer.invoke("session:permission", payload),
+  question: (payload) => ipcRenderer.invoke("session:question", payload),
   onEvent: (fn) => {
     const handler = (_e, data) => fn(data);
     ipcRenderer.on("session:event", handler);
@@ -103,6 +123,52 @@ contextBridge.exposeInMainWorld("westcode", {
     return () => ipcRenderer.removeListener("menu:action", handler);
   },
   syncDesk: (rows) => ipcRenderer.send("desk:sync", rows),
+  setKeepAwake: (enabled) => ipcRenderer.send("app:keep-awake", enabled),
+  setTray: (enabled) => ipcRenderer.send("app:tray", enabled),
+  captureScreenshot: () => ipcRenderer.invoke("screenshot:capture"),
+  pr: {
+    status: (cwd) => ipcRenderer.invoke("pr:status", { cwd }),
+    create: (cwd, payload) => ipcRenderer.invoke("pr:create", { cwd, ...(payload || {}) }),
+    mergeWhenReady: (cwd) => ipcRenderer.invoke("pr:merge-auto", { cwd }),
+  },
+  onDeepLink: (fn) => {
+    const handler = (_e, link) => fn(link);
+    ipcRenderer.on("deeplink", handler);
+    return () => ipcRenderer.removeListener("deeplink", handler);
+  },
+  dev: {
+    list: (cwd) => ipcRenderer.invoke("dev:list", { cwd }),
+    start: (cwd, name) => ipcRenderer.invoke("dev:start", { cwd, name }),
+    stop: (cwd, name) => ipcRenderer.invoke("dev:stop", { cwd, name }),
+  },
+  outputStyles: (cwd, hostId) => ipcRenderer.invoke("claude:output-styles", { cwd, hostId }),
+  env: {
+    get: (scope) => ipcRenderer.invoke("env:get", scope),
+    set: (scope, text) => ipcRenderer.invoke("env:set", { scope, text }),
+  },
+  files: {
+    list: (root, path, hostId) => ipcRenderer.invoke("files:list", { root, path, hostId }),
+    read: (root, path, hostId) => ipcRenderer.invoke("files:read", { root, path, hostId }),
+    search: (root, query, hostId) => ipcRenderer.invoke("files:search", { root, query, hostId }),
+    write: (root, path, content, expected) => ipcRenderer.invoke("files:write", { root, path, content, expected }),
+  },
+  term: {
+    open: (p) => ipcRenderer.invoke("term:open", p),
+    write: (id, data) => ipcRenderer.send("term:write", { id, data }),
+    resize: (id, cols, rows) => ipcRenderer.send("term:resize", { id, cols, rows }),
+    close: (id) => ipcRenderer.send("term:close", id),
+    onData: (fn) => {
+      const h = (_e, m) => fn(m);
+      ipcRenderer.on("term:data", h);
+      return () => ipcRenderer.removeListener("term:data", h);
+    },
+    onExit: (fn) => {
+      const h = (_e, m) => fn(m);
+      ipcRenderer.on("term:exit", h);
+      return () => ipcRenderer.removeListener("term:exit", h);
+    },
+  },
+
   onDeskDeliver: (fn) => {
     const handler = (_e, data) => fn(data);
     ipcRenderer.on("desk:deliver", handler);

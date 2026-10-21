@@ -28,16 +28,60 @@ export type CliSession = {
   cwd: string;
   title: string;
   updatedAt: number;
+  /** Stored on this SSH host (see SshHost); absent = this Mac. */
+  hostId?: string;
+};
+
+export type PrStatus = {
+  ok: boolean;
+  error?: string;
+  missing?: "gh";
+  noRemote?: boolean;
+  pr?: {
+    number: number;
+    title: string;
+    url: string;
+    state: string;
+    draft: boolean;
+    mergeable: string;
+    review: string;
+    head: string;
+    base: string;
+    autoMerge: boolean;
+    checks: { total: number; passed: number; failed: number; pending: number; failing: { name: string; url: string }[] };
+  } | null;
+};
+
+/** A machine sessions can run on over SSH (Settings → SSH hosts). */
+export type SshHost = {
+  id: string;
+  name: string;
+  host: string;
+  user?: string;
+  port?: number;
+  identityFile?: string;
+};
+
+export type SshProbe = {
+  ok: boolean;
+  error?: string;
+  home?: string;
+  os?: string;
+  clis?: Record<"claude" | "grok" | "codex", { path: string; version?: string } | null>;
+  git?: boolean;
 };
 
 export type SessionEvent = {
   sessionId: string;
+  /** On text chunks: the agent's API message id (Claude), for Rewind. */
+  messageId?: string;
   type:
     | "text"
     | "thought"
     | "tool"
     | "commands"
     | "permission"
+    | "question"
     | "done"
     | "error"
     | "models"
@@ -58,6 +102,7 @@ export type SessionEvent = {
   diffs?: { path: string; oldText: string; newText: string }[];
   plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
   usage?: { used: number; size: number };
+  rateLimit?: { status?: string; resetsAt?: number; type?: string };
   modeId?: string;
   suggestion?: string | null;
   task?: { id: string; kind: "background" | "subagent"; description?: string; state: string; summary?: string };
@@ -68,6 +113,8 @@ export type SessionEvent = {
   status?: "running" | "done" | "error";
   commands?: { cmd: string; hint: string; kind: "builtin" | "skill" }[];
   rpcId?: number;
+  fields?: import("./types").QuestionField[];
+  findings?: import("./types").Finding[];
   tool?: string;
   options?: { optionId?: string; kind?: string; name?: string }[];
   message?: string;
@@ -156,6 +203,12 @@ export type GitBridge = {
   init?: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   checkpoint?: (cwd: string, label: string) => Promise<{ ok: boolean; sha?: string; error?: string }>;
   restore?: (cwd: string, sha: string) => Promise<{ ok: boolean; undo?: string; removed?: string[]; skipped?: string[]; error?: string }>;
+  worktreeAdd?: (
+    cwd: string,
+    payload: { name: string; branchPrefix?: string; location?: string },
+  ) => Promise<{ ok: boolean; path?: string; branch?: string; repo?: string; copied?: string[]; error?: string }>;
+  worktreeRemove?: (path: string, force?: boolean) => Promise<{ ok: boolean; dirty?: boolean; gone?: boolean; error?: string }>;
+  worktreeReattach?: (repo: string, path: string, branch: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
   onProgress: (
     fn: (p: { cwd: string; title: string; percent: number }) => void,
   ) => () => void;
@@ -359,7 +412,31 @@ type WestcodeBridge = {
     ok: boolean;
     sessions: CliSession[];
     errors: string[];
+    /** Sessions a CLI here lists whose folder is on another machine. */
+    elsewhere?: number;
   }>;
+  forkSession?: (p: {
+    providerId: string;
+    cwd: string;
+    agentSessionId: string;
+    model?: string;
+    effort?: string;
+    /** Fork at this reply (Rewind) instead of at the end. */
+    at?: { messageId: string; text: string };
+  }) => Promise<{ ok: boolean; agentSessionId?: string; error?: string }>;
+  ssh?: {
+    list: () => Promise<{ hosts: SshHost[]; config: (Omit<SshHost, "id"> & { hostName?: string })[] }>;
+    save: (host: Partial<SshHost>) => Promise<{ ok: boolean; host?: SshHost; error?: string }>;
+    remove: (id: string) => Promise<{ ok: boolean }>;
+    test: (host: string | Partial<SshHost>) => Promise<SshProbe>;
+    ls: (hostId: string, path?: string) => Promise<{ ok: boolean; path?: string; dirs?: string[]; error?: string }>;
+    installClaude?: (hostId: string) => Promise<{ ok: boolean; error?: string }>;
+    forgetPassword?: (hostId: string) => Promise<{ ok: boolean }>;
+    onPrompt?: (
+      fn: (p: { id: string; hostId: string; hostName: string; prompt: string; secret: boolean; canRemember: boolean }) => void,
+    ) => () => void;
+    reply?: (id: string, value: string | null, remember?: boolean) => void;
+  };
   openSession: (payload: {
     sessionId: string;
     providerId: string;
@@ -368,6 +445,7 @@ type WestcodeBridge = {
     effort: string;
     permissionMode?: string;
     agentSessionId: string;
+    hostId?: string;
   }) => Promise<{
     ok: boolean;
     output?: string;
@@ -382,6 +460,11 @@ type WestcodeBridge = {
     effort: string;
     permissionMode?: string;
     agentSessionId?: string;
+    hostId?: string;
+    /** Claude Code output style for this session ("" = the CLI's own setting). */
+    outputStyle?: string;
+    /** Attached images, sent as image blocks to agents that accept them. */
+    images?: { mimeType: string; data: string }[];
     history?: { role: string; text: string }[];
     text: string;
   }) => Promise<{ ok: boolean; error?: string }>;
@@ -389,6 +472,11 @@ type WestcodeBridge = {
   steer?: (sessionId: string, text: string) => Promise<{ ok: boolean; error?: string }>;
   stopTask?: (sessionId: string, taskId: string) => Promise<{ ok: boolean; error?: string }>;
   stopSession: (sessionId: string) => Promise<{ ok: boolean }>;
+  question?: (payload: {
+    sessionId: string;
+    rpcId: number;
+    answers: Record<string, string | string[]> | null;
+  }) => Promise<{ ok: boolean }>;
   permission: (payload: {
     sessionId: string;
     rpcId: number;
@@ -396,6 +484,57 @@ type WestcodeBridge = {
   }) => Promise<{ ok: boolean }>;
   onEvent: (fn: (e: SessionEvent) => void) => () => void;
   onMenu: (fn: (action: string) => void) => () => void;
+  setKeepAwake?: (enabled: boolean) => void;
+  /** Menu bar icon on/off. */
+  setTray?: (enabled: boolean) => void;
+  /** macOS region screenshot; base64 PNG, or cancelled. */
+  captureScreenshot?: () => Promise<{ ok: boolean; data?: string; mime?: string; cancelled?: boolean; error?: string }>;
+  pr?: {
+    status: (cwd: string) => Promise<PrStatus>;
+    create: (cwd: string, p?: { title?: string; body?: string; draft?: boolean }) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    mergeWhenReady: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
+  };
+  onDeepLink?: (
+    fn: (link: { action: "new"; folder: string; prompt: string; host: string; provider: string }) => void,
+  ) => () => void;
+  dev?: {
+    list: (cwd: string) => Promise<{
+      ok: boolean;
+      error?: string;
+      missing?: boolean;
+      configs?: { name: string; port?: number; runtimeExecutable: string }[];
+      running?: { name: string; url: string; port: number; log: string }[];
+    }>;
+    start: (cwd: string, name: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    stop: (cwd: string, name: string) => Promise<{ ok: boolean }>;
+  };
+  outputStyles?: (
+    cwd: string,
+    hostId?: string,
+  ) => Promise<{ ok: boolean; error?: string; styles: { name: string; description?: string; custom?: boolean }[] }>;
+  env?: {
+    get: (scope: string) => Promise<{ ok: boolean; text: string }>;
+    set: (scope: string, text: string) => Promise<{ ok: boolean; error?: string }>;
+  };
+  files?: {
+    list: (root: string, path: string, hostId?: string) => Promise<{ ok: boolean; entries?: { name: string; path: string; dir: boolean }[]; error?: string }>;
+    read: (
+      root: string,
+      path: string,
+      hostId?: string,
+    ) => Promise<{ ok: boolean; text?: string; binary?: boolean; tooLarge?: boolean; readOnly?: boolean; error?: string }>;
+    write: (root: string, path: string, content: string, expected?: string) => Promise<{ ok: boolean; conflict?: boolean; error?: string }>;
+    search: (root: string, query: string, hostId?: string) => Promise<{ ok: boolean; files?: string[]; error?: string }>;
+  };
+  term?: {
+    open: (p: { id: string; cwd: string; hostId?: string; cols: number; rows: number }) => Promise<{ ok: boolean; error?: string }>;
+    write: (id: string, data: string) => void;
+    resize: (id: string, cols: number, rows: number) => void;
+    close: (id: string) => void;
+    onData: (fn: (m: { id: string; data: string }) => void) => () => void;
+    onExit: (fn: (m: { id: string; code: number }) => void) => () => void;
+  };
+
   syncDesk: (rows: {
     id: string;
     title: string;

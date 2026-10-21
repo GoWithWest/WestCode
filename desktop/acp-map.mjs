@@ -1,3 +1,4 @@
+import { isFindingsTool, parseFindings } from "./findings.mjs";
 // Map ACP session/update notifications to WestCode session events.
 //
 // Shapes below are the ones the agents actually send (recorded from
@@ -108,7 +109,13 @@ export function mapUpdate(params, opts = {}) {
     const used = Number(u.used);
     const size = Number(u.size);
     if (!Number.isFinite(used)) return { type: "noop" };
-    return { type: "usage", usage: { used, size: Number.isFinite(size) ? size : 0 } };
+    // Claude: the CLI's rate-limit state rides along (status, resetsAt epoch seconds).
+    const rl = u._meta?.["_claude/rateLimit"];
+    const rateLimit =
+      rl && typeof rl === "object" && typeof rl.status === "string"
+        ? { status: rl.status, ...(typeof rl.resetsAt === "number" ? { resetsAt: rl.resetsAt } : {}), ...(rl.rateLimitType ? { type: String(rl.rateLimitType) } : {}) }
+        : undefined;
+    return { type: "usage", usage: { used, size: Number.isFinite(size) ? size : 0 }, ...(rateLimit ? { rateLimit } : {}) };
   }
   if (kind === "session_info_update") {
     const title = typeof u.title === "string" ? u.title.trim() : "";
@@ -158,7 +165,8 @@ export function mapUpdate(params, opts = {}) {
     return { type: "thought", text: extractText(u) };
   }
   if (kind === "agent_message_chunk") {
-    return { type: "text", text: extractText(u) };
+    // The API message id: Rewind forks the conversation at one.
+    return { type: "text", text: extractText(u), ...(u.messageId ? { messageId: String(u.messageId) } : {}) };
   }
   if (kind === "tool_call" || kind === "tool_call_update") {
     const raw = u.rawInput && typeof u.rawInput === "object" ? u.rawInput : {};
@@ -166,8 +174,13 @@ export function mapUpdate(params, opts = {}) {
     const title = typeof u.title === "string" ? u.title : "";
     const diffs = contentDiffs(u.content);
     const status = toolStatus(u);
+    // Claude's adapter refines a call with a partial update that drops unchanged
+    // fields (name, title): findings on a nameless update are kept, and the
+    // renderer checks them against the call's recorded name.
+    const findings = Array.isArray(raw.findings) && (isFindingsTool(`${name} ${title}`) || (!name && !title)) ? parseFindings(raw) : undefined;
     return {
       type: "tool",
+      ...(findings ? { findings } : {}),
       toolId: u.toolCallId || u.tool_call_id || u.id,
       // Identity name first (the dedupe in extractSendMessages matches on
       // westcode_send_message); a tool_call with nothing better falls back to

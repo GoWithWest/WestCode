@@ -9,7 +9,10 @@ import {
   modelsFor,
   slashFor,
 } from "./catalog";
-import { formatOutgoing } from "./fs";
+import { formatOutgoing, imagesIn } from "./fs";
+import type { SessionPreset } from "./presets";
+import { CONTINUE_PROMPT, limitResetAt, resumeAt, resumeLabel } from "./limits";
+import { moveQueued } from "./queue";
 import {
   DEFAULT_ENABLED,
   LIBRARY,
@@ -57,6 +60,7 @@ import {
   type CliUpdate,
   type LiveAddon,
   type SessionEvent,
+  type SshHost,
 } from "./desktop";
 import type {
   AgentRosterItem,
@@ -132,6 +136,26 @@ export type AppSettings = {
   theme: "system" | "dark" | "light";
   /** Start WestCode when the user logs in (keeps schedules running). */
   launchAtLogin: boolean;
+  /** Group the sidebar's sessions by machine (this Mac / SSH hosts). */
+  groupByMachine?: boolean;
+  /** Archive a session once its branch's PR is merged or closed. */
+  autoArchivePr?: boolean;
+  /** Last permission mode chosen per folder (Plan is per session only). */
+  folderModes?: Record<string, string>;
+  /** Keep the Mac from sleeping while an agent is mid-turn. */
+  keepAwake?: boolean;
+  /** Branch name prefix for session worktrees. */
+  worktreeBranchPrefix?: string;
+  /** Where worktrees go; empty = <repo>/.claude/worktrees. */
+  worktreeLocation?: string;
+  /** Output style for new Claude sessions; empty = Claude Code's own setting. */
+  claudeOutputStyle?: string;
+  /** Saved setups shown in the New session dialog. */
+  sessionPresets?: SessionPreset[];
+  /** Continue a session automatically when the usage limit it hit resets. */
+  autoContinueAtReset?: boolean;
+  /** WestCode icon in the menu bar: running sessions, new session. */
+  menuBarIcon?: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -148,6 +172,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   memoryRepo: "",
   memorySync: false,
   launchAtLogin: false,
+  keepAwake: true,
+  worktreeBranchPrefix: "westcode/",
+  worktreeLocation: "",
 };
 
 type AgentsPersist = {
@@ -243,6 +270,10 @@ type CreateOpts = {
   agentId?: string;
   /** Do not steal focus — used when the desk bus spawns a session. */
   background?: boolean;
+  /** Run on this SSH host instead of this Mac. */
+  hostId?: string;
+  /** The session's own git worktree (cwd is its path). */
+  worktree?: Session["worktree"];
 };
 
 export type HelixState = {
@@ -254,6 +285,17 @@ export type HelixState = {
   clock: number;
   newOpen: boolean;
   newProviderId: string | null;
+  /** Fills the New session dialog (from a westcode:// link); the user confirms. */
+  newPrefill: { cwd?: string; hostId?: string; prompt?: string } | null;
+  openNewWith: (p: { cwd?: string; hostId?: string; prompt?: string; providerId?: string }) => void;
+  /** Copy the conversation into a new session (Claude Desktop's Fork). */
+  forkSession: (sessionId: string) => Promise<string | null>;
+  /**
+   * Rewind to before one of your messages (Claude Desktop's "Rewind to
+   * here"): the conversation is forked at the reply before it, the files go
+   * back to that message's checkpoint, and its text returns to the composer.
+   */
+  rewindTo: (sessionId: string, messageId: string) => Promise<boolean>;
   enabledAddons: string[];
   customAddons: Addon[];
   customProviders: CustomProvider[];
@@ -284,6 +326,13 @@ export type HelixState = {
   cliSessionStatus: "idle" | "loading" | "ready";
   /** Providers that failed to list, so a broken CLI is not silently empty. */
   cliSessionErrors: string[];
+  /** Sessions a CLI here lists whose folder is on another machine. */
+  cliSessionsElsewhere: number;
+  /** Machines sessions can run on over SSH (Settings → SSH hosts). */
+  sshHosts: SshHost[];
+  /** Hosts named in ~/.ssh/config, offered for import. */
+  sshConfigHosts: (Omit<SshHost, "id"> & { hostName?: string })[];
+  refreshSshHosts: () => Promise<void>;
 
   setView: (v: LayoutView) => void;
   setActive: (id: string) => void;
@@ -298,6 +347,10 @@ export type HelixState = {
   applyCliUpdate: (id: string) => Promise<void>;
   dismissCliUpdate: (id: string) => void;
   answerPermission: (sessionId: string, optionId: string) => void;
+  /** Stop waiting for the usage limit to reset; or continue right away. */
+  cancelAutoContinue: (sessionId: string, continueNow?: boolean) => void;
+  /** answers null = decline. */
+  answerQuestion: (sessionId: string, answers: Record<string, string | string[]> | null) => void;
   rememberFolder: (folder: RecentFolder) => void;
   createSession: (opts: CreateOpts) => string;
   send: (sessionId: string, text: string, opts?: SendOpts) => Promise<void>;
@@ -310,6 +363,7 @@ export type HelixState = {
   stop: (sessionId: string) => void;
   setSessionModel: (sessionId: string, model: string) => void;
   setSessionEffort: (sessionId: string, effort: string) => void;
+  setSessionOutputStyle: (sessionId: string, style: string) => void;
   setSessionPermissionMode: (sessionId: string, mode: string) => void;
   toggleAddon: (id: string) => void;
   importAddon: (addon: Omit<Addon, "id" | "custom">) => void;
@@ -346,6 +400,12 @@ export type HelixState = {
   steerNow: (sessionId: string, msgId: string) => void;
   /** Take a queued message back before the agent reads it. */
   unqueue: (sessionId: string, msgId: string) => void;
+  /** Sessions shown in their own window (not persisted). */
+  poppedOut: string[];
+  popOut: (sessionId: string) => void;
+  popIn: (sessionId: string) => void;
+  /** Move a queued message one place earlier (-1) or later (1). */
+  reorderQueued: (sessionId: string, msgId: string, dir: -1 | 1) => void;
   /** Preview a file the agent made, or inline html/svg, in the artifact pane. */
   openArtifact: (sessionId: string, what: { path?: string; code?: string; lang?: string }) => Promise<string | null>;
   /** Put the session's folder back to a checkpoint (undoable). */
@@ -388,6 +448,17 @@ function saveState(key: string, value: unknown) {
   } catch {
     /* quota */
   }
+}
+
+// Unsent composer text per session, kept in the state file like settings
+// (localStorage alone is per-port, and the app's port changes per launch).
+const DRAFTS_KEY = "westcode-drafts-v1";
+export function readDrafts(): Record<string, string> {
+  const d = readJson<Record<string, string>>(DRAFTS_KEY, {});
+  return d && typeof d === "object" ? d : {};
+}
+export function writeDrafts(d: Record<string, string>) {
+  saveState(DRAFTS_KEY, d);
 }
 
 function persistLibrary(enabled: string[], custom: Addon[]) {
@@ -465,6 +536,7 @@ function sanitizeSession(s: Session): Session {
     checkpoints: checkpoints.length ? checkpoints : undefined,
     status: s.status === "running" ? "waiting" : s.status,
     permission: null,
+    question: null,
     queued: undefined,
     permissionMode: s.permissionMode || DEFAULT_PERMISSION,
     agentSessionId: s.agentSessionId,
@@ -859,6 +931,12 @@ export function mergeHistory(
 }
 
 /** Turn a session/load replay into transcript messages. */
+/** Follow the agent's API message ids: text of the latest one, for Rewind. */
+function nextAcp(cur: ChatMessage["lastAcp"], ev: { messageId?: string; text?: string }): ChatMessage["lastAcp"] {
+  if (!ev.messageId) return cur;
+  return cur?.id === ev.messageId ? { id: cur.id, text: cur.text + (ev.text ?? "") } : { id: ev.messageId, text: ev.text ?? "" };
+}
+
 export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   let asst: ChatMessage | null = null;
@@ -894,6 +972,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         if (ev.command) known.command = ev.command;
         if (ev.content) known.content = ev.content;
         if (ev.diffs) known.diffs = ev.diffs;
+        if (ev.findings && isFindingsTool(`${known.name} ${known.title ?? ""}`)) known.findings = ev.findings;
         if (ev.status) known.status = ev.status;
         continue;
       }
@@ -908,6 +987,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
         command: ev.command,
         content: ev.content || "",
         status: ev.status || "done",
+        ...(ev.findings && isFindingsTool(`${ev.name ?? ""} ${ev.title ?? ""}`) ? { findings: ev.findings } : {}),
       };
       tools.set(key, block);
       asst.blocks.push(block);
@@ -916,6 +996,7 @@ export function replayToMessages(events: SessionEvent[]): ChatMessage[] {
     // Chunks stream in pieces — keep appending to the trailing block of the
     // same kind instead of making one block per chunk.
     const kind = ev.type === "thought" ? "think" : "text";
+    if (ev.type === "text") asst.lastAcp = nextAcp(asst.lastAcp, ev);
     const last = asst.blocks[asst.blocks.length - 1];
     if (last && last.type === kind) last.text += ev.text ?? "";
     else asst.blocks.push({ type: kind, text: ev.text ?? "" });
@@ -932,7 +1013,8 @@ export function closeThinking(blocks: Block[]): Block[] {
   return blocks;
 }
 
-function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
+/** Exported for tests only. */
+export function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
   const patch = (fn: (s: Session) => Session) =>
     useHelix.setState((s) => ({
       sessions: patchSession(s.sessions, sessionId, fn),
@@ -958,7 +1040,12 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     return;
   }
   if (ev.type === "usage" && ev.usage) {
-    patch((ses) => ({ ...ses, usage: ev.usage }));
+    const reset = limitResetAt(ev.rateLimit);
+    patch((ses) => ({
+      ...ses,
+      usage: ev.usage,
+      ...(reset !== undefined ? { limitResetAt: reset ?? undefined } : {}),
+    }));
     return;
   }
   if (ev.type === "info") {
@@ -966,7 +1053,9 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
     // guess at your next prompt.
     patch((ses) => ({
       ...ses,
-      ...(ev.title && !ses.titleLocked ? { title: ev.title } : {}),
+      // Grok titles a session after its first prompt, which opens with
+      // WestCode's own desk preamble — that is never a name for the work.
+      ...(ev.title && !ses.titleLocked && !/^\s*\[WestCode/.test(ev.title) ? { title: ev.title } : {}),
       ...(ev.suggestion !== undefined ? { suggestion: ev.suggestion } : {}),
     }));
     return;
@@ -1009,6 +1098,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
       ...ses,
       status: "error",
       permission: null,
+      question: null,
       updatedAt: Date.now(),
       messages: ses.messages.map((m) =>
         m.id === asstId
@@ -1022,6 +1112,16 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           : m,
       ),
     }));
+    return;
+  }
+  if (ev.type === "question" && ev.rpcId != null) {
+    patch((ses) => ({
+      ...ses,
+      question: { rpcId: ev.rpcId!, message: ev.message || "", fields: ev.fields || [] },
+      updatedAt: Date.now(),
+    }));
+    const ses = useHelix.getState().sessions.find((s) => s.id === sessionId);
+    notifyBackground(sessionId, `${ses?.title ?? "Session"} has a question`, ev.message || "Waiting for your answer.");
     return;
   }
   if (ev.type === "permission" && ev.rpcId != null) {
@@ -1085,7 +1185,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
         } else {
           blocks.push({ type: "text", text: ev.text! });
         }
-        return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true };
+        return { ...m, blocks, raw: (m.raw ?? "") + ev.text, streaming: true, lastAcp: nextAcp(m.lastAcp, ev) };
       }),
     }));
     return;
@@ -1118,6 +1218,7 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
           content: ev.content || "",
           diffs: ev.diffs,
           status: ev.status || "running",
+          ...(ev.findings ? { findings: ev.findings } : {}),
         };
         if (idx >= 0) {
           const prev = blocks[idx] as ToolBlock;
@@ -1137,11 +1238,14 @@ function applyEvent(sessionId: string, asstId: string, ev: SessionEvent) {
             diffs: tool.diffs || prev.diffs,
             path: tool.path || prev.path,
             command: tool.command || prev.command,
+            findings:
+              tool.findings && isFindingsTool(`${meaningfulName} ${tool.title || prev.title || ""}`) ? tool.findings : prev.findings,
             // A patch without a status leaves the card where it was.
             status: ev.status || prev.status,
           };
         } else {
-          blocks.push(tool);
+          // A new card keeps findings only when it is a findings tool.
+          blocks.push(tool.findings && !isFindingsTool(`${tool.name} ${tool.title ?? ""}`) ? { ...tool, findings: undefined } : tool);
           bumpLearn(sessionId, "tools");
         }
         return { ...m, blocks, streaming: true };
@@ -1161,6 +1265,85 @@ function spawnableProviderId(providerId: string, state: HelixState): string {
   return PROVIDER_ORDER[0]!;
 }
 
+// Output from a cycle the agent started itself, per session: one assistant
+// message, closed after a quiet spell or when the user sends again.
+const autoAsst = new Map<string, { id: string; timer?: ReturnType<typeof setTimeout> }>();
+
+function closeAutonomous(sessionId: string) {
+  const a = autoAsst.get(sessionId);
+  if (!a) return;
+  clearTimeout(a.timer);
+  autoAsst.delete(sessionId);
+  useHelix.setState((s) => ({
+    sessions: patchSession(s.sessions, sessionId, (x) => ({
+      ...x,
+      messages: x.messages.map((m) => (m.id === a.id ? { ...m, streaming: false } : m)),
+    })),
+  }));
+}
+
+function autonomousEvent(sessionId: string, ev: SessionEvent) {
+  if (!useHelix.getState().sessions.some((s) => s.id === sessionId)) return;
+  let a = autoAsst.get(sessionId);
+  if (!a) {
+    const id = uid("m");
+    useHelix.setState((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({
+        ...x,
+        updatedAt: Date.now(),
+        messages: [...x.messages, { id, role: "assistant", createdAt: Date.now(), blocks: [], raw: "", streaming: true }],
+      })),
+    }));
+    a = { id };
+    autoAsst.set(sessionId, a);
+  }
+  applyEvent(sessionId, a.id, ev);
+  clearTimeout(a.timer);
+  a.timer = setTimeout(() => closeAutonomous(sessionId), 4000);
+}
+
+/** Tool calls whose input is a review's findings (WestCode's desk tool, Claude Code's ReportFindings). */
+const isFindingsTool = (label: string) => /westcode_report_findings|(^|[^a-z])ReportFindings\b/.test(label);
+
+// Auto-continue after a usage limit resets: one timer per waiting session.
+const continueTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function armContinue(sessionId: string, at: number) {
+  clearTimeout(continueTimers.get(sessionId));
+  const wait = Math.min(Math.max(0, at - Date.now()), 2 ** 31 - 1);
+  continueTimers.set(
+    sessionId,
+    setTimeout(() => {
+      continueTimers.delete(sessionId);
+      const st = useHelix.getState();
+      const ses = st.sessions.find((s) => s.id === sessionId);
+      if (!ses?.autoContinueAt || ses.archivedAt) return;
+      if (ses.autoContinueAt > Date.now() + 1000) return armContinue(sessionId, ses.autoContinueAt);
+      useHelix.setState((s) => ({
+        sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, autoContinueAt: undefined, limitResetAt: undefined })),
+      }));
+      if (ses.status !== "running") void st.send(sessionId, CONTINUE_PROMPT);
+    }, wait),
+  );
+}
+
+/** A turn ended while a usage limit was hit: continue when it resets (setting on by default). */
+function maybeAutoContinue(sessionId: string) {
+  const st = useHelix.getState();
+  const ses = st.sessions.find((s) => s.id === sessionId);
+  if (!ses || ses.autoContinueAt || st.settings.autoContinueAtReset === false) return;
+  const at = resumeAt(ses.limitResetAt);
+  if (!at) return;
+  useHelix.setState((s) => ({
+    sessions: patchSession(s.sessions, sessionId, (x) => ({
+      ...x,
+      autoContinueAt: at,
+      messages: [...x.messages, systemNote(`Usage limit reached. Continues automatically at ${resumeLabel(at)}.`)],
+    })),
+  }));
+  armContinue(sessionId, at);
+}
+
 let eventsBound = false;
 function bindDesktopEvents() {
   const api = westcode();
@@ -1168,10 +1351,17 @@ function bindDesktopEvents() {
   eventsBound = true;
   api.onEvent((ev) => {
     const pending = promptAsst.get(ev.sessionId);
+    if (!pending && (ev.type === "text" || ev.type === "thought" || ev.type === "tool")) {
+      // Claude Code works on its own between prompts (a background task
+      // finished, a queued note): that output has no prompt to land on.
+      autonomousEvent(ev.sessionId, ev);
+      return;
+    }
     if (!pending) {
       if (
         ev.type === "commands" ||
         ev.type === "permission" ||
+        ev.type === "question" ||
         ev.type === "models" ||
         ev.type === "ready" ||
         ev.type === "plan" ||
@@ -1188,6 +1378,7 @@ function bindDesktopEvents() {
     applyEvent(ev.sessionId, pending, ev);
     if (ev.type === "done" || ev.type === "error") {
       promptAsst.delete(ev.sessionId);
+      maybeAutoContinue(ev.sessionId);
     }
   });
   api.onScheduleFire?.((p) => {
@@ -1339,6 +1530,103 @@ export const useHelix = create<HelixState>((set, get) => ({
   clock: Date.now(),
   newOpen: false,
   newProviderId: null,
+  newPrefill: null,
+  rewindTo: async (sessionId, messageId) => {
+    const api = westcode();
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    if (!api?.forkSession || !ses?.agentSessionId || ses.hostId || ses.status === "running") return false;
+    const idx = ses.messages.findIndex((m) => m.id === messageId);
+    const msg = ses.messages[idx];
+    if (!msg || msg.role !== "user") return false;
+    const note = (text: string) =>
+      set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, systemNote(text)] })) }));
+    const before = [...ses.messages.slice(0, idx)].reverse().find((m) => m.role === "assistant" && m.lastAcp?.id);
+    // Forking starts the agent, which takes a while: say so.
+    const working = { ...systemNote("Rewinding — forking the conversation before that message…"), id: uid("rw") };
+    set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, working] })) }));
+    const dropWorking = () =>
+      set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: x.messages.filter((m) => m.id !== working.id) })) }));
+    let agentSessionId: string | undefined;
+    if (before?.lastAcp) {
+      const r = await api.forkSession({
+        providerId: ses.providerId,
+        cwd: ses.cwd,
+        agentSessionId: ses.agentSessionId,
+        model: ses.model,
+        effort: ses.effort,
+        at: { messageId: before.lastAcp.id, text: before.lastAcp.text },
+      });
+      if (!r.ok || !r.agentSessionId) {
+        dropWorking();
+        note(`Could not rewind: ${r.error ?? "unknown error"}`);
+        return false;
+      }
+      agentSessionId = r.agentSessionId;
+    }
+    // Files back to how they were before that message (undoable).
+    if (msg.checkpoint && api.git?.restore) {
+      const r = await api.git.restore(ses.cwd, msg.checkpoint);
+      if (!r.ok) note(`Conversation rewound, but the files could not be restored: ${r.error ?? "unknown error"}`);
+    }
+    const text = msg.blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    void westcode()?.stopSession(sessionId);
+    set((st) => ({
+      sessions: patchSession(st.sessions, sessionId, (x) => ({
+        ...x,
+        agentSessionId,
+        messages: x.messages.slice(0, idx),
+        queued: undefined,
+        updatedAt: Date.now(),
+      })),
+    }));
+    hydrated.add(sessionId);
+    persistDesk();
+    window.dispatchEvent(new CustomEvent("westcode:compose", { detail: { sessionId, text } }));
+    return true;
+  },
+
+  forkSession: async (sessionId) => {
+    const api = westcode();
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    if (!api?.forkSession || !ses?.agentSessionId || ses.hostId) return null;
+    const note = (text: string) =>
+      set((st) => ({ sessions: patchSession(st.sessions, sessionId, (x) => ({ ...x, messages: [...x.messages, systemNote(text)] })) }));
+    const r = await api.forkSession({
+      providerId: ses.providerId,
+      cwd: ses.cwd,
+      agentSessionId: ses.agentSessionId,
+      model: ses.model,
+      effort: ses.effort,
+    });
+    if (!r.ok || !r.agentSessionId) {
+      note(`Could not fork: ${r.error ?? "unknown error"}`);
+      return null;
+    }
+    const id = uid("ses");
+    const fork: Session = {
+      ...ses,
+      id,
+      title: `Fork of ${ses.title}`.slice(0, 80),
+      titleLocked: true,
+      agentSessionId: r.agentSessionId,
+      messages: [],
+      status: "idle",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      archivedAt: undefined,
+      sideOpen: undefined,
+      queued: undefined,
+      permission: null,
+      question: null,
+      checkpoints: undefined,
+      worktree: undefined,
+    };
+    set((st) => ({ sessions: [fork, ...st.sessions], activeId: id, view: "focus" as const }));
+    await get().hydrateSession(id);
+    return id;
+  },
+  openNewWith: ({ providerId, ...prefill }) =>
+    set({ newOpen: true, newProviderId: providerId || null, newPrefill: prefill }),
   enabledAddons: DEFAULT_ENABLED,
   customAddons: [],
   customProviders: [],
@@ -1363,6 +1651,19 @@ export const useHelix = create<HelixState>((set, get) => ({
   cliSessions: [],
   cliSessionStatus: "idle",
   cliSessionErrors: [],
+  cliSessionsElsewhere: 0,
+  sshHosts: [],
+  sshConfigHosts: [],
+  refreshSshHosts: async () => {
+    const api = westcode()?.ssh;
+    if (!api) return;
+    try {
+      const r = await api.list();
+      set({ sshHosts: r.hosts ?? [], sshConfigHosts: r.config ?? [] });
+    } catch {
+      /* keep what we had */
+    }
+  },
 
   setView: (view) => {
     viewTouched = true;
@@ -1388,7 +1689,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     for (const id of new Set(ids)) void get().hydrateSession(id);
   },
   setNewOpen: (newOpen, providerId = null) =>
-    set({ newOpen, newProviderId: newOpen ? providerId : null }),
+    set({ newOpen, newProviderId: newOpen ? providerId : null, ...(newOpen ? {} : { newPrefill: null }) }),
   setMobileNav: (mobileNav) => set({ mobileNav }),
   tick: () => set({ clock: Date.now() }),
 
@@ -1473,8 +1774,12 @@ export const useHelix = create<HelixState>((set, get) => ({
       Boolean,
     ) as string[];
     for (const id of new Set(onScreen)) void get().hydrateSession(id);
+    for (const s of get().sessions) if (s.autoContinueAt && !s.archivedAt) armContinue(s.id, s.autoContinueAt);
     bindDeskPersist();
     void get().refreshCli();
+    void get().refreshSshHosts();
+    westcode()?.setKeepAwake?.(get().settings.keepAwake ?? true);
+    westcode()?.setTray?.(get().settings.menuBarIcon ?? true);
     void get().refreshLibrary();
     void get().refreshUpdates();
     void get().refreshLearning();
@@ -1567,6 +1872,22 @@ export const useHelix = create<HelixState>((set, get) => ({
     }
   },
 
+  cancelAutoContinue: (sessionId, continueNow) => {
+    clearTimeout(continueTimers.get(sessionId));
+    continueTimers.delete(sessionId);
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, autoContinueAt: undefined, ...(continueNow ? { limitResetAt: undefined } : {}) })),
+    }));
+    if (continueNow) void get().send(sessionId, CONTINUE_PROMPT);
+  },
+
+  answerQuestion: (sessionId, answers) => {
+    const rpcId = get().sessions.find((s) => s.id === sessionId)?.question?.rpcId;
+    set((s) => ({ sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, question: null })) }));
+    if (rpcId == null) return;
+    void westcode()?.question?.({ sessionId, rpcId, answers });
+  },
+
   answerPermission: (sessionId, optionId) => {
     const ses = get().sessions.find((s) => s.id === sessionId);
     const rpcId = ses?.permission?.rpcId;
@@ -1600,6 +1921,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       set({
         cliSessions: res.ok ? res.sessions : had,
         cliSessionErrors: res.errors ?? [],
+        cliSessionsElsewhere: res.elsewhere ?? 0,
         cliSessionStatus: "ready",
       });
     } catch (err) {
@@ -1631,6 +1953,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         effort: ses.effort,
         permissionMode: ses.permissionMode,
         agentSessionId: ses.agentSessionId!,
+        hostId: ses.hostId,
       });
       const messages = res.ok
         ? replayToMessages(res.history ?? [])
@@ -1661,7 +1984,7 @@ export const useHelix = create<HelixState>((set, get) => ({
     // opening a second view of one agent-side session. A pane whose history
     // never loaded is retried instead of being a dead end.
     const existing = get().sessions.find(
-      (s) => s.agentSessionId === row.agentSessionId,
+      (s) => s.agentSessionId === row.agentSessionId && (s.hostId || null) === (row.hostId || null),
     );
     if (existing) {
       set((state) => ({
@@ -1694,6 +2017,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       messages: [],
       turns: 0,
       agentSessionId: row.agentSessionId,
+      ...(row.hostId ? { hostId: row.hostId } : {}),
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -1709,6 +2033,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       effort: session.effort,
       permissionMode: session.permissionMode,
       agentSessionId: row.agentSessionId,
+      hostId: row.hostId,
     });
     set((state) => ({
       sessions: patchSession(state.sessions, session.id, (ses) => ({
@@ -1745,6 +2070,8 @@ export const useHelix = create<HelixState>((set, get) => ({
     agentId,
     background,
     sideOf,
+    hostId,
+    worktree,
   }) => {
     const p = resolveProvider(providerId, get().customProviders);
     const settings = get().settings;
@@ -1766,7 +2093,10 @@ export const useHelix = create<HelixState>((set, get) => ({
         effort ??
         ((scoped && settings.defaultEffort) || defaultEffortFor(providerId)),
       permissionMode:
-        permissionMode || settings.defaultPermissionMode || DEFAULT_PERMISSION,
+        permissionMode ||
+        settings.folderModes?.[hostId ? `${hostId}:${path}` : path] ||
+        settings.defaultPermissionMode ||
+        DEFAULT_PERMISSION,
       status: "idle",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -1774,6 +2104,8 @@ export const useHelix = create<HelixState>((set, get) => ({
       turns: 0,
       agentId,
       sideOf,
+      ...(hostId ? { hostId } : {}),
+      ...(worktree ? { worktree } : {}),
     };
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -1812,6 +2144,12 @@ export const useHelix = create<HelixState>((set, get) => ({
     }));
   },
 
+  setSessionOutputStyle: (sessionId, style) => {
+    set((state) => ({
+      sessions: patchSession(state.sessions, sessionId, (s) => ({ ...s, outputStyle: style, updatedAt: Date.now() })),
+    }));
+  },
+
   setSessionPermissionMode: (sessionId, mode) => {
     set((state) => ({
       sessions: patchSession(state.sessions, sessionId, (s) => ({
@@ -1820,6 +2158,13 @@ export const useHelix = create<HelixState>((set, get) => ({
         updatedAt: Date.now(),
       })),
     }));
+    // Claude Desktop remembers the mode per folder; Plan stays per session.
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    if (ses && mode !== "plan" && !ses.sideOf) {
+      const key = ses.hostId ? `${ses.hostId}:${ses.cwd}` : ses.cwd;
+      const folderModes = { ...(get().settings.folderModes ?? {}), [key]: mode };
+      get().updateSettings({ folderModes });
+    }
   },
 
   toggleAddon: (id) => {
@@ -1905,6 +2250,30 @@ export const useHelix = create<HelixState>((set, get) => ({
       };
     });
     persistDesk();
+    // A session's worktree goes with it (Claude Desktop keeps it until
+    // archive); one with uncommitted changes stays, and says where.
+    const wt = get().sessions.find((x) => x.id === id)?.worktree;
+    const git = westcode()?.git;
+    if (!wt || !git) return;
+    const note = (text: string) =>
+      set((st) => ({
+        sessions: patchSession(st.sessions, id, (x) => ({ ...x, messages: [...x.messages, systemNote(text)] })),
+      }));
+    if (archived) {
+      void git.worktreeRemove?.(wt.path).then((r) => {
+        if (r && !r.ok) {
+          note(
+            r.dirty
+              ? `Worktree kept: ${wt.path} has uncommitted changes. Commit or discard them, then archive again to remove it. Branch ${wt.branch} keeps your commits either way.`
+              : `Could not remove the worktree at ${wt.path}: ${r.error ?? "unknown error"}`,
+          );
+        }
+      });
+    } else {
+      void git.worktreeReattach?.(wt.repo, wt.path, wt.branch).then((r) => {
+        if (r && !r.ok) note(`Could not bring back the worktree for ${wt.branch}: ${r.error ?? "unknown error"}`);
+      });
+    }
   },
 
   removeSession: (id) => {
@@ -2005,6 +2374,8 @@ export const useHelix = create<HelixState>((set, get) => ({
     if ("launchAtLogin" in patch) {
       void westcode()?.setLoginItem?.(settings.launchAtLogin);
     }
+    if ("keepAwake" in patch) westcode()?.setKeepAwake?.(settings.keepAwake ?? true);
+    if ("menuBarIcon" in patch) westcode()?.setTray?.(settings.menuBarIcon ?? true);
   },
 
   addSchedule: (t) => {
@@ -2389,6 +2760,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...x,
         status: "waiting",
         permission: null,
+        question: null,
         queued: (x.queued ?? []).filter((q) => q.msgId !== msgId),
         messages: x.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
       })),
@@ -2397,6 +2769,19 @@ export const useHelix = create<HelixState>((set, get) => ({
       void get().send(sessionId, item!.text, { incoming: item!.incoming, replay: true, replayOf: item!.msgId });
     });
     }
+  },
+
+  poppedOut: [],
+  popOut: (sessionId) => set((s) => (s.poppedOut.includes(sessionId) ? s : { poppedOut: [...s.poppedOut, sessionId] })),
+  popIn: (sessionId) => set((s) => ({ poppedOut: s.poppedOut.filter((id) => id !== sessionId) })),
+
+  reorderQueued: (sessionId, msgId, dir) => {
+    set((s) => ({
+      sessions: patchSession(s.sessions, sessionId, (x) => {
+        const moved = moveQueued(x.queued ?? [], x.messages, msgId, dir);
+        return moved ? { ...x, ...moved } : x;
+      }),
+    }));
   },
 
   unqueue: (sessionId, msgId) => {
@@ -2480,6 +2865,7 @@ export const useHelix = create<HelixState>((set, get) => ({
         ...s,
         status: "waiting",
         permission: null,
+        question: null,
         updatedAt: Date.now(),
         // Stop discards pending work: queued rows are already visible in the
         // transcript and must not auto-replay after some later send.
@@ -2572,6 +2958,12 @@ export const useHelix = create<HelixState>((set, get) => ({
 
     const replay = Boolean(opts?.replay);
     const outgoing = replay ? trimmed : formatOutgoing(trimmed, attachments);
+    // A message from the user replaces the wait for the usage limit to reset.
+    if (!opts?.incoming && !replay && session.autoContinueAt) {
+      clearTimeout(continueTimers.get(sessionId));
+      continueTimers.delete(sessionId);
+      set((s) => ({ sessions: patchSession(s.sessions, sessionId, (x) => ({ ...x, autoContinueAt: undefined })) }));
+    }
 
     // Persona assignment happens when the human message is first ACCEPTED —
     // including messages queued while a turn runs. The replay drain skips it
@@ -2615,6 +3007,7 @@ export const useHelix = create<HelixState>((set, get) => ({
       return;
     }
 
+    closeAutonomous(sessionId);
     abortBySession.get(sessionId)?.abort();
     const ac = new AbortController();
     abortBySession.set(sessionId, ac);
@@ -2764,7 +3157,9 @@ export const useHelix = create<HelixState>((set, get) => ({
     promptAsst.set(sessionId, asstId);
     // Snapshot the folder first (git repos only), so this turn's file
     // changes can be rolled back from the message.
-    if (userMsg && userMsg.role === "user" && api.git?.checkpoint) {
+    // Checkpoints are git snapshots of a folder on this Mac; a session on an
+    // SSH host keeps its files there.
+    if (userMsg && userMsg.role === "user" && api.git?.checkpoint && !latest.hostId) {
       try {
         const cp = await api.git.checkpoint(latest.cwd, trimmed.slice(0, 60));
         if (cp.ok && cp.sha) {
@@ -2879,6 +3274,10 @@ export const useHelix = create<HelixState>((set, get) => ({
         effort: latest.effort,
         permissionMode: latest.permissionMode,
         agentSessionId: latest.agentSessionId,
+        hostId: latest.hostId,
+        outputStyle:
+          latest.providerId === "claude" ? (latest.outputStyle ?? get().settings.claudeOutputStyle ?? "") : undefined,
+        images: imagesIn(promptText),
         history,
         text: promptText,
       });
@@ -3048,6 +3447,7 @@ function runSlash(
     "reflect",
     "btw",
     "goal",
+    "code-review",
   ]);
 
   if (!spec && !local.has(cmd)) return false;
@@ -3105,6 +3505,18 @@ function runSlash(
     return true;
   }
 
+  if (cmd === "code-review") {
+    // The CLI's own /code-review, when it has one, wins.
+    if (session.slashCommands?.some((c) => c.cmd === "code-review")) return false;
+    const scope = arg || "the uncommitted changes in this repository (git diff HEAD, plus untracked files)";
+    void get().send(
+      sessionId,
+      `Review ${scope} for real defects: bugs, logic errors, security problems, broken edge cases. Read the surrounding code before judging; check each finding against the code and drop any you cannot confirm. Then call the westcode_report_findings tool once with the verified findings, most severe first (an empty list if none survived), and end with one line on the overall state. Do not change any files.`,
+      { display: `/code-review${arg ? ` ${arg}` : ""}` },
+    );
+    return true;
+  }
+
   if (cmd === "btw") {
     if (!arg) {
       note("Usage: /btw <question> — asks on the side without touching this session's work.");
@@ -3132,6 +3544,7 @@ Question: ${arg}`;
       permissionMode: "plan",
       title: `Side: ${arg.slice(0, 40)}`,
       sideOf: parent.id,
+      hostId: parent.hostId,
     });
     set((s) => ({
       sessions: patchSession(s.sessions, parent.id, (x) => ({ ...x, sideOpen: sideId, updatedAt: Date.now() })),
@@ -3210,6 +3623,7 @@ Question: ${arg}`;
         updatedAt: Date.now(),
         status: "idle",
         permission: null,
+        question: null,
         queued: [],
         slashCommands: undefined,
       })),

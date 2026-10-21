@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -8,12 +9,35 @@ import { childEnv, which } from "./path.mjs";
 import { deskDir } from "./desk-paths.mjs";
 import { TRANSCRIPT_EVENTS, contentDiffs, mapUpdate, modelsFrom } from "./acp-map.mjs";
 import { cliHasWestcreate, sessionServer } from "./westcreate.mjs";
+import { envFor, exportsFor } from "./session-env.mjs";
+import { formContent, formFields } from "./elicitation.mjs";
+import {
+  claudeRemoteEnv,
+  getHost,
+  listRemoteClaude,
+  localStandIn,
+  q,
+  remoteAcpSpawn,
+  sshEnv,
+} from "./ssh.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 let deskUrl = "";
 
 export function setDeskUrl(url) {
   deskUrl = url || "";
+}
+
+/**
+ * MCP servers WestCode adds start in "/". The CLI starts them in the session
+ * folder, and Node starting in a folder on a network share is slow — measured
+ * on a Mac: `node -e 0` took 9.7 s in /Volumes/<share>/… against 0.05 s in
+ * /tmp — which, with the CLI's other startup, ran past its 30 s MCP connect
+ * limit (CONNECT_TIMEOUT). ACP's stdio server config has no cwd, hence sh.
+ */
+export function neutralCwd(server) {
+  if (!server || process.platform === "win32") return server;
+  return { ...server, command: "/bin/sh", args: ["-c", 'cd / && exec "$0" "$@"', server.command, ...(server.args || [])] };
 }
 
 function deskMcp(sessionId, providerId) {
@@ -41,7 +65,7 @@ function deskMcp(sessionId, providerId) {
     const wc = sessionServer(which("node"), process.execPath);
     if (wc) servers.push(wc);
   }
-  return servers;
+  return servers.map(neutralCwd);
 }
 
 /** The learning reviewer's only extra tools: read skills/memory, propose. */
@@ -57,7 +81,7 @@ function learnMcp(sessionId, opts) {
     if (process.env[k]) env.push({ name: k, value: process.env[k] });
   }
   if (nodeBin === process.execPath) env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
-  return [{ type: "stdio", name: "westcode-learn", command: nodeBin, args: [join(here, "learn-mcp.mjs")], env }];
+  return [neutralCwd({ type: "stdio", name: "westcode-learn", command: nodeBin, args: [join(here, "learn-mcp.mjs")], env })];
 }
 
 function expandHome(p) {
@@ -134,10 +158,12 @@ export const ADAPTERS = {
 };
 
 function spawnSpec(providerId, model, effort, opts = {}) {
-  const env = childEnv();
+  // Settings → Environment variables for this Mac (a host's are exported there).
+  const env = opts.remote ? childEnv() : { ...childEnv(), ...envFor("local") };
   const modelId = mapModel(providerId, model);
   const effortId = mapEffort(providerId, effort);
   const perm = permissionFlag(providerId, opts.permissionMode);
+  if (opts.remote) return remoteSpawnSpec(providerId, modelId, effortId, perm, opts, env);
 
   if (providerId === "grok") {
     const bin = which("grok", env);
@@ -204,6 +230,47 @@ function spawnSpec(providerId, model, effort, opts = {}) {
   throw new Error(`Unknown provider: ${providerId}`);
 }
 
+/**
+ * The same agents on an SSH host. Grok and Codex run whole over ssh. Claude's
+ * adapter stays local (it needs Node 22) and drives the host's Claude Code
+ * through the ssh wrapper; see ssh.mjs.
+ */
+function remoteSpawnSpec(providerId, modelId, effortId, perm, opts, env) {
+  const h = opts.remote;
+  if (providerId === "grok") {
+    const flags = ["--no-auto-update", "--permission-mode", perm];
+    if (perm === "bypassPermissions") flags.push("--always-approve");
+    if (opts.unsandboxed) flags.push("--sandbox", "none");
+    flags.push("agent");
+    if (perm === "bypassPermissions") flags.push("--always-approve");
+    flags.push("-m", modelId, "--reasoning-effort", effortId, "stdio");
+    const cmd = `${exportsFor(h.id)} grok ${flags.map(q).join(" ")}`;
+    return { ...remoteAcpSpawn(h, opts.remoteCwd, cmd), env: sshEnv(h, env) };
+  }
+  if (providerId === "codex") {
+    const cmd = `if command -v npx >/dev/null 2>&1; then exec npx -y ${ADAPTERS.codex}; else exec codex acp; fi`;
+    return { ...remoteAcpSpawn(h, opts.remoteCwd, `${exportsFor(h.id)} sh -c ${q(cmd)}`), env: sshEnv(h, env) };
+  }
+  if (providerId === "claude") {
+    const npx = which("npx", env);
+    if (!npx) {
+      throw new Error("npx is required on this Mac to host Claude Code over ACP. Install Node, then retry.");
+    }
+    return {
+      command: npx,
+      args: ["-y", ADAPTERS.claude],
+      env: {
+        ...npmCacheEnv(env),
+        ...claudeRemoteEnv(h),
+        WESTCODE_REMOTE_EXPORTS: exportsFor(h.id),
+        CLAUDE_CODE_MODEL: modelId,
+        CLAUDE_CODE_PERMISSION_MODE: perm,
+      },
+    };
+  }
+  throw new Error(`${providerId} cannot run on an SSH host.`);
+}
+
 class AcpSession {
   constructor(id, providerId, cwd, model, effort, permissionMode, emit) {
     this.id = id;
@@ -237,6 +304,25 @@ class AcpSession {
     this.readOnly = false;
     /** Learning reviewer: {doMemory, doSkill, origin}; reads and proposes only. */
     this.reviewer = null;
+    /** SSH host this session runs on (ssh.mjs), or null for this Mac. */
+    this.remote = null;
+    /** Open elicitation/create requests: rpc id → fields. */
+    this.questions = new Map();
+  }
+
+  /**
+   * The folder as the agent process sees it. Claude's adapter runs on this
+   * Mac for a host session and checks the folder exists here, so it gets
+   * the local stand-in (the wrapper turns it back into the host's path).
+   */
+  /** `_meta` for session/new|load|resume: Claude's output style as a settings layer. */
+  sessionMeta() {
+    if (this.providerId !== "claude" || !this.outputStyle) return undefined;
+    return { claudeCode: { options: { settings: { outputStyle: this.outputStyle } } } };
+  }
+
+  agentCwd() {
+    return this.remote && this.providerId === "claude" ? localStandIn(this.remote, this.cwd) : this.cwd;
   }
 
   takeReplay() {
@@ -302,15 +388,29 @@ class AcpSession {
     const spec = spawnSpec(this.providerId, this.model, this.effort, {
       unsandboxed: this.unsandboxed,
       permissionMode: this.permissionMode,
+      remote: this.remote,
+      remoteCwd: this.cwd,
     });
-    if (!existsSync(this.cwd)) {
+    // On a host the folder is the host's; locally the process starts in a
+    // stand-in (Claude's adapter needs an existing cwd) or in the home folder.
+    // Claude's adapter (Node) takes the folder from session/new and gives it
+    // to Claude Code, so locally it starts in the home folder: Node starting
+    // in a folder on a network share costs ~10 s (see neutralCwd).
+    const spawnCwd = this.remote
+      ? this.providerId === "claude"
+        ? localStandIn(this.remote, this.cwd)
+        : homedir()
+      : this.providerId === "claude"
+        ? homedir()
+        : this.cwd;
+    if (!this.remote && !existsSync(this.cwd)) {
       this.dead = true;
       throw new Error(
         `Folder ${this.cwd} no longer exists — pick another folder for this session.`,
       );
     }
     this.proc = spawn(spec.command, spec.args, {
-      cwd: this.cwd,
+      cwd: spawnCwd,
       env: spec.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -355,8 +455,13 @@ class AcpSession {
       protocolVersion: 1,
       clientInfo: { name: "westcode", title: "WestCode", version: "1.0.0" },
       clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
+        // On an SSH host the files are the host's: the agent reads and writes
+        // them itself, never through this Mac.
+        fs: this.remote ? { readTextFile: false, writeTextFile: false } : { readTextFile: true, writeTextFile: true },
         terminal: false,
+        // Question cards: Claude's AskUserQuestion and MCP servers' forms.
+        // A history reader has no one to ask.
+        ...(this.readOnly || this.reviewer ? {} : { elicitation: { form: {} } }),
         // Claude's adapter sends its task plan, predicted next prompt and
         // background-task updates only to clients that declare the
         // (JetBrains) AIR extension. Version 1 with asyncTasks only: no
@@ -368,14 +473,20 @@ class AcpSession {
     await this._authenticate(init);
     // Claude's adapter can take a message into the running turn.
     this.canSteer = Boolean(init?._meta?.steering?.supported);
+    const agentCaps = init?.agentCapabilities || init?.agent_capabilities || {};
+    this.acceptsImages = Boolean((agentCaps.promptCapabilities || agentCaps.prompt_capabilities)?.image);
     if (this.canSteer) this.emit({ type: "caps", steering: true });
 
     // A history read needs no tools and must not join the desk bus.
-    const mcpServers = this.reviewer
-      ? learnMcp(this.id, this.reviewer)
-      : this.readOnly
-        ? []
-        : deskMcp(this.id, this.providerId);
+    // Local MCP servers are commands on this Mac; a CLI on a host cannot
+    // start them, so a remote session gets none.
+    const mcpServers = this.remote
+      ? []
+      : this.reviewer
+        ? learnMcp(this.id, this.reviewer)
+        : this.readOnly
+          ? []
+          : deskMcp(this.id, this.providerId);
     const resumeId = this.resumeId;
     if (resumeId) {
       // session/load replays the whole transcript as session/update
@@ -393,8 +504,9 @@ class AcpSession {
         try {
           const loaded = await this.rpc(method, {
             sessionId: resumeId,
-            cwd: this.cwd,
+            cwd: this.agentCwd(),
             mcpServers,
+            ...(this.sessionMeta() ? { _meta: this.sessionMeta() } : {}),
           });
           this.agentSessionId =
             loaded?.sessionId || loaded?.session_id || resumeId;
@@ -422,8 +534,9 @@ class AcpSession {
     }
 
     const created = await this.rpc("session/new", {
-      cwd: this.cwd,
+      cwd: this.agentCwd(),
       mcpServers,
+      ...(this.sessionMeta() ? { _meta: this.sessionMeta() } : {}),
     });
     this.agentSessionId = created?.sessionId || created?.session_id || this.id;
     this.resumed = false;
@@ -450,6 +563,8 @@ class AcpSession {
       });
     } catch (err) {
       if (/already|authenticated|logged in/i.test(err.message)) return;
+      // A host's CLI signs in on the host; this Mac's login state is not it.
+      if (this.remote) return;
       throw new Error(
         `Could not authenticate ${this.providerId}. Run login from Connections. ${err.message}`,
       );
@@ -462,7 +577,7 @@ class AcpSession {
     this.emit({ type: "models", models });
   }
 
-  async prompt(text, history = []) {
+  async prompt(text, history = [], images = []) {
     await this.start();
     if (this.dead) throw new Error("Agent process is not running.");
     let body = text;
@@ -470,9 +585,15 @@ class AcpSession {
       this.replayed = true;
       body = `${formatRestoredHistory(history)}\n\n${text}`;
     }
+    // Image blocks only for agents that said they take them (ACP promptCapabilities.image).
+    const pics = this.acceptsImages
+      ? images
+          .filter((i) => i && /^image\/(png|jpeg|gif|webp)$/.test(i.mimeType) && typeof i.data === "string" && i.data)
+          .map((i) => ({ type: "image", mimeType: i.mimeType, data: i.data }))
+      : [];
     return this.rpc("session/prompt", {
       sessionId: this.agentSessionId,
-      prompt: [{ type: "text", text: body }],
+      prompt: [{ type: "text", text: body }, ...pics],
     });
   }
 
@@ -536,13 +657,19 @@ class AcpSession {
 
   rpc(method, params) {
     const id = this.nextRpc++;
-    const timeout = this.readOnly
-      ? 20_000
-      : method === "session/prompt"
+    // Starting an adapter (npx) can take well over 20 s on a busy Mac, and a
+    // long transcript takes a while to replay: reading history gets the
+    // same start-up time as a session, and longer for the load itself.
+    const timeout =
+      method === "session/prompt"
         ? 15 * 60_000
         : method === "initialize" || method === "authenticate"
           ? 60_000
-          : 25_000;
+          : this.readOnly && (method === "session/load" || method === "session/resume")
+            ? 90_000
+            : this.readOnly
+              ? 20_000
+              : 25_000;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -626,7 +753,7 @@ class AcpSession {
       this.pending.delete(msg.id);
       if (!p) return;
       if (msg.error) {
-        p.reject(new Error(msg.error.message || "ACP error"));
+        p.reject(new Error(rpcErrorText(msg.error)));
       } else {
         p.resolve(msg.result ?? {});
       }
@@ -711,6 +838,18 @@ class AcpSession {
       });
       return;
     }
+    if (method === "elicitation/create") {
+      // Claude's AskUserQuestion and MCP servers' questions. Never answered
+      // for the user — not even in Bypass: a question is not a tool to approve.
+      if (this.readOnly || this.reviewer || params.mode === "url") {
+        this.reply(msg.id, { action: params.mode === "url" ? "decline" : "cancel" });
+        return;
+      }
+      const fields = formFields(params.requestedSchema);
+      this.questions.set(msg.id, fields);
+      this.emit({ type: "question", rpcId: msg.id, message: String(params.message || ""), fields });
+      return;
+    }
     if (method === "fs/read_text_file" && this.readOnly) {
       this.write({
         jsonrpc: "2.0",
@@ -762,11 +901,30 @@ class AcpSession {
     });
   }
 
+  /** answers = {fieldKey: value} to accept, or null to decline. */
+  answerQuestion(rpcId, answers) {
+    const fields = this.questions.get(rpcId);
+    this.questions.delete(rpcId);
+    if (!fields) return;
+    this.reply(rpcId, answers ? { action: "accept", content: formContent(fields, answers) } : { action: "decline" });
+  }
+
   answerPermission(rpcId, optionId) {
     this.reply(rpcId, {
       outcome: { outcome: "selected", optionId },
     });
   }
+}
+
+/**
+ * An agent's JSON-RPC error as text. Generic messages ("Internal error")
+ * carry the real reason in `data` (Grok: data.message, Claude: data.details).
+ */
+export function rpcErrorText(error) {
+  const base = String(error?.message || "ACP error");
+  const d = error?.data;
+  const detail = typeof d === "string" ? d : d && typeof d === "object" ? d.message || d.details || d.error : "";
+  return detail && !base.includes(String(detail)) ? `${base}: ${detail}` : base;
 }
 
 const sessions = new Map();
@@ -823,6 +981,8 @@ export function ensureSession(opts, emit) {
     existing.cwd === cwd &&
     existing.model === opts.model &&
     existing.effort === opts.effort &&
+    (existing.remote?.id || null) === (opts.hostId || null) &&
+    (existing.outputStyle || "") === (opts.outputStyle || "") &&
     // Permission flags are spawn-time (--always-approve, env) — a mode
     // change must respawn, or Bypass→Ask would leave approvals wide open.
     (existing.permissionMode || "ask") === (opts.permissionMode || "ask")
@@ -841,6 +1001,11 @@ export function ensureSession(opts, emit) {
   );
   s.resumeId = opts.agentSessionId || null;
   s.reviewer = opts.reviewer || null;
+  s.outputStyle = opts.outputStyle || "";
+  if (opts.hostId) {
+    s.remote = getHost(opts.hostId);
+    if (!s.remote) throw new Error(`SSH host "${opts.hostId}" is not set up any more — add it again in Settings → SSH hosts.`);
+  }
   s.readOnly = Boolean(opts.readOnly && s.resumeId);
   sessions.set(opts.sessionId, s);
   return s;
@@ -853,11 +1018,18 @@ export function ensureSession(opts, emit) {
  * transcript schemas are internal and change between releases). The agent is
  * spawned only for the query and killed straight after.
  */
-export async function listAcpSessions(providerId, opts = {}) {
+/**
+ * Start a throwaway agent, initialize it, run `fn(rpc, init)`, then stop it.
+ * For one-off calls that are not a conversation (list, fork).
+ */
+async function withAgent(providerId, opts, fn) {
+  const remote = opts.hostId ? getHost(opts.hostId) : null;
+  if (opts.hostId && !remote) throw new Error(`Unknown SSH host ${opts.hostId}.`);
   const spec = spawnSpec(providerId, opts.model || "", opts.effort || "", {
     permissionMode: "ask",
+    remote,
   });
-  const cwd = expandHome(opts.cwd || homedir());
+  const cwd = remote ? homedir() : expandHome(opts.cwd || homedir());
   const proc = spawn(spec.command, spec.args, {
     cwd,
     env: spec.env,
@@ -893,7 +1065,7 @@ export async function listAcpSessions(providerId, opts = {}) {
       if (msg.id != null && msg.method == null && pending.has(msg.id)) {
         const p = pending.get(msg.id);
         pending.delete(msg.id);
-        if (msg.error) p.reject(new Error(msg.error.message || "ACP error"));
+        if (msg.error) p.reject(new Error(rpcErrorText(msg.error)));
         else p.resolve(msg.result ?? {});
       }
     }
@@ -911,39 +1083,92 @@ export async function listAcpSessions(providerId, opts = {}) {
       }, 45_000);
     });
   try {
-    await rpc("initialize", {
+    const init = await rpc("initialize", {
       protocolVersion: 1,
       clientInfo: { name: "westcode", title: "WestCode", version: "1.0.0" },
       clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
+        fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
       },
     });
-    // No cwd filter: both adapters then return every stored session, across
-    // every folder, which is what the sidebar wants.
-    const res = await rpc("session/list", {});
-    const rows = (res?.sessions || [])
-      .map((s) => ({
-        providerId,
-        agentSessionId: s.sessionId || s.session_id || "",
-        cwd: s.cwd || "",
-        title: String(s.title || "").trim(),
-        updatedAt: Date.parse(s.updatedAt || s.updated_at || "") || 0,
-      }))
-      .filter((s) => s.agentSessionId);
-    return { ok: true, sessions: rows };
+    return await fn(rpc, init, remote);
   } catch (err) {
-    return {
-      ok: false,
-      output: `${err.message}${stderr.trim() ? ` — ${stderr.trim().split("\n").slice(-2).join(" ")}` : ""}`,
-      sessions: [],
-    };
+    err.message = `${err.message}${stderr.trim() ? ` — ${stderr.trim().split("\n").slice(-2).join(" ")}` : ""}`;
+    throw err;
   } finally {
     try {
       proc.kill();
     } catch {
       /* already gone */
     }
+  }
+}
+
+export async function listAcpSessions(providerId, opts = {}) {
+  const remote = opts.hostId ? getHost(opts.hostId) : null;
+  if (opts.hostId && !remote) return { ok: false, output: `Unknown SSH host ${opts.hostId}.`, sessions: [] };
+  // Claude's sessions on a host are files there; read them with sh, no agent.
+  if (remote && providerId === "claude") return listRemoteClaude(remote, opts.limit);
+  try {
+    return await withAgent(providerId, opts, async (rpc) => {
+      // No cwd filter: both adapters then return every stored session, across
+      // every folder, which is what the sidebar wants.
+      const res = await rpc("session/list", {});
+      const rows = (res?.sessions || [])
+        .map((s) => ({
+          providerId,
+          agentSessionId: s.sessionId || s.session_id || "",
+          cwd: s.cwd || "",
+          title: String(s.title || "").trim(),
+          updatedAt: Date.parse(s.updatedAt || s.updated_at || "") || 0,
+          ...(remote ? { hostId: remote.id } : {}),
+        }))
+        .filter((s) => s.agentSessionId);
+      return { ok: true, sessions: rows };
+    });
+  } catch (err) {
+    return { ok: false, output: err.message, sessions: [] };
+  }
+}
+
+/**
+ * Fork a stored conversation (Claude Desktop's "Fork session"): the agent
+ * copies the transcript to a new session id, which then opens like any
+ * stored session. Only agents that advertise session fork support it.
+ */
+export async function forkAcpSession(providerId, { cwd, agentSessionId, model, effort, at }) {
+  try {
+    return await withAgent(providerId, { cwd, model, effort }, async (rpc, init) => {
+      const caps = init?.agentCapabilities || init?.agent_capabilities || {};
+      const can = caps.sessionCapabilities?.fork ?? caps.session_capabilities?.fork;
+      if (!can) return { ok: false, error: `${providerId} cannot fork a conversation.` };
+      // At a given reply (Rewind): Claude's adapter takes the fork point as
+      // the AIR extension's fork meta — the API message id, and the
+      // fingerprint of its text as a fallback when the id is not on record.
+      const meta = at?.messageId
+        ? {
+            jetbrains: {
+              air: {
+                fork: {
+                  version: 1,
+                  messageId: String(at.messageId),
+                  ...(at.text ? { messageFingerprint: `sha256:${createHash("sha256").update(String(at.text)).digest("hex")}`, messageOccurrence: 1 } : {}),
+                },
+              },
+            },
+          }
+        : undefined;
+      const res = await rpc("session/fork", {
+        sessionId: agentSessionId,
+        cwd: expandHome(cwd),
+        mcpServers: [],
+        ...(meta ? { _meta: meta } : {}),
+      });
+      const id = res?.sessionId || res?.session_id;
+      return id ? { ok: true, agentSessionId: id } : { ok: false, error: "The agent returned no session id." };
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 }
 

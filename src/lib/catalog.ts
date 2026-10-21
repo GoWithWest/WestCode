@@ -190,6 +190,7 @@ const BUS_SLASH: SlashCmd[] = [
   { cmd: "ungroup", args: "<name>", hint: "Unlink a skill group", kind: "builtin" },
   { cmd: "goal", args: "<what done looks like>", hint: "Keep working until a judge says the goal is met", kind: "builtin" },
   { cmd: "btw", args: "<question>", hint: "Ask on the side (read-only) without derailing this session", kind: "builtin" },
+  { cmd: "code-review", args: "[what]", hint: "Review the changes and show the findings as a card", kind: "builtin" },
   {
     cmd: "reflect",
     hint: "Review this session now: propose skills and memory to keep",

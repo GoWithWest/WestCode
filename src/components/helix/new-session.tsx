@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { FolderOpen } from "lucide-react";
+import { ChevronLeft, Folder, FolderOpen, Laptop, Server, X } from "lucide-react";
 import { defaultEffortFor, effortsFor, modelsFor } from "@/lib/catalog";
+import { westcode } from "@/lib/desktop";
 import { pickDirectory } from "@/lib/fs";
 import { useHelix } from "@/lib/store";
-import { cn } from "@/lib/utils";
+import { presetName, upsertPreset, type SessionPreset } from "@/lib/presets";
+import { cn, uid } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useAllProviders } from "./provider";
 
@@ -28,7 +30,20 @@ export function NewSessionDialog() {
   const [projectId, setProjectId] = useState("scratch");
   const [cwd, setCwd] = useState(settings.defaultCwd);
   const [title, setTitle] = useState("");
+  const sshHosts = useHelix((s) => s.sshHosts);
+  const prefill = useHelix((s) => s.newPrefill);
+  const [prompt, setPrompt] = useState("");
+  const setView = useHelix((s) => s.setView);
+  const [hostId, setHostId] = useState("");
+  // Claude Desktop's "Worktree": the session gets its own branch and copy.
+  const [worktree, setWorktree] = useState(false);
+  const [startError, setStartError] = useState("");
+  const [starting, setStarting] = useState(false);
+  // Folder browser for an SSH host (the native picker only sees this Mac).
+  const [remote, setRemote] = useState<{ path: string; dirs: string[]; error?: string; loading?: boolean } | null>(null);
   const scoped = settings.defaultProviderId === initialProvider;
+  const updateSettings = useHelix((s) => s.updateSettings);
+  const presets = settings.sessionPresets ?? [];
   const [model, setModel] = useState(
     (scoped && settings.defaultModel) ||
       list.find((p) => p.id === initialProvider)?.defaultModel ||
@@ -53,6 +68,17 @@ export function NewSessionDialog() {
     setModel((match && settings.defaultModel) || p?.defaultModel || "");
     setEffort((match && settings.defaultEffort) || defaultEffortFor(id));
     if (settings.defaultCwd) setCwd(settings.defaultCwd);
+    setHostId("");
+    setRemote(null);
+    setPrompt("");
+    if (prefill) {
+      const host = prefill.hostId
+        ? sshHosts.find((h) => h.id === prefill.hostId || h.name === prefill.hostId || h.host === prefill.hostId)
+        : undefined;
+      if (host) setHostId(host.id);
+      if (prefill.cwd) setCwd(prefill.cwd);
+      if (prefill.prompt) setPrompt(prefill.prompt);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -74,7 +100,29 @@ export function NewSessionDialog() {
     setEffort(defaultEffortFor(id));
   }
 
+  async function browseRemote(path?: string) {
+    const api = westcode()?.ssh;
+    if (!api || !hostId) return;
+    setRemote((r) => ({ path: r?.path ?? "", dirs: r?.dirs ?? [], loading: true }));
+    const res = await api.ls(hostId, path);
+    if (!res.ok) setRemote((r) => ({ path: r?.path ?? "", dirs: r?.dirs ?? [], error: res.error }));
+    else {
+      setRemote({ path: res.path ?? "", dirs: res.dirs ?? [] });
+      setCwd(res.path ?? "");
+    }
+  }
+
+  function pickHost(id: string) {
+    setHostId(id);
+    setRemote(null);
+    setCwd(id ? "" : settings.defaultCwd);
+  }
+
   async function browse() {
+    if (hostId) {
+      await browseRemote(cwd.trim() || undefined);
+      return;
+    }
     const folder = await pickDirectory();
     if (!folder) return;
     rememberFolder(folder);
@@ -82,18 +130,74 @@ export function NewSessionDialog() {
     setCwd(folder.path);
   }
 
-  function start() {
+  function applyPreset(p: SessionPreset) {
+    const prov = list.find((x) => x.id === p.providerId);
+    if (prov) {
+      setProviderId(prov.id);
+      setModel(p.model || prov.defaultModel || "");
+      setEffort(p.effort || defaultEffortFor(prov.id));
+    }
+    setHostId(p.hostId && sshHosts.some((h) => h.id === p.hostId) ? p.hostId : "");
+    setRemote(null);
+    setCwd(p.cwd);
+    setProjectId("scratch");
+    setWorktree(Boolean(p.worktree) && !p.hostId);
+  }
+
+  function savePreset() {
+    if (!provider || !cwd.trim()) return;
+    const base = {
+      providerId: provider.id,
+      ...(hostId ? { hostId } : {}),
+      cwd: cwd.trim(),
+      ...(worktree && !hostId ? { worktree: true } : {}),
+      model,
+      effort,
+    };
+    const hostName = sshHosts.find((h) => h.id === hostId)?.name;
+    updateSettings({
+      sessionPresets: upsertPreset(presets, { id: uid("env"), name: presetName(base, provider.short || provider.name, hostName), ...base }),
+    });
+  }
+
+  async function start() {
     if (!provider) return;
-    if (!cwd.trim()) return;
+    if (!cwd.trim() || starting) return;
+    setStartError("");
+    let folder = cwd.trim();
+    let wt: { path: string; branch: string; repo: string } | undefined;
+    if (worktree && !hostId) {
+      const add = westcode()?.git?.worktreeAdd;
+      if (!add) return;
+      setStarting(true);
+      const name = title.trim() || folder.split("/").filter(Boolean).pop() || "session";
+      const r = await add(folder, {
+        name,
+        branchPrefix: settings.worktreeBranchPrefix,
+        location: settings.worktreeLocation || undefined,
+      });
+      setStarting(false);
+      if (!r.ok || !r.path) {
+        setStartError(r.error || "Could not create the worktree.");
+        return;
+      }
+      wt = { path: r.path, branch: r.branch!, repo: r.repo! };
+      folder = r.path;
+    }
     createSession({
       providerId: provider.id,
       projectId,
-      cwd: cwd.trim(),
-      title: title.trim(),
+      cwd: folder,
+      title: title.trim() || (wt ? wt.branch.split("/").pop() : ""),
       model,
       effort,
+      ...(hostId ? { hostId } : {}),
+      ...(wt ? { worktree: wt } : {}),
+      ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
     });
+    setPrompt("");
     setTitle("");
+    setWorktree(false);
   }
 
   return (
@@ -108,6 +212,72 @@ export function NewSessionDialog() {
             Pick a provider and the folder it should work in. Browse this Mac,
             or use a recent project.
           </Dialog.Description>
+
+          {presets.length ? (
+            <div className="mt-4">
+              <span className="text-2xs font-medium tracking-wide text-subtle uppercase">Saved</span>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {presets.map((p) => (
+                  <span
+                    key={p.id}
+                    className="inline-flex items-center rounded-full border border-border text-xs text-muted-foreground hover:border-border-strong"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => applyPreset(p)}
+                      className="inline-flex items-center gap-1.5 py-1 pr-1 pl-2.5 hover:text-foreground"
+                      title={`${p.hostId ? `${p.hostId}:` : ""}${p.cwd}`}
+                    >
+                      <ProviderDot id={p.providerId} />
+                      {p.name}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Forget ${p.name}`}
+                      onClick={() => updateSettings({ sessionPresets: presets.filter((x) => x.id !== p.id) })}
+                      className="py-1 pr-2 pl-0.5 text-subtle hover:text-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="mt-4">
+            <span className="text-2xs font-medium tracking-wide text-subtle uppercase">Runs on</span>
+            <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Runs on">
+              {[{ id: "", name: "This Mac" }, ...sshHosts].map((h) => (
+                <button
+                  key={h.id || "local"}
+                  type="button"
+                  role="radio"
+                  aria-checked={hostId === h.id}
+                  onClick={() => pickHost(h.id)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
+                    hostId === h.id
+                      ? "border-accent bg-muted text-foreground"
+                      : "border-border text-muted-foreground hover:border-border-strong",
+                  )}
+                >
+                  {h.id ? <Server className="size-3" /> : <Laptop className="size-3" />}
+                  {h.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setNewOpen(false);
+                  setView("settings");
+                }}
+                className="rounded-full border border-dashed border-border px-2.5 py-1 text-xs text-subtle hover:text-foreground"
+              >
+                + SSH host
+              </button>
+            </div>
+          </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
             {list.map((p) => {
@@ -197,8 +367,48 @@ export function NewSessionDialog() {
               </Button>
             </div>
           </label>
+          {hostId && remote ? (
+            <div className="mt-2 rounded-md border border-border bg-window" aria-label="Folders on the host">
+              <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
+                <button
+                  type="button"
+                  aria-label="Up one folder"
+                  className="rounded p-0.5 text-subtle hover:bg-muted hover:text-foreground"
+                  onClick={() => void browseRemote(remote.path.replace(/\/[^/]+\/?$/, "") || "/")}
+                >
+                  <ChevronLeft className="size-3.5" />
+                </button>
+                <span className="min-w-0 flex-1 truncate font-mono text-2xs">{remote.path}</span>
+                {remote.loading ? <span className="text-2xs text-subtle">Loading…</span> : null}
+              </div>
+              {remote.error ? (
+                <p className="px-2.5 py-2 text-2xs text-destructive" role="alert">
+                  {remote.error}
+                </p>
+              ) : (
+                <ul className="scrollbar-thin max-h-44 overflow-y-auto py-1">
+                  {remote.dirs.length ? (
+                    remote.dirs.map((d) => (
+                      <li key={d}>
+                        <button
+                          type="button"
+                          onClick={() => void browseRemote(`${remote.path.replace(/\/$/, "")}/${d}`)}
+                          className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-xs hover:bg-muted"
+                        >
+                          <Folder className="size-3 text-subtle" />
+                          {d}
+                        </button>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="px-2.5 py-1 text-2xs text-subtle">No folders here.</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {recents.map((f) => (
+            {(hostId ? [] : recents).map((f) => (
               <button
                 key={f.path}
                 type="button"
@@ -228,7 +438,7 @@ export function NewSessionDialog() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  start();
+                  void start();
                 }
               }}
               placeholder="Optional — defaults to the folder name"
@@ -236,12 +446,55 @@ export function NewSessionDialog() {
             />
           </label>
 
+          {prompt ? (
+            <label className="mt-3 block">
+              <span className="text-2xs font-medium tracking-wide text-subtle uppercase">First message (from a link)</span>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                className="mt-1.5 w-full rounded-md border border-border bg-window px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+              />
+            </label>
+          ) : null}
+          {!hostId ? (
+            <label className="mt-3 flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={worktree}
+                onChange={(e) => setWorktree(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">Worktree</span>
+                <span className="block text-2xs text-muted-foreground">
+                  Work on a new branch in its own copy of the repository, so parallel sessions never touch the same
+                  files. Removed when you archive the session (kept if it has uncommitted changes).
+                </span>
+              </span>
+            </label>
+          ) : null}
+          {startError ? (
+            <p className="mt-2 text-2xs text-destructive" role="alert">
+              {startError}
+            </p>
+          ) : null}
+
           <div className="mt-4 flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              className="mr-auto"
+              disabled={!cwd.trim() || !provider}
+              onClick={savePreset}
+              title="Keep this provider, machine, folder and model as a one-click setup"
+            >
+              Save setup
+            </Button>
             <Button variant="ghost" onClick={() => setNewOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={start} disabled={!cwd.trim() || !provider}>
-              Start session
+            <Button onClick={() => void start()} disabled={!cwd.trim() || !provider || starting}>
+              {starting ? "Creating worktree…" : "Start session"}
             </Button>
           </div>
         </Dialog.Content>

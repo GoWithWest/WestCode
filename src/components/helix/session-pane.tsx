@@ -1,15 +1,20 @@
+import { ServersButton } from "./servers-button";
+import { FilesPane } from "./files-pane";
+import { DetailsRail } from "./details-rail";
+import { TerminalPane } from "./terminal-pane";
+import { PrChip } from "./pr-chip";
 import { useEffect, useRef, useState } from "react";
-import { Code2, Download, Folder, GitBranch, Pencil, Terminal, X } from "lucide-react";
+import { Code2, Download, ExternalLink, Folder, FolderTree, GitBranch, GitFork, PanelRight, Pencil, Server, SquareTerminal, Terminal, X } from "lucide-react";
 import { effortLabel } from "@/lib/catalog";
 import { westcode, type GitStatus } from "@/lib/desktop";
 import { useHelix } from "@/lib/store";
 import { exportTranscript, lastSnippet } from "@/lib/parse-agent";
 import { relativeTime } from "@/lib/utils";
-import type { Session } from "@/lib/types";
+import { gitCwdOf, type Session } from "@/lib/types";
 import { MessageList } from "./blocks";
 import { Composer } from "./composer";
 import { ProviderChip, ProviderName, StatusLabel, useResolvedProvider } from "./provider";
-import { GoalCard, PermissionCard, PlanCard, TasksCard } from "./session-extras";
+import { GoalCard, LimitCard, PermissionCard, PlanCard, QuestionCard, TasksCard } from "./session-extras";
 import { AgentAvatar } from "./agents-view";
 import { SourceControlPanel } from "./source-control";
 import { ArtifactPane } from "./artifact-pane";
@@ -23,6 +28,9 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
   const persona = useHelix((s) => s.agents.find((a) => a.id === session.agentId));
   const agentName = persona?.name ?? provider.short;
   const [scmOpen, setScmOpen] = useState(false);
+  const [termOpen, setTermOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const side = useHelix((s) =>
     session.sideOpen ? s.sessions.find((x) => x.id === session.sideOpen) : undefined,
   );
@@ -43,11 +51,11 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
 
   // An approval request always comes into view, wherever the reader was.
   useEffect(() => {
-    if (!session.permission) return;
+    if (!session.permission && !session.question) return;
     pinned.current = true;
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [session.permission]);
+  }, [session.permission, session.question]);
 
   // ⌘⇧G toggles source control for the focused pane (not split panes).
   useEffect(() => {
@@ -56,6 +64,11 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "g") {
         e.preventDefault();
         setScmOpen((v) => !v);
+      }
+      // Ctrl+` toggles the terminal pane, as in Claude Desktop.
+      if (e.ctrlKey && !e.metaKey && (e.key === "`" || e.code === "Backquote")) {
+        e.preventDefault();
+        setTermOpen((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -73,13 +86,57 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-2xs text-muted-foreground">
             <ProviderChip id={session.providerId} />
             <AgentBadge session={session} />
+            {session.hostId ? <HostChip hostId={session.hostId} /> : null}
             <CwdPicker session={session} />
+            {/* Source control and the editor act on this Mac's files. */}
             <GitChip session={session} open={scmOpen} onToggle={() => setScmOpen((v) => !v)} />
+            {!session.hostId ? <PrChip session={session} /> : null}
+            {session.worktree ? (
+              <span
+                className="rounded-full border border-border px-1.5 py-px text-foreground"
+                title={`Its own worktree on branch ${session.worktree.branch}, at ${session.worktree.path}. Removed when the session is archived.`}
+              >
+                worktree
+              </span>
+            ) : null}
             {!compact ? (
               <>
                 <ExportButton session={session} />
+                {session.agentSessionId && !session.hostId ? <ForkButton session={session} /> : null}
+                <button
+                  type="button"
+                  onClick={() => setTermOpen((v) => !v)}
+                  aria-pressed={termOpen}
+                  className={`inline-flex items-center gap-1 hover:text-foreground ${termOpen ? "text-foreground" : ""}`}
+                  title={`Terminal in this folder${session.hostId ? " on the host" : ""} (Ctrl+\`)`}
+                >
+                  <SquareTerminal className="size-3" />
+                  Terminal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilesOpen((v) => !v)}
+                  aria-pressed={filesOpen}
+                  className={`inline-flex items-center gap-1 hover:text-foreground ${filesOpen ? "text-foreground" : ""}`}
+                  title="Files in this session's folder"
+                >
+                  <FolderTree className="size-3" />
+                  Files
+                </button>
+                {!session.hostId ? <ServersButton session={session} /> : null}
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen((v) => !v)}
+                  aria-pressed={detailsOpen}
+                  className={`inline-flex items-center gap-1 hover:text-foreground ${detailsOpen ? "text-foreground" : ""}`}
+                  title="Session details: environment, context, changes, servers"
+                >
+                  <PanelRight className="size-3" />
+                  Details
+                </button>
+                <PopOutButton sessionId={session.id} />
                 <ResumeButton session={session} />
-                <EditorButton session={session} />
+                {!session.hostId ? <EditorButton session={session} /> : null}
               </>
             ) : null}
           </div>
@@ -113,13 +170,22 @@ export function SessionPane({ session, compact }: { session: Session; compact?: 
 
           <div className="flex flex-col gap-2 pb-2 empty:hidden">
             <PermissionCard session={session} agentName={agentName} />
+            <QuestionCard session={session} agentName={agentName} />
+            <LimitCard session={session} />
             {!session.permission ? <PlanCard session={session} /> : null}
           {!session.permission ? <TasksCard session={session} /> : null}
           <GoalCard session={session} />
           </div>
 
           <Composer key={session.id} session={session} />
+          {termOpen && !compact ? (
+            <div className="h-[38%] min-h-44 shrink-0">
+              <TerminalPane key={session.id} session={session} onClose={() => setTermOpen(false)} />
+            </div>
+          ) : null}
         </div>
+        {filesOpen && !compact ? <FilesPane session={session} onClose={() => setFilesOpen(false)} /> : null}
+        {detailsOpen && !compact ? <DetailsRail session={session} onClose={() => setDetailsOpen(false)} /> : null}
         {scmOpen ? (
           <SourceControlPanel session={session} onClose={() => setScmOpen(false)} />
         ) : null}
@@ -241,6 +307,7 @@ function ExportButton({ session }: { session: Session }) {
 
 function ResumeButton({ session }: { session: Session }) {
   const [copied, setCopied] = useState(false);
+  const host = useHelix((s) => s.sshHosts.find((h) => h.id === session.hostId));
   const bin =
     session.providerId === "grok"
       ? "grok"
@@ -256,7 +323,11 @@ function ResumeButton({ session }: { session: Session }) {
       : session.agentSessionId
         ? `${bin} --resume ${session.agentSessionId}`
         : `${bin} --resume`;
-  const cmd = `cd ${JSON.stringify(session.cwd)} && ${resume}`;
+  const local = `cd ${JSON.stringify(session.cwd)} && ${resume}`;
+  // On an SSH host the CLI and its transcript are there: resume there.
+  const cmd = host
+    ? `ssh -t ${host.port ? `-p ${host.port} ` : ""}${host.user ? `${host.user}@` : ""}${host.host} ${JSON.stringify(local)}`
+    : local;
   return (
     <button
       type="button"
@@ -269,8 +340,62 @@ function ResumeButton({ session }: { session: Session }) {
       title={`Copy: ${cmd}`}
     >
       <Terminal className="size-3" />
-      {copied ? "Copied" : "Terminal"}
+      {copied ? "Copied" : "Copy resume"}
     </button>
+  );
+}
+
+function PopOutButton({ sessionId }: { sessionId: string }) {
+  const popped = useHelix((s) => s.poppedOut.includes(sessionId));
+  const popOut = useHelix((s) => s.popOut);
+  const popIn = useHelix((s) => s.popIn);
+  return (
+    <button
+      type="button"
+      onClick={() => (popped ? popIn(sessionId) : popOut(sessionId))}
+      className="inline-flex items-center gap-1 hover:text-foreground"
+      title={popped ? "Bring this session back into the main window" : "Open this session in its own window"}
+    >
+      <ExternalLink className="size-3" />
+      {popped ? "Pop in" : "Pop out"}
+    </button>
+  );
+}
+
+function ForkButton({ session }: { session: Session }) {
+  const fork = useHelix((s) => s.forkSession);
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy || session.status === "running"}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await fork(session.id);
+        } finally {
+          setBusy(false);
+        }
+      }}
+      className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+      title="Fork: copy this conversation into a new session to try another direction"
+    >
+      <GitFork className="size-3" />
+      {busy ? "Forking…" : "Fork"}
+    </button>
+  );
+}
+
+function HostChip({ hostId }: { hostId: string }) {
+  const host = useHelix((s) => s.sshHosts.find((h) => h.id === hostId));
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-px text-foreground"
+      title={host ? `Runs on ${host.user ? `${host.user}@` : ""}${host.host} over SSH` : "SSH host not set up any more"}
+    >
+      <Server className="size-3" />
+      {host?.name ?? hostId}
+    </span>
   );
 }
 
@@ -296,8 +421,9 @@ function CwdPicker({ session }: { session: Session }) {
   return (
     <button
       type="button"
+      disabled={Boolean(session.hostId)}
       onClick={async () => {
-        if (!api?.pickFolder) return;
+        if (!api?.pickFolder || session.hostId) return;
         const folder = await api.pickFolder();
         if (folder) setCwd(session.id, folder.path);
       }}
@@ -322,7 +448,10 @@ function GitChip({
   const [git, setGit] = useState<GitStatus | null>(null);
   const api = westcode();
   const status = session.status;
-  const cwd = session.cwd;
+  const cwd = gitCwdOf(session);
+
+  // Another session's folder: never show the previous one's branch meanwhile.
+  useEffect(() => setGit(null), [cwd]);
 
   useEffect(() => {
     if (!api?.gitStatus) return;

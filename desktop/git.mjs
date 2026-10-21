@@ -4,18 +4,35 @@
 // NUL separators, NUL-delimited for-each-ref/log formats, the commit flow
 // that rebuilds the index from the selected files, and progress parsing.
 import { spawn } from "node:child_process";
+import { getHost, parseRemoteCwd, q, remoteShell, sshArgs, sshEnv } from "./ssh.mjs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 // ------------------------------------------------------------------ runner
 
-/** Run git, resolve {code, stdout, stderr}. Never rejects. */
+/**
+ * Run git, resolve {code, stdout, stderr}. Never rejects. A folder written
+ * as ssh://<host>/<path> is on an SSH host: git runs there (the source
+ * control panel works for SSH sessions as in Claude Desktop).
+ */
 export function runGit(cwd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn("git", args, {
-      cwd,
-      env: { ...(opts.env || process.env), TERM: "dumb", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
-    });
+    const remote = parseRemoteCwd(cwd);
+    const host = remote ? getHost(remote.hostId) : null;
+    if (remote && !host) {
+      resolve({ code: -1, stdout: "", stderr: "That SSH host is not set up any more." });
+      return;
+    }
+    const child = host
+      ? spawn(
+          "ssh",
+          [...sshArgs(host), remoteShell(`cd ${q(remote.path)} || exit 1; TERM=dumb GIT_TERMINAL_PROMPT=0 LC_ALL=C exec git ${args.map(q).join(" ")}`)],
+          { env: sshEnv(host) },
+        )
+      : spawn("git", args, {
+          cwd,
+          env: { ...(opts.env || process.env), TERM: "dumb", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+        });
     const out = [];
     let err = "";
     child.stdout.on("data", (c) => out.push(c));
@@ -115,6 +132,7 @@ function gitDir(cwd) {
 
 /** Merge/rebase/cherry-pick in progress (file checks, as Desktop does). */
 export function operationInProgress(cwd) {
+  if (parseRemoteCwd(cwd)) return null;
   const g = gitDir(cwd);
   if (existsSync(join(g, "MERGE_HEAD"))) return "merge";
   if (existsSync(join(g, "rebase-merge")) || existsSync(join(g, "rebase-apply"))) return "rebase";
@@ -235,7 +253,9 @@ export async function discard(cwd, files, trash) {
     const created = files.filter((f) => f.kind === "untracked" || f.kind === "new").map((f) => f.path);
     for (const p of created) {
       await runGit(cwd, ["rm", "-q", "--cached", "--ignore-unmatch", "--", p]);
-      if (trash) await trash(join(cwd, p));
+      // Untracked files go to this Mac's Trash; a host has no Trash, and
+      // deleting there could not be undone, so they are left alone.
+      if (trash && !parseRemoteCwd(cwd)) await trash(join(cwd, p));
     }
     if (tracked.length) {
       await runGit(cwd, ["reset", "-q", "HEAD", "--", ...tracked]);
@@ -497,4 +517,99 @@ export async function findRepos(dir, { depth = 2, limit = 60 } = {}) {
 export async function initRepo(dir) {
   const r = await runGit(dir, ["init", "-q"]);
   return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr.trim() };
+}
+
+// ------------------------------------------------------------------ worktrees
+
+function slugName(s) {
+  return String(s || "session").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "session";
+}
+
+/**
+ * A session's own copy of the repository (Claude Desktop's "Worktree"): a
+ * git worktree on a new branch, so parallel sessions never edit the same
+ * files. Lives in <repo>/.claude/worktrees/ (kept out of `git status` via
+ * .git/info/exclude) unless a location is given. Untracked files listed in
+ * .worktreeinclude (e.g. .env) are copied in.
+ */
+export async function addWorktree(cwd, { name, branchPrefix = "westcode/", location } = {}) {
+  const top = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  if (top.code !== 0) return { ok: false, error: "This folder is not a git repository." };
+  const repo = top.stdout.trim();
+  const head = await runGit(repo, ["rev-parse", "--verify", "HEAD"]);
+  if (head.code !== 0) return { ok: false, error: "The repository has no commits yet — commit once, then a worktree can branch from it." };
+  const { basename } = await import("node:path");
+  const { appendFileSync, cpSync, mkdirSync, readFileSync } = await import("node:fs");
+  const { randomBytes } = await import("node:crypto");
+  const id = randomBytes(2).toString("hex");
+  const slug = slugName(name);
+  const prefix = String(branchPrefix ?? "").replace(/[^A-Za-z0-9._/-]/g, "");
+  const branch = `${prefix}${slug}-${id}`;
+  const dir = location
+    ? join(String(location).replace(/^~(?=\/)/, (await import("node:os")).homedir()), `${basename(repo)}-${id}`, slug)
+    : join(repo, ".claude", "worktrees", `${slug}-${id}`);
+  return withRepoLock(repo, async () => {
+    if (!location) {
+      const common = await runGit(repo, ["rev-parse", "--git-common-dir"]);
+      const exclude = join(repo, common.stdout.trim(), "info", "exclude");
+      let text = "";
+      try {
+        text = readFileSync(exclude, "utf8");
+      } catch {
+        /* no exclude file yet */
+      }
+      if (!/^\/?\.claude\/worktrees\/?$/m.test(text)) {
+        mkdirSync(join(exclude, ".."), { recursive: true });
+        appendFileSync(exclude, `${text && !text.endsWith("\n") ? "\n" : ""}/.claude/worktrees/\n`);
+      }
+    }
+    mkdirSync(join(dir, ".."), { recursive: true });
+    const add = await runGit(repo, ["worktree", "add", "-b", branch, dir, "HEAD"]);
+    if (add.code !== 0) return { ok: false, error: add.stderr.trim() || "git worktree add failed." };
+    const copied = [];
+    if (existsSync(join(repo, ".worktreeinclude"))) {
+      const listed = await runGit(repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-from=.worktreeinclude"]);
+      for (const rel of listed.stdout.split("\0").filter(Boolean)) {
+        if (rel.startsWith(".claude/worktrees/")) continue;
+        try {
+          mkdirSync(join(dir, rel, ".."), { recursive: true });
+          cpSync(join(repo, rel), join(dir, rel));
+          copied.push(rel);
+        } catch {
+          /* unreadable file: skip */
+        }
+      }
+    }
+    return { ok: true, path: dir, branch, repo, copied };
+  });
+}
+
+/**
+ * Remove a session's worktree. Refuses while it has uncommitted changes
+ * (unless forced), and keeps its branch so committed work is never lost.
+ */
+export async function removeWorktree(path, { force = false } = {}) {
+  if (!existsSync(path)) return { ok: true, gone: true };
+  const st = await runGit(path, ["status", "--porcelain"]);
+  if (st.code !== 0) return { ok: false, error: "Not a git worktree." };
+  if (st.stdout.trim() && !force) return { ok: false, dirty: true, error: "The worktree has uncommitted changes." };
+  const common = await runGit(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const repo = join(common.stdout.trim(), "..");
+  return withRepoLock(repo, async () => {
+    const r = await runGit(repo, ["worktree", "remove", ...(force ? ["--force"] : []), path]);
+    if (r.code !== 0) return { ok: false, error: r.stderr.trim() };
+    return { ok: true };
+  });
+}
+
+/** Bring back a removed session worktree from its branch (on unarchive). */
+export async function reattachWorktree(repo, path, branch) {
+  if (existsSync(path)) return { ok: true, path };
+  if (!/^[A-Za-z0-9._/-]+$/.test(String(branch))) return { ok: false, error: "Bad branch name." };
+  return withRepoLock(repo, async () => {
+    await runGit(repo, ["worktree", "prune"]);
+    const r = await runGit(repo, ["worktree", "add", path, branch]);
+    if (r.code !== 0) return { ok: false, error: r.stderr.trim() };
+    return { ok: true, path };
+  });
 }

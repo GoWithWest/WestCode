@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, FileText, Plus, Shield, Square, X } from "lucide-react";
+import { westcode } from "@/lib/desktop";
 import {
   effortLabel,
   effortsFor,
@@ -11,17 +12,33 @@ import {
   type SlashCmd,
 } from "@/lib/catalog";
 import { prettySize, readAttachments } from "@/lib/fs";
-import { useHelix } from "@/lib/store";
+import { readDrafts, useHelix, writeDrafts } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { Attachment, Session } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { ProviderDot, useResolvedProvider } from "./provider";
 import { ComposerSkillGroups } from "./skill-groups";
 import { UsageRing } from "./session-extras";
+import { AnnotateDialog } from "./annotate";
 
-type Panel = "mode" | "model" | "effort" | null;
+type Panel = "mode" | "model" | "effort" | "style" | null;
 
+// Unsent text per session, kept across restarts (Claude Desktop's saved
+// draft) in the app's state file. Attachments stay in memory only.
 const drafts = new Map<string, { text: string; files: Attachment[] }>();
+let draftsLoaded = false;
+function loadDrafts() {
+  if (draftsLoaded) return;
+  draftsLoaded = true;
+  for (const [id, text] of Object.entries(readDrafts())) {
+    if (typeof text === "string" && text && !drafts.has(id)) drafts.set(id, { text, files: [] });
+  }
+}
+function persistDrafts() {
+  const out: Record<string, string> = {};
+  for (const [id, d] of drafts) if (d.text.trim()) out[id] = d.text.slice(0, 20_000);
+  writeDrafts(out);
+}
 
 export function Composer({ session }: { session: Session }) {
   const send = useHelix((s) => s.send);
@@ -30,12 +47,15 @@ export function Composer({ session }: { session: Session }) {
   const setSessionEffort = useHelix((s) => s.setSessionEffort);
   const setSessionPermissionMode = useHelix((s) => s.setSessionPermissionMode);
   const sessions = useHelix((s) => s.sessions);
+  loadDrafts();
   const saved = drafts.get(session.id);
   const [value, setValue] = useState(saved?.text ?? "");
   const [files, setFiles] = useState<Attachment[]>(saved?.files ?? []);
   const [hi, setHi] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [menu, setMenu] = useState(false);
+  // Screenshot being marked up before it is attached (data: URL).
+  const [shot, setShot] = useState<string | null>(null);
   const [peersOpen, setPeersOpen] = useState(false);
   const [panel, setPanel] = useState<Panel>(null);
   const [drop, setDrop] = useState(false);
@@ -83,8 +103,65 @@ export function Composer({ session }: { session: Session }) {
       })
     : [];
 
+  // @ also finds files in the session's folder (Claude Desktop's @-mentions).
+  const [fileHits, setFileHits] = useState<string[]>([]);
+  useEffect(() => {
+    const search = westcode()?.files?.search;
+    if (!atOpen || !search) {
+      setFileHits([]);
+      return;
+    }
+    let dead = false;
+    const t = window.setTimeout(() => {
+      void search(session.cwd, atQuery, session.hostId).then((r) => {
+        if (!dead) setFileHits(r.ok ? (r.files ?? []).slice(0, 12) : []);
+      });
+    }, 120);
+    return () => {
+      dead = true;
+      window.clearTimeout(t);
+    };
+  }, [atOpen, atQuery, session.cwd, session.hostId]);
+  const atItems: ({ kind: "session"; s: Session } | { kind: "file"; path: string })[] = [
+    ...atMatches.slice(0, 6).map((s) => ({ kind: "session" as const, s })),
+    ...fileHits.map((path) => ({ kind: "file" as const, path })),
+  ];
+
   const draftRef = useRef({ value, files });
   draftRef.current = { value, files };
+
+  // Keep the draft saved as it is typed (survives a quit or crash).
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (value.trim()) drafts.set(session.id, { text: value, files });
+      else if (!files.length) drafts.delete(session.id);
+      persistDrafts();
+    }, 600);
+    return () => window.clearTimeout(t);
+  }, [value, files, session.id]);
+
+  // ⌘⇧M / ⌘⇧I / ⌘⇧E open the mode, model and effort pickers (Claude Desktop).
+  useEffect(() => {
+    const onPanel = (e: Event) => {
+      const p = (e as CustomEvent<{ panel: Panel }>).detail?.panel ?? null;
+      if (useHelix.getState().activeId !== session.id) return;
+      setPanel((cur) => (cur === p ? null : p));
+    };
+    window.addEventListener("westcode:panel", onPanel);
+    return () => window.removeEventListener("westcode:panel", onPanel);
+  }, [session.id]);
+
+  // "Edit" on a queued message puts its text back here.
+  useEffect(() => {
+    const onCompose = (e: Event) => {
+      const d = (e as CustomEvent<{ sessionId: string; text: string }>).detail;
+      if (d?.sessionId !== session.id) return;
+      setValue((v) => (v.trim() ? `${v}\n${d.text}` : d.text));
+      ref.current?.focus();
+    };
+    window.addEventListener("westcode:compose", onCompose);
+    return () => window.removeEventListener("westcode:compose", onCompose);
+  }, [session.id]);
 
   useEffect(() => {
     ref.current?.focus();
@@ -125,6 +202,7 @@ export function Composer({ session }: { session: Session }) {
     setMenu(false);
     setPanel(null);
     drafts.delete(session.id);
+    persistDrafts();
     void send(session.id, t, { attachments: attached });
   }
 
@@ -150,16 +228,31 @@ export function Composer({ session }: { session: Session }) {
     ref.current?.focus();
   }
 
+  function mentionFile(path: string) {
+    const next = value.replace(/(?:^|\s)@[^\s]*$/, (m) => (m.startsWith(" ") ? ` @${path} ` : `@${path} `));
+    setValue(next.endsWith(" ") ? next : `${next} `);
+    setDismissed(true);
+    ref.current?.focus();
+  }
+
   async function addFiles(list: FileList | File[]) {
     const next = await readAttachments(list);
     setFiles((prev) => [...prev, ...next].slice(0, 8));
   }
 
-  const palette = slashOpen ? matches : atOpen ? atMatches : [];
+  const palette = slashOpen ? matches : atOpen ? atItems : [];
   const canSend = Boolean(value.trim() || files.length);
 
   return (
     <div className="border-t border-border bg-surface px-3 py-3 md:px-4">
+      <AnnotateDialog
+        src={shot}
+        onDone={(file) => {
+          setShot(null);
+          if (file) void addFiles([file]);
+          ref.current?.focus();
+        }}
+      />
       <input
         ref={fileRef}
         type="file"
@@ -207,32 +300,43 @@ export function Composer({ session }: { session: Session }) {
           </div>
         ) : null}
 
-        {atOpen && atMatches.length > 0 ? (
+        {atOpen && atItems.length > 0 ? (
           <div
             role="listbox"
-            aria-label="Sessions on this desk"
-            className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-56 overflow-y-auto rounded-lg border border-border bg-window py-1 shadow-window"
+            aria-label="Mention a session or a file"
+            className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-64 overflow-y-auto rounded-lg border border-border bg-window py-1 shadow-window"
           >
-            {atMatches.map((p, i) => (
-              <button
-                key={p.id}
-                type="button"
-                role="option"
-                aria-selected={i === hi}
-                onMouseEnter={() => setHi(i)}
-                onClick={() => mention(p)}
-                className={cn(
-                  "flex w-full items-center gap-2 px-3 py-2 text-left",
-                  i === hi ? "bg-muted" : "hover:bg-muted/50",
-                )}
-              >
-                <ProviderDot id={p.providerId} />
-                <span className="text-xs font-medium">{p.title}</span>
-                <span className="ml-auto truncate text-2xs text-subtle">
-                  {p.cwd}
-                </span>
-              </button>
-            ))}
+            {atItems.map((it, i) =>
+              it.kind === "session" ? (
+                <button
+                  key={`s:${it.s.id}`}
+                  type="button"
+                  role="option"
+                  aria-selected={i === hi}
+                  onMouseEnter={() => setHi(i)}
+                  onClick={() => mention(it.s)}
+                  className={cn("flex w-full items-center gap-2 px-3 py-2 text-left", i === hi ? "bg-muted" : "hover:bg-muted/50")}
+                >
+                  <ProviderDot id={it.s.providerId} />
+                  <span className="text-xs font-medium">{it.s.title}</span>
+                  <span className="ml-auto truncate text-2xs text-subtle">{it.s.cwd}</span>
+                </button>
+              ) : (
+                <button
+                  key={`f:${it.path}`}
+                  type="button"
+                  role="option"
+                  aria-selected={i === hi}
+                  onMouseEnter={() => setHi(i)}
+                  onClick={() => mentionFile(it.path)}
+                  className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-left", i === hi ? "bg-muted" : "hover:bg-muted/50")}
+                >
+                  <FileText className="size-3 shrink-0 text-subtle" />
+                  <span className="truncate font-mono text-xs">{it.path.split("/").pop()}</span>
+                  <span className="ml-auto truncate text-2xs text-subtle">{it.path}</span>
+                </button>
+              ),
+            )}
           </div>
         ) : null}
 
@@ -311,8 +415,9 @@ export function Composer({ session }: { session: Session }) {
                     const c = matches[hi] ?? matches[0];
                     if (c) choose(c);
                   } else if (atOpen) {
-                    const p = atMatches[hi] ?? atMatches[0];
-                    if (p) mention(p);
+                    const it = atItems[hi] ?? atItems[0];
+                    if (it?.kind === "session") mention(it.s);
+                    else if (it?.kind === "file") mentionFile(it.path);
                   }
                   return;
                 }
@@ -406,6 +511,19 @@ export function Composer({ session }: { session: Session }) {
                         >
                           Attach files
                         </button>
+                        {westcode()?.captureScreenshot ? (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setMenu(false);
+                              const r = await westcode()!.captureScreenshot!();
+                              if (r.ok && r.data) setShot(`data:${r.mime ?? "image/png"};base64,${r.data}`);
+                            }}
+                            className="block w-full px-3 py-2 text-left text-xs hover:bg-muted"
+                          >
+                            Take screenshot
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => setPeersOpen(true)}
@@ -505,6 +623,14 @@ export function Composer({ session }: { session: Session }) {
                     </div>
                   </div>
                 </MetaButton>
+                {session.providerId === "claude" ? (
+                  <OutputStyleButton
+                    session={session}
+                    open={panel === "style"}
+                    onToggle={() => setPanel(panel === "style" ? null : "style")}
+                    onPicked={() => setPanel(null)}
+                  />
+                ) : null}
                 <ComposerSkillGroups session={session} />
                 <UsageRing session={session} />
               </div>
@@ -541,6 +667,70 @@ export function Composer({ session }: { session: Session }) {
         Enter to send · Shift Enter for a new line · {provider.authLabel}
       </p>
     </div>
+  );
+}
+
+/**
+ * Claude Code's output style for this session (Claude Desktop's output
+ * style): the built-in ones and the custom styles in ~/.claude/output-styles
+ * and the project's .claude/output-styles. Applies from the next message.
+ */
+function OutputStyleButton({
+  session,
+  open,
+  onToggle,
+  onPicked,
+}: {
+  session: Session;
+  open: boolean;
+  onToggle: () => void;
+  onPicked: () => void;
+}) {
+  const setStyle = useHelix((s) => s.setSessionOutputStyle);
+  const fallback = useHelix((s) => s.settings.claudeOutputStyle ?? "");
+  const [styles, setStyles] = useState<{ name: string; description?: string; custom?: boolean }[]>([]);
+  const current = session.outputStyle ?? fallback;
+  const api = westcode()?.outputStyles;
+  useEffect(() => {
+    if (!open || !api) return;
+    let dead = false;
+    void api(session.cwd, session.hostId).then((r) => {
+      if (!dead) setStyles(r.styles ?? []);
+    });
+    return () => {
+      dead = true;
+    };
+  }, [open, api, session.cwd, session.hostId]);
+  if (!api) return null;
+  const pick = (name: string) => {
+    setStyle(session.id, name);
+    onPicked();
+  };
+  return (
+    <MetaButton open={open} onToggle={onToggle} label={current && current !== "default" ? current : "Style"}>
+      <p className="px-3 pt-1.5 pb-1 text-2xs font-medium tracking-wide text-subtle uppercase">Output style</p>
+      <button
+        type="button"
+        onClick={() => pick("")}
+        className={cn("block w-full px-3 py-2 text-left text-xs hover:bg-muted", !current && "bg-muted font-medium")}
+      >
+        Claude Code&apos;s setting
+      </button>
+      {styles.map((st) => (
+        <button
+          key={st.name}
+          type="button"
+          onClick={() => pick(st.name)}
+          className={cn("block w-full px-3 py-2 text-left hover:bg-muted", st.name === current && "bg-muted")}
+        >
+          <span className={cn("block text-xs", st.name === current && "font-medium")}>
+            {st.name === "default" ? "Default" : st.name}
+            {st.custom ? <span className="ml-1 text-2xs text-subtle">custom</span> : null}
+          </span>
+          {st.description ? <span className="block max-w-64 text-2xs text-muted-foreground">{st.description}</span> : null}
+        </button>
+      ))}
+    </MetaButton>
   );
 }
 

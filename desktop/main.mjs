@@ -1,15 +1,16 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell, Tray } from "electron";
+import { trayTemplate, trayTitle } from "./tray.mjs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { childEnv, which } from "./path.mjs";
 import { probeAll, listAddons, PROVIDERS } from "./probe.mjs";
 import { checkUpdates, installCli, updateCli } from "./cli-manager.mjs";
-import { ensureSession, dropSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews, runOneShot } from "./acp-host.mjs";
+import { ensureSession, dropSession, forkAcpSession, getSession, hasLiveSession, listAcpSessions, stopAll, setDeskUrl, runReview, cancelReviews, runOneShot } from "./acp-host.mjs";
 import { judgePrompt, parseVerdict } from "./goal.mjs";
 import { setRoster, setSendHandler, startDeskBus } from "./desk-bus.mjs";
 import * as gitOps from "./git.mjs";
@@ -18,6 +19,15 @@ import * as learn from "./learn.mjs";
 import * as memoryHub from "./memory-hub.mjs";
 import * as memoryFlow from "./memory-flow.mjs";
 import * as artifacts from "./artifact-server.mjs";
+import * as sshHosts from "./ssh.mjs";
+import { parseDeepLink } from "./deeplink.mjs";
+import * as prs from "./pr.mjs";
+import * as terminals from "./terminal.mjs";
+import * as filesPane from "./files.mjs";
+import * as askpass from "./askpass.mjs";
+import * as devServers from "./devservers.mjs";
+import * as sessionEnv from "./session-env.mjs";
+import { listOutputStyles } from "./output-styles.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEV_URL = process.env.WESTCODE_URL || "http://127.0.0.1:8080";
@@ -25,6 +35,32 @@ const ICON_PNG = join(here, "icon.png");
 
 // A late async failure (e.g. a child process that cannot spawn) must not
 // take the whole app down with Electron's crash dialog.
+// Errors and warnings also go to ~/.westcode/logs/main.log (Help → Show
+// Logs), capped so it never grows without bound.
+const LOG_DIR = join(process.env.WESTCODE_HOME || join(homedir(), ".westcode"), "logs");
+const LOG_FILE = join(LOG_DIR, "main.log");
+function logLine(level, args) {
+  try {
+    mkdirSync(LOG_DIR, { recursive: true });
+    try {
+      if (statSync(LOG_FILE).size > 2_000_000) renameSync(LOG_FILE, `${LOG_FILE}.1`);
+    } catch {
+      /* no log yet */
+    }
+    const text = args.map((a) => (a instanceof Error ? a.stack || a.message : typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+    appendFileSync(LOG_FILE, `${new Date().toISOString()} ${level} ${text}\n`);
+  } catch {
+    /* logging must never break the app */
+  }
+}
+for (const level of ["error", "warn"]) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    logLine(level.toUpperCase(), args);
+    orig(...args);
+  };
+}
+
 process.on("uncaughtException", (err) => {
   console.error("[westcode] uncaught exception:", err);
 });
@@ -113,6 +149,7 @@ async function startAppServer() {
 }
 
 function send(sessionId, event) {
+  if (event?.type === "error") console.warn(`[session ${sessionId}]`, event.message);
   win?.webContents.send("session:event", { sessionId, ...event });
 }
 
@@ -170,10 +207,36 @@ function installMenu() {
           accelerator: "CmdOrCtrl+N",
           click: () => sendMenu("new"),
         },
+        { label: "Next Session", accelerator: "CmdOrCtrl+Shift+]", click: () => sendMenu("next") },
+        { label: "Previous Session", accelerator: "CmdOrCtrl+Shift+[", click: () => sendMenu("prev") },
+        { label: "Next Session", accelerator: "Ctrl+Tab", visible: false, acceleratorWorksWhenHidden: true, click: () => sendMenu("next") },
+        { label: "Previous Session", accelerator: "Ctrl+Shift+Tab", visible: false, acceleratorWorksWhenHidden: true, click: () => sendMenu("prev") },
+        { type: "separator" },
+        { label: "Permission Mode…", accelerator: "CmdOrCtrl+Shift+M", click: () => sendMenu("panel-mode") },
+        { label: "Model…", accelerator: "CmdOrCtrl+Shift+I", click: () => sendMenu("panel-model") },
+        { label: "Effort…", accelerator: "CmdOrCtrl+Shift+E", click: () => sendMenu("panel-effort") },
+        { type: "separator" },
+        { label: "Command Palette…", accelerator: "CmdOrCtrl+K", click: () => sendMenu("palette") },
+        { label: "Find…", accelerator: "CmdOrCtrl+F", click: () => sendMenu("find") },
+        { type: "separator" },
+        { label: "Keyboard Shortcuts", accelerator: "CmdOrCtrl+/", click: () => sendMenu("shortcuts") },
       ],
     },
     { role: "editMenu" },
     { role: "windowMenu" },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "Copy WestCode Version",
+          click: () => clipboard.writeText(`WestCode ${app.getVersion()} (Electron ${process.versions.electron}, ${process.platform} ${process.arch})`),
+        },
+        { label: "Show Logs", click: () => void shell.openPath(LOG_DIR) },
+        { label: "Open Data Folder", click: () => void shell.openPath(process.env.WESTCODE_HOME || join(homedir(), ".westcode")) },
+        { type: "separator" },
+        { label: "Report an Issue…", click: () => void shell.openExternal("https://github.com/GoWithWest/WestCode/issues/new") },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -196,6 +259,15 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  // ⌘F: Chromium's own find-in-page, results reported to the find bar.
+  win.webContents.on("did-finish-load", () => {
+    if (pendingLink) {
+      const link = pendingLink;
+      pendingLink = null;
+      setTimeout(() => win?.webContents.send("deeplink", link), 1500);
+    }
   });
 
   if (process.env.WESTCODE_DEV === "1") {
@@ -232,7 +304,14 @@ async function createWindow() {
     win?.show();
   });
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    // A session popped out into its own window: a blank child the app renders into.
+    if (url === "about:blank" && String(frameName || "").startsWith("westcode-pop-")) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { width: 780, height: 860, minWidth: 420, minHeight: 360, backgroundColor: "#0e0e10", autoHideMenuBar: true },
+      };
+    }
     void shell.openExternal(url);
     return { action: "deny" };
   });
@@ -243,7 +322,64 @@ if (process.platform === "darwin" && existsSync(ICON_PNG)) {
   app.dock?.setIcon(nativeImage.createFromPath(ICON_PNG));
 }
 
+// westcode://new?folder=…&q=…&host=…&provider=… (Claude Desktop's
+// claude://code/new): opens the New session dialog filled in. It never
+// starts anything by itself — the user confirms in the dialog — and it
+// carries no keys, passwords or commands.
+let pendingLink = null;
+function deliverLink(raw) {
+  const link = parseDeepLink(raw);
+  if (!link) return;
+  if (win?.webContents && !win.webContents.isLoading()) {
+    win.webContents.send("deeplink", link);
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  } else {
+    pendingLink = link;
+  }
+}
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deliverLink(url);
+});
+if (!process.env.WESTCODE_DEV) app.setAsDefaultProtocolClient("westcode");
+
+// SSH prompts (passwords, one-time codes, new host keys) are asked in the
+// window; answers go back to ssh's SSH_ASKPASS helper.
+const sshPrompts = new Map();
+ipcMain.on("ssh:prompt-reply", (_e, { id, value, remember } = {}) => {
+  const done = sshPrompts.get(id);
+  if (!done) return;
+  sshPrompts.delete(id);
+  done(value == null ? null : { value: String(value), remember: Boolean(remember) });
+});
+function askInWindow({ hostId, prompt, secret }) {
+  return new Promise((resolve) => {
+    if (!win) return resolve(null);
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    sshPrompts.set(id, resolve);
+    const host = sshHosts.getHost(hostId);
+    win.webContents.send("ssh:prompt", { id, hostId, hostName: host?.name || hostId, prompt, secret, canRemember: safeStorage.isEncryptionAvailable() });
+    if (!win.isFocused()) {
+      app.dock?.bounce?.("informational");
+      win.show();
+    }
+    setTimeout(() => {
+      if (sshPrompts.delete(id)) resolve(null);
+    }, 280_000);
+  });
+}
+
 app.whenReady().then(async () => {
+  sessionEnv.initSessionEnv({
+    encrypt: (s) => safeStorage.encryptString(s).toString("base64"),
+    decrypt: (b) => safeStorage.decryptString(Buffer.from(b, "base64")),
+  });
+  await askpass.startAskpass({
+    ask: askInWindow,
+    encrypt: (s) => safeStorage.encryptString(s).toString("base64"),
+    decrypt: (b) => safeStorage.decryptString(Buffer.from(b, "base64")),
+  });
   if (process.platform === "darwin" && existsSync(ICON_PNG)) {
     app.dock?.setIcon(nativeImage.createFromPath(ICON_PNG));
   }
@@ -303,7 +439,144 @@ app.whenReady().then(async () => {
   });
 });
 
-ipcMain.on("desk:sync", (_e, rows) => setRoster(rows));
+// The desk roster also says whether any agent is mid-turn: that keeps the
+// Mac awake (Settings → Keep this Mac awake) and guards Quit.
+let deskRunning = 0;
+let keepAwakeWanted = true;
+let awakeId = null;
+function applyKeepAwake() {
+  const want = keepAwakeWanted && deskRunning > 0;
+  if (want && awakeId == null) awakeId = powerSaveBlocker.start("prevent-app-suspension");
+  if (!want && awakeId != null) {
+    powerSaveBlocker.stop(awakeId);
+    awakeId = null;
+  }
+}
+// Prompt box → Take screenshot: macOS's own region picker (screencapture -i),
+// with WestCode out of the way while the user picks.
+ipcMain.handle("screenshot:capture", async () => {
+  if (process.platform !== "darwin") return { ok: false, error: "Screenshots are taken with macOS's screencapture." };
+  const file = join(app.getPath("temp"), `westcode-shot-${Date.now()}.png`);
+  const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible());
+  if (wasVisible) win.hide();
+  try {
+    await new Promise((resolve) => {
+      const p = spawn("/usr/sbin/screencapture", ["-i", "-x", file], { stdio: "ignore" });
+      p.on("exit", resolve);
+      p.on("error", resolve);
+    });
+    if (!existsSync(file)) return { ok: false, cancelled: true };
+    const data = readFileSync(file).toString("base64");
+    rmSync(file, { force: true });
+    return { ok: true, data, mime: "image/png" };
+  } finally {
+    if (wasVisible && win && !win.isDestroyed()) {
+      win.show();
+      win.focus();
+    }
+  }
+});
+
+// Menu bar icon (Settings → Show WestCode in the menu bar).
+let tray = null;
+let trayRows = [];
+function showWindow() {
+  if (!win || win.isDestroyed()) return void createWindow();
+  win.show();
+  win.focus();
+}
+function refreshTray() {
+  if (!tray) return;
+  tray.setContextMenu(
+    Menu.buildFromTemplate(
+      trayTemplate(trayRows, {
+        open: (id) => {
+          showWindow();
+          sendMenu(`open:${id}`);
+        },
+        newSession: () => {
+          showWindow();
+          sendMenu("new");
+        },
+        show: showWindow,
+        quit: () => app.quit(),
+      }),
+    ),
+  );
+  if (process.platform === "darwin") tray.setTitle(trayTitle(trayRows));
+}
+function setTrayEnabled(on) {
+  if (on && !tray) {
+    const img = nativeImage.createFromPath(join(here, "trayTemplate.png"));
+    img.setTemplateImage(true);
+    tray = new Tray(img);
+    tray.setToolTip("WestCode");
+    refreshTray();
+  } else if (!on && tray) {
+    tray.destroy();
+    tray = null;
+  }
+}
+ipcMain.on("app:tray", (_e, enabled) => setTrayEnabled(enabled !== false));
+
+ipcMain.on("desk:sync", (_e, rows) => {
+  setRoster(rows);
+  trayRows = Array.isArray(rows) ? rows : [];
+  refreshTray();
+  deskRunning = (Array.isArray(rows) ? rows : []).filter((r) => r?.status === "running").length;
+  applyKeepAwake();
+});
+// Integrated terminal: one shell per pane id; output streams to the window.
+ipcMain.handle("term:open", async (_e, p = {}) => {
+  const id = String(p.id || "");
+  if (!id) return { ok: false, error: "No terminal id." };
+  try {
+    return await terminals.openTerminal(
+      { id, cwd: p.cwd, hostId: p.hostId, cols: p.cols, rows: p.rows },
+      (data) => win?.webContents.send("term:data", { id, data }),
+      (code) => win?.webContents.send("term:exit", { id, code }),
+    );
+  } catch (err) {
+    return { ok: false, error: /node-pty/.test(err.message) ? "The terminal is not available in this build." : err.message };
+  }
+});
+ipcMain.on("term:write", (_e, { id, data } = {}) => terminals.writeTerminal(String(id || ""), data));
+ipcMain.on("term:resize", (_e, { id, cols, rows } = {}) => terminals.resizeTerminal(String(id || ""), cols, rows));
+ipcMain.on("term:close", (_e, id) => terminals.closeTerminal(String(id || "")));
+
+// Files pane: the session folder only (paths are checked to stay inside).
+const filesCall = (fn) => async (_e, p = {}) => {
+  try {
+    return await fn(p);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+};
+ipcMain.handle("files:list", filesCall((p) => filesPane.listDir(String(p.root || ""), String(p.path || ""), { hostId: p.hostId })));
+ipcMain.handle("files:search", filesCall((p) => filesPane.searchFiles(String(p.root || ""), String(p.query || ""), { hostId: p.hostId })));
+ipcMain.handle("files:read", filesCall((p) => filesPane.readText(String(p.root || ""), String(p.path || ""), { hostId: p.hostId })));
+ipcMain.handle(
+  "files:write",
+  filesCall((p) =>
+    p.hostId
+      ? { ok: false, error: "Files on an SSH host are view-only." }
+      : filesPane.writeText(String(p.root || ""), String(p.path || ""), String(p.content ?? ""), { expected: p.expected }),
+  ),
+);
+
+// Dev servers from the project's .claude/launch.json (this Mac's folders).
+ipcMain.handle("dev:list", filesCall((p) => {
+  const cwd = repoDir(String(p.cwd || ""));
+  return { ...devServers.readLaunch(cwd), running: devServers.listRunning(cwd) };
+}));
+ipcMain.handle("dev:start", filesCall((p) => devServers.startServer(repoDir(String(p.cwd || "")), String(p.name || ""))));
+ipcMain.handle("dev:stop", filesCall((p) => devServers.stopServer(repoDir(String(p.cwd || "")), String(p.name || ""))));
+
+
+ipcMain.on("app:keep-awake", (_e, enabled) => {
+  keepAwakeWanted = Boolean(enabled);
+  applyKeepAwake();
+});
 
 function killAppServer() {
   try {
@@ -322,7 +595,26 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+let quitConfirmed = false;
+app.on("before-quit", (event) => {
+  // Claude Desktop asks before quitting while Claude is still working.
+  if (deskRunning > 0 && !quitConfirmed) {
+    const choice = dialog.showMessageBoxSync({
+      type: "question",
+      buttons: ["Quit", "Keep working"],
+      defaultId: 1,
+      cancelId: 1,
+      message: `${deskRunning === 1 ? "An agent is" : `${deskRunning} agents are`} still working.`,
+      detail: "Quitting stops the turn. The conversation is kept and can be resumed.",
+    });
+    if (choice !== 0) {
+      event.preventDefault();
+      return;
+    }
+  }
+  quitConfirmed = true;
+  terminals.closeAllTerminals();
+  devServers.stopAllServers();
   globalShortcut.unregisterAll();
   stopAll();
   killAppServer();
@@ -668,6 +960,9 @@ ipcMain.handle("fs:pickFile", async () => {
 });
 
 function git(cwd, args) {
+  if (sshHosts.parseRemoteCwd(cwd)) {
+    return gitOps.runGit(cwd, args).then((r) => (r.code === 0 ? r.stdout.trim() : null));
+  }
   return new Promise((resolve) => {
     const child = spawn("git", args, { cwd, env: childEnv() });
     let out = "";
@@ -702,6 +997,7 @@ ipcMain.handle("git:status", async (_e, cwd) => {
 
 // ---- Source control panel (GitHub Desktop's Changes / History / Sync).
 function repoDir(cwd) {
+  if (sshHosts.parseRemoteCwd(cwd)) return cwd;
   const dir = typeof cwd === "string" && cwd.startsWith("~/") ? join(homedir(), cwd.slice(2)) : cwd;
   if (typeof dir !== "string" || !dir || !existsSync(dir)) throw new Error(`Folder ${cwd} does not exist.`);
   return dir;
@@ -735,6 +1031,27 @@ gitHandler("git:find-repos", (dir) => gitOps.findRepos(dir).then((repos) => ({ o
 gitHandler("git:init", (dir) => gitOps.initRepo(dir));
 gitHandler("git:checkpoint", (dir, p) => gitOps.checkpoint(dir, String(p.label || "turn").slice(0, 80)));
 gitHandler("git:restore", (dir, p) => gitOps.restoreCheckpoint(dir, p.sha));
+gitHandler("pr:status", (dir) => prs.prStatus(dir));
+gitHandler("pr:create", (dir, p) => prs.createPr(dir, { title: p.title, body: p.body, draft: p.draft }));
+gitHandler("pr:merge-auto", (dir) => prs.mergeWhenReady(dir));
+gitHandler("git:worktree-add", (dir, p) =>
+  gitOps.addWorktree(dir, { name: String(p.name || "session"), branchPrefix: p.branchPrefix, location: p.location || undefined }),
+);
+ipcMain.handle("git:worktree-reattach", async (_e, { repo, path, branch } = {}) => {
+  try {
+    return await gitOps.reattachWorktree(repoDir(repo), String(path || ""), String(branch || ""));
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+// The worktree folder may already be gone, so not through repoDir().
+ipcMain.handle("git:worktree-remove", async (_e, { path, force } = {}) => {
+  try {
+    return await gitOps.removeWorktree(String(path || ""), { force: Boolean(force) });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
 
 // App state (sessions, library, agents, providers, colors…) persists in
 // ~/.westcode/state.json so it survives app replacement — the packaged
@@ -1005,6 +1322,9 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
     effort,
     permissionMode,
     agentSessionId,
+    hostId,
+    outputStyle,
+    images,
     text,
     history,
   } = payload;
@@ -1024,11 +1344,17 @@ ipcMain.handle("session:prompt", async (_e, payload) => {
       effort,
       permissionMode,
       agentSessionId,
+      hostId,
+      outputStyle,
     },
     emit,
   );
   try {
-    await session.prompt(text, history || []);
+    if (hostId && providerId === "claude" && agentSessionId) {
+      const host = sshHosts.getHost(hostId);
+      if (host) await sshHosts.ensureClaudeTranscript(host, agentSessionId);
+    }
+    await session.prompt(text, history || [], Array.isArray(images) ? images : []);
     emit({ type: "done" });
     return { ok: true };
   } catch (err) {
@@ -1051,18 +1377,112 @@ ipcMain.handle("sessions:cli-list", async (_e, payload) => {
   );
   const sessions = [];
   const errors = [];
+  let elsewhere = 0;
   for (const { id, res } of results) {
+    if (!res.ok) {
+      errors.push(`${id}: ${res.output}`);
+      continue;
+    }
+    // A CLI on this Mac can also list sessions whose folder is on another
+    // machine (Claude Desktop keeps a copy of its SSH sessions here). Opening
+    // those here cannot work; they are listed under their SSH host instead.
+    for (const row of res.sessions) {
+      if (row.cwd && !existsSync(row.cwd)) elsewhere += 1;
+      else sessions.push(row);
+    }
+  }
+  // Every SSH host: what its CLIs have stored there.
+  const hosts = payload?.hosts === false ? [] : sshHosts.loadHosts();
+  const remote = await Promise.all(
+    hosts.flatMap((h) =>
+      wanted
+        .filter((id) => PROVIDERS[id])
+        .map(async (id) => ({ h, id, res: await listAcpSessions(id, { hostId: h.id }) })),
+    ),
+  );
+  for (const { h, id, res } of remote) {
     if (res.ok) sessions.push(...res.sessions);
-    else errors.push(`${id}: ${res.output}`);
+    // A host without that CLI is not an error worth showing.
+    else if (!/not found|command not found|exited \(127\)/i.test(res.output)) errors.push(`${h.name} · ${id}: ${res.output}`);
   }
   sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-  return { ok: true, sessions, errors };
+  return { ok: true, sessions, errors, elsewhere };
+});
+
+// ------------------------------------------------------------------ SSH hosts
+ipcMain.handle("ssh:list", () => ({ hosts: sshHosts.loadHosts(), config: sshHosts.sshConfigHosts() }));
+ipcMain.handle("ssh:save", (_e, host) => {
+  try {
+    return { ok: true, host: sshHosts.saveHost(host) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+// Settings → Environment variables: "local" or an SSH host id.
+ipcMain.handle("claude:output-styles", async (_e, { cwd, hostId } = {}) => {
+  try {
+    return await listOutputStyles({ cwd: cwd ? String(cwd) : "", hostId: hostId ? String(hostId) : "" });
+  } catch (err) {
+    return { ok: false, error: err.message, styles: [] };
+  }
+});
+ipcMain.handle("env:get", (_e, scope) => ({ ok: true, text: sessionEnv.getEnvText(String(scope || "local")) }));
+ipcMain.handle("env:set", (_e, { scope, text } = {}) => {
+  try {
+    sessionEnv.setEnvText(String(scope || "local"), String(text ?? ""));
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle("ssh:forget-password", (_e, id) => {
+  askpass.forgetPassword(String(id || ""));
+  return { ok: true };
+});
+ipcMain.handle("ssh:remove", (_e, id) => {
+  askpass.forgetPassword(String(id || ""));
+  sshHosts.removeHost(String(id || ""));
+  return { ok: true };
+});
+ipcMain.handle("ssh:test", async (_e, host) => {
+  try {
+    const h = typeof host === "string" ? sshHosts.getHost(host) : sshHosts.normalizeHost(host);
+    if (!h) return { ok: false, error: "Unknown host." };
+    return await sshHosts.probeHost(h);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+// Claude Desktop installs Claude Code on a host that lacks it; so do we, with
+// Anthropic's installer, as the SSH user, into ~/.local (no sudo).
+ipcMain.handle("ssh:install-claude", async (_e, hostId) => {
+  const h = sshHosts.getHost(String(hostId || ""));
+  if (!h) return { ok: false, error: "Unknown host." };
+  const r = await sshHosts.runRemote(h, "curl -fsSL https://claude.ai/install.sh | bash", { timeout: 600_000 });
+  if (r.code !== 0) return { ok: false, error: `Install failed: ${sshHosts.sshError(r)}` };
+  return { ok: true };
+});
+
+// Folders on a host, for the new-session folder picker.
+ipcMain.handle("ssh:ls", async (_e, { hostId, path }) => {
+  const h = sshHosts.getHost(String(hostId || ""));
+  if (!h) return { ok: false, error: "Unknown host." };
+  const dir = String(path || "");
+  const r = await sshHosts.runRemote(
+    h,
+    `cd ${dir ? sshHosts.q(dir) : '"$HOME"'} 2>/dev/null || exit 3; pwd; ls -1Ap 2>/dev/null | grep '/$' | head -n 300`,
+    { timeout: 20_000 },
+  );
+  if (r.code === 3) return { ok: false, error: "No such folder on the host." };
+  if (r.code !== 0) return { ok: false, error: sshHosts.sshError(r) };
+  const [cwd, ...dirs] = r.stdout.split("\n").filter(Boolean);
+  return { ok: true, path: cwd, dirs: dirs.map((d) => d.replace(/\/$/, "")).filter((d) => d !== "./" && d !== "../") };
 });
 
 // Start a session against an agent-side session id and hand back the
 // transcript session/load replayed, so the pane opens already filled in.
 ipcMain.handle("session:open", async (_e, payload) => {
-  const { sessionId, providerId, cwd, model, effort, permissionMode, agentSessionId } =
+  const { sessionId, providerId, cwd, model, effort, permissionMode, agentSessionId, hostId } =
     payload || {};
   if (!sessionId || !providerId || !agentSessionId) {
     return { ok: false, output: "sessionId, providerId and agentSessionId are required." };
@@ -1071,22 +1491,39 @@ ipcMain.handle("session:open", async (_e, payload) => {
   // the user sends while the replay is still in flight owns the pane's
   // session, and tearing this one down must not touch that turn.
   const readerId = `history:${sessionId}:${Date.now()}`;
-  const session = ensureSession(
-    {
-      sessionId: readerId,
-      providerId,
-      cwd,
-      model,
-      effort,
-      // Never the pane's mode: Bypass/Auto spawn a CLI that runs tools
-      // WITHOUT asking, and a reader would then execute them while merely
-      // showing history. Ask means it asks, and readOnly declines.
-      permissionMode: "ask",
-      agentSessionId,
-      readOnly: true,
-    },
-    () => {},
-  );
+  // Claude's adapter replays from its own config folder: bring the host's
+  // transcript into the mirror first. The other CLIs replay on the host.
+  if (hostId && providerId === "claude") {
+    const host = sshHosts.getHost(hostId);
+    if (!host) return { ok: false, output: `SSH host ${hostId} is not set up any more.`, history: [] };
+    try {
+      await sshHosts.fetchClaudeTranscript(host, agentSessionId);
+    } catch (err) {
+      return { ok: false, output: err.message, history: [] };
+    }
+  }
+  let session;
+  try {
+    session = ensureSession(
+      {
+        sessionId: readerId,
+        providerId,
+        cwd,
+        model,
+        effort,
+        // Never the pane's mode: Bypass/Auto spawn a CLI that runs tools
+        // WITHOUT asking, and a reader would then execute them while merely
+        // showing history. Ask means it asks, and readOnly declines.
+        permissionMode: "ask",
+        agentSessionId,
+        hostId,
+        readOnly: true,
+      },
+      () => {},
+    );
+  } catch (err) {
+    return { ok: false, output: err.message, history: [] };
+  }
   try {
     await session.start();
     const history = session.takeReplay();
@@ -1099,6 +1536,16 @@ ipcMain.handle("session:open", async (_e, payload) => {
     dropSession(readerId);
   }
 });
+
+ipcMain.handle("session:fork", (_e, p = {}) =>
+  forkAcpSession(String(p.providerId || ""), {
+    cwd: p.cwd,
+    agentSessionId: String(p.agentSessionId || ""),
+    model: p.model,
+    effort: p.effort,
+    at: p.at && typeof p.at === "object" ? { messageId: String(p.at.messageId || ""), text: String(p.at.text || "") } : undefined,
+  }),
+);
 
 ipcMain.handle("session:steer", async (_e, { sessionId, text }) => {
   const s = getSession(sessionId);
@@ -1116,6 +1563,11 @@ ipcMain.handle("session:cancel", (_e, sessionId) => {
 
 ipcMain.handle("session:stop", (_e, sessionId) => {
   dropSession(sessionId);
+  return { ok: true };
+});
+
+ipcMain.handle("session:question", (_e, { sessionId, rpcId, answers }) => {
+  getSession(sessionId)?.answerQuestion(rpcId, answers && typeof answers === "object" ? answers : null);
   return { ok: true };
 });
 

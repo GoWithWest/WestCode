@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type ComponentType } from "react";
+import { Fragment, memo, useEffect, useState, type ComponentType } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -12,6 +12,7 @@ import {
   Eye,
   Globe,
   History,
+  Undo2,
   Search,
   Send,
   SquareTerminal,
@@ -24,7 +25,7 @@ import {
 import { diffLines, statsForDiffs, withContext, type DiffRow } from "@/lib/diff";
 import { activityLine, formatSeconds, liveLabel, toolKindOf, toolLabel } from "@/lib/activity";
 import { splitActivity } from "@/lib/parse-agent";
-import type { Attachment, Block, ChatMessage, FileDiff, ToolBlock } from "@/lib/types";
+import type { Attachment, Block, ChatMessage, FileDiff, Finding, ToolBlock } from "@/lib/types";
 import { useHelix } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ProviderDot, useResolvedProvider } from "./provider";
@@ -120,6 +121,7 @@ const Message = memo(function Message({
     return (
       <div className="flex flex-col items-end gap-1">
       <div className="group/user flex items-center justify-end gap-2">
+        {sessionId && !queued ? <RewindButton sessionId={sessionId} messageId={message.id} /> : null}
         {message.checkpoint && sessionId ? (
           <button
             type="button"
@@ -168,10 +170,39 @@ const Message = memo(function Message({
           </button>
           <button
             type="button"
+            onClick={() => {
+              // Take it back out of the queue and into the composer.
+              useHelix.getState().unqueue(sessionId, message.id);
+              window.dispatchEvent(new CustomEvent("westcode:compose", { detail: { sessionId, text } }));
+            }}
+            className="hover:text-foreground"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
             onClick={() => useHelix.getState().unqueue(sessionId, message.id)}
             className="hover:text-foreground"
           >
             Remove
+          </button>
+          <button
+            type="button"
+            aria-label="Send earlier"
+            title="Send earlier"
+            onClick={() => useHelix.getState().reorderQueued(sessionId, message.id, -1)}
+            className="hover:text-foreground"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label="Send later"
+            title="Send later"
+            onClick={() => useHelix.getState().reorderQueued(sessionId, message.id, 1)}
+            className="hover:text-foreground"
+          >
+            ↓
           </button>
         </div>
       ) : null}
@@ -192,6 +223,11 @@ const Message = memo(function Message({
         />
       ) : null}
       {awaiting ? <AwaitingApproval tool={awaiting} /> : null}
+      {message.blocks.map((b, i) =>
+        b.type === "tool" && b.findings ? (
+          <FindingsCard key={`${message.id}-f-${i}`} findings={b.findings} sessionId={sessionId} />
+        ) : null,
+      )}
       {reply.map((b, i) =>
         b.type === "text" ? (
           <Markdown key={`${message.id}-r-${i}`} text={b.text} compact={compact} />
@@ -201,6 +237,64 @@ const Message = memo(function Message({
     </div>
   );
 });
+
+const SEVERITY_TONE: Record<NonNullable<Finding["severity"]>, string> = {
+  high: "bg-destructive/15 text-destructive",
+  medium: "bg-warn/15 text-warn",
+  low: "bg-muted text-muted-foreground",
+};
+
+/** Code review findings (westcode_report_findings), most severe first. */
+function FindingsCard({ findings, sessionId }: { findings: Finding[]; sessionId?: string }) {
+  return (
+    <section className="rounded-xl border border-border bg-surface" aria-label="Review findings">
+      <header className="flex items-center gap-2 border-b border-border px-3.5 py-2">
+        <span className="text-xs font-medium">Review</span>
+        <span className="text-2xs text-muted-foreground">
+          {findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}` : "No findings"}
+        </span>
+      </header>
+      {findings.length ? (
+        <ul className="divide-y divide-border">
+          {findings.map((f, i) => (
+            <li key={i} className="flex items-start gap-2.5 px-3.5 py-2.5">
+              <span
+                className={`mt-0.5 shrink-0 rounded px-1.5 py-px text-2xs font-medium uppercase ${f.severity ? SEVERITY_TONE[f.severity] : "bg-muted text-muted-foreground"}`}
+              >
+                {f.severity ?? `#${i + 1}`}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium">{f.summary}</p>
+                {f.file ? (
+                  <p className="mt-0.5 truncate font-mono text-2xs text-muted-foreground">
+                    {f.file}
+                    {f.line ? `:${f.line}` : ""}
+                  </p>
+                ) : null}
+                {f.detail ? <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">{f.detail}</p> : null}
+              </div>
+              {sessionId ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("westcode:compose", {
+                        detail: { sessionId, text: `Fix this review finding${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ""}` : ""}: ${f.summary}` },
+                      }),
+                    )
+                  }
+                  className="shrink-0 text-2xs text-muted-foreground hover:text-foreground"
+                >
+                  Fix
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
 
 const THINKING_VERBS = [
   "Thinking",
@@ -527,14 +621,27 @@ export function DiffRows({
   path,
   compact,
   fill,
+  commentFor,
 }: {
   rows: DiffRow[];
   path?: string;
   compact?: boolean;
   /** Fill the parent's height instead of capping it. */
   fill?: boolean;
+  /** Session id: line numbers take a comment that goes into its next message. */
+  commentFor?: string;
 }) {
   const name = path?.split("/").slice(-2).join("/");
+  const [commentAt, setCommentAt] = useState<number | null>(null);
+  const [comment, setComment] = useState("");
+  const addComment = (line: number) => {
+    if (!commentFor || !comment.trim()) return;
+    window.dispatchEvent(
+      new CustomEvent("westcode:compose", { detail: { sessionId: commentFor, text: `${path ?? ""}:${line}: ${comment.trim()}` } }),
+    );
+    setComment("");
+    setCommentAt(null);
+  };
   return (
     <div
       className={cn(
@@ -566,8 +673,8 @@ export function DiffRows({
                   </td>
                 </tr>
               ) : (
+                <Fragment key={i}>
                 <tr
-                  key={i}
                   className={cn(
                     r.kind === "add" && "bg-success/12",
                     r.kind === "del" && "bg-danger/12",
@@ -577,7 +684,20 @@ export function DiffRows({
                     {r.kind === "add" ? "" : r.a}
                   </td>
                   <td className="w-8 px-1.5 text-right text-subtle select-none">
-                    {r.kind === "del" ? "" : r.b}
+                    {commentFor && r.kind !== "del" ? (
+                      <button
+                        type="button"
+                        title="Comment on this line (goes into the session's next message)"
+                        onClick={() => setCommentAt(Number(r.b))}
+                        className="hover:text-foreground"
+                      >
+                        {r.b}
+                      </button>
+                    ) : r.kind === "del" ? (
+                      ""
+                    ) : (
+                      r.b
+                    )}
                   </td>
                   <td className="px-2 whitespace-pre text-foreground/90">
                     <span
@@ -595,6 +715,31 @@ export function DiffRows({
                     {r.text}
                   </td>
                 </tr>
+                {commentFor && commentAt != null && r.kind !== "del" && Number(r.b) === commentAt ? (
+                  <tr>
+                    <td colSpan={3} className="px-2 py-1">
+                      <form
+                        className="flex gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          addComment(commentAt);
+                        }}
+                      >
+                        <input
+                          autoFocus
+                          value={comment}
+                          onChange={(e) => setComment(e.target.value)}
+                          placeholder={`Comment on line ${commentAt}…`}
+                          className="h-7 flex-1 rounded-md border border-border bg-surface px-2 font-sans text-xs outline-none focus:ring-1 focus:ring-ring"
+                        />
+                        <button type="submit" className="rounded-md border border-border px-2 font-sans text-xs hover:bg-muted">
+                          Add
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                ) : null}
+                </Fragment>
               ),
             )}
           </tbody>
@@ -740,5 +885,30 @@ function CodeBlock({ lang, body }: { lang?: string; body: string }) {
         {body}
       </pre>
     </div>
+  );
+}
+
+/** "Rewind to here": fork the conversation before this message and edit it. */
+function RewindButton({ sessionId, messageId }: { sessionId: string; messageId: string }) {
+  const can = useHelix((s) => {
+    const ses = s.sessions.find((x) => x.id === sessionId);
+    return Boolean(ses?.agentSessionId && !ses.hostId && ses.status !== "running" && ses.providerId === "claude");
+  });
+  if (!can) return null;
+  return (
+    <button
+      type="button"
+      title="Rewind to here: the conversation goes back to before this message (files too, if a checkpoint exists) and the message returns to the box to edit"
+      aria-label="Rewind to before this message"
+      onClick={() => {
+        if (window.confirm("Rewind to before this message? Later messages leave this conversation (a copy of the full one stays in your CLI history).")) {
+          void useHelix.getState().rewindTo(sessionId, messageId);
+        }
+      }}
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-subtle opacity-0 group-hover/user:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100"
+    >
+      <Undo2 className="size-3" />
+      Rewind
+    </button>
   );
 }

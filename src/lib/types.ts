@@ -1,4 +1,10 @@
 export type SessionStatus = "running" | "waiting" | "idle" | "error";
+/** The folder git runs in: an SSH session's is ssh://<host>/<path>. */
+export function gitCwdOf(s: { cwd: string; hostId?: string; scmRepo?: string }): string {
+  const dir = s.scmRepo || s.cwd;
+  return s.hostId ? `ssh://${s.hostId}${dir.startsWith("/") ? dir : `/${dir}`}` : dir;
+}
+
 export type LayoutView =
   | "mosaic"
   | "focus"
@@ -36,7 +42,11 @@ export type ToolBlock = {
   to?: string;
   content: string;
   status: "running" | "done" | "error";
+  /** Code review findings reported with westcode_report_findings. */
+  findings?: Finding[];
 };
+
+export type Finding = { file: string; line?: number; severity?: "high" | "medium" | "low"; summary: string; detail?: string };
 
 export type TextBlock = {
   type: "text";
@@ -66,6 +76,8 @@ export type ChatMessage = {
   fromTitle?: string;
   hop?: number;
   /** Working-tree snapshot taken just before this message's turn ran. */
+  /** Last API message of an agent reply: where Rewind forks the conversation. */
+  lastAcp?: { id: string; text: string };
   checkpoint?: string;
   /** On a "restored" note: the snapshot that undoes the restore. */
   restoreUndo?: string;
@@ -89,6 +101,19 @@ export type PermissionPrompt = {
   options: { optionId?: string; kind?: string; name?: string }[];
 };
 
+/** A form the agent asks the user to fill (AskUserQuestion, MCP elicitation). */
+export type QuestionField = {
+  key: string;
+  title: string;
+  description: string;
+  kind: "choice" | "multi" | "text";
+  options?: { value: string; label: string; description: string }[];
+  required?: boolean;
+  type?: string;
+};
+
+export type QuestionPrompt = { rpcId: number; message: string; fields: QuestionField[] };
+
 export type Session = {
   id: string;
   title: string;
@@ -105,6 +130,12 @@ export type Session = {
   turns: number;
   slashCommands?: { cmd: string; args?: string; hint: string; kind: "builtin" | "skill" }[];
   permission?: PermissionPrompt | null;
+  /** A usage limit was hit; it resets at this time (ms). */
+  limitResetAt?: number;
+  /** Continue automatically at this time (ms), after the limit resets. */
+  autoContinueAt?: number;
+  /** Open question card (the agent waits for the answer). */
+  question?: QuestionPrompt | null;
   availableModels?: { id: string; label: string }[];
   queued?: { text: string; incoming?: IncomingRef; msgId?: string }[];
 /**
@@ -114,6 +145,12 @@ export type Session = {
    */
   checkpoints?: { text: string; sha: string }[];
     agentSessionId?: string;
+  /** Runs on this SSH host (Settings → SSH hosts); absent = this Mac. */
+  hostId?: string;
+  /** Claude Code output style; absent = Settings' default (or the CLI's own). */
+  outputStyle?: string;
+  /** Works in its own git worktree (cwd = path) on this branch. */
+  worktree?: { path: string; branch: string; repo: string };
   /** Persona from the Agents menu ("You are @Oz" assigns it). */
   agentId?: string;
   /** Hidden from the default sidebar list; restorable. */
